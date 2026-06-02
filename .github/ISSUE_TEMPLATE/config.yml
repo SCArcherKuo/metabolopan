@@ -1,0 +1,16 @@
+# Keep the free-form "blank issue" option available, but point common
+# questions at docs / upstream services first.
+blank_issues_enabled: true
+contact_links:
+  - name: User manual (analysis methodology + thresholds)
+    url: https://github.com/SCArcherKuo/metabolopan/blob/main/USER_MANUAL.md
+    about: Statistical methods, normalization, FDR, and KEGG conventions are documented here.
+  - name: KEGG REST API
+    url: https://www.kegg.jp/kegg/rest/keggapi.html
+    about: Questions about KEGG pathway/module/compound data itself.
+  - name: PubChem PUG REST
+    url: https://pubchem.ncbi.nlm.nih.gov/docs/pug-rest
+    about: Questions about InChIKey to CID resolution.
+  - name: License (Apache-2.0)
+    url: https://github.com/SCArcherKuo/metabolopan/blob/main/LICENSE
+    about: Licensing terms for use and contribution.

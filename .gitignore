@@ -1,0 +1,147 @@
+# ============================================================
+# Rust build artifacts
+# ============================================================
+/target/
+**/*.rs.bk
+*.pdb
+
+# Cargo profiling / coverage outputs
+*.profraw
+tarpaulin-report.html
+flamegraph.svg
+perf.data
+perf.data.old
+
+# Note: Cargo.lock IS committed (this is a binary application).
+
+# ============================================================
+# AI assistant context / tooling.
+# Shared project collaboration info IS version-controlled:
+#   CLAUDE.md  and  .claude/{rules,commands,agents,skills,hooks,
+#   agent-memory,settings.json}
+# Only per-user / machine-specific state and other tools' files
+# stay ignored (below).
+# ============================================================
+# (gitignore has no inline comments — keep notes on their own lines.)
+CLAUDE.local.md
+AGENTS.md
+GEMINI.md
+.cursorrules
+.cursor/
+.windsurfrules
+.aider*
+.continue/
+.copilot-*
+.github/copilot-instructions.md
+# repo-root scratch memory dir (NOT the shared .claude/agent-memory):
+/memory/
+
+# Per-user / machine-specific AI tooling state (NOT shared):
+.claude/settings.local.json
+.agent/
+.codex/
+.opencode/
+
+# ============================================================
+# Secrets / credentials
+# ============================================================
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+secrets.toml
+
+# ============================================================
+# OS metadata
+# ============================================================
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+Thumbs.db
+ehthumbs.db
+ehthumbs_vista.db
+desktop.ini
+$RECYCLE.BIN/
+
+# ============================================================
+# Editors / IDEs
+# ============================================================
+.vscode/
+.idea/
+.zed/
+.fleet/
+*.swp
+*.swo
+*.swn
+*~
+.project
+.settings/
+.classpath
+
+# ============================================================
+# Runtime artifacts: KEGG cache, logs, downloads
+# ============================================================
+/data/cache/
+*.log
+logs/
+*.bak
+*.tmp
+
+# Local "bad" MS-DIAL fixture (~28 MB, manual gate testing only). Purged from
+# git history; kept as a local-only file. Path corrected from the old stale rule.
+/data/single-mode/MS-DIAL-output-example-bad.txt
+
+# ============================================================
+# Runtime-generated CSV exports from manual GUI testing.
+# `data/MS-DIAL-output-example.txt` and `data/metadata-example.csv`
+# are example INPUTS (committed); `dam.csv`, `all_results.csv`, and
+# `enrichment.csv` are runtime OUTPUTS that users download and rerun.
+# ============================================================
+/data/dam.csv
+/data/all_results.csv
+/data/enrichment.csv
+
+# Per-session bug-report bundles downloaded from the GUI's
+# [Download bug report…] button. Personal diagnostic snapshots —
+# never check these in.
+/data/**/bug-report-*.zip
+/data/**/bug-report-*/
+
+# Settings snapshots saved from the GUI's [Save settings…] button.
+# Personal parameter dumps, regenerated on demand — never check in
+# (one landed in docs/screenshots/ during manual screenshotting).
+metabolopan-settings-*.json
+
+# ============================================================
+# Personal todo notes outside the OpenSpec workflow. These are
+# rough roadmap reminders, not formal change proposals.
+# ============================================================
+/todo/
+
+# ============================================================
+# Planning / scratchpad files outside the openspec workflow
+# ============================================================
+/plan.md
+/plans/
+/scratch/
+/.tmp/
+
+# ============================================================
+# Local test outputs
+# ============================================================
+/test-output/
+/reports/
+*.snap.new
+
+# Runtime PNGs from `cargo run --example render_dotplot_demo`
+# (visual verification scratch — regenerated on demand).
+/dotplot_demo*.png
+
+# Dot-plot renders saved into data/ during manual GUI testing (scratch).
+/data/enrichment-dotplot*.png
