@@ -37,9 +37,11 @@ The pipeline operates in three stages. Default thresholds appear in square brack
 - **Missing values.** Empty / whitespace / `"null"` / `"NA"` / unparseable intensity cells
   become `f64::NAN`. Explicit `"0"` stays `0.0`. This matches `pandas.read_csv` semantics and
   prevents downstream statistics from confusing missing measurements with true zeros.
-- **Group mapping `.csv`.** The first two columns are required and must be `sample,group`
-  in that order. Any further columns are parsed as optional metadata. Empty `group` cells
-  or duplicate `sample` names are rejected with a descriptive error.
+- **Group mapping `.csv`.** The header must be either `sample,group` (strict
+  two-column) or `sample,biosample,group` (three-column; the `biosample` column is
+  required for dual-mode — see *Dual-mode input* below). Any further columns are
+  parsed as optional metadata. Empty `group` cells or duplicate `sample` names are
+  rejected with a descriptive error.
   Metadata columns are classified per-column at load time: a column whose non-empty cells
   all parse as numbers is exposed to Stage 2's "Metadata column" normalization radio (e.g.
   `dry_weight`, `dilution`, `total_protein`); a column with any non-empty non-numeric cell
@@ -49,9 +51,9 @@ The pipeline operates in three stages. Default thresholds appear in square brack
   but not in the CSV are flagged `Unassigned`; rows in the CSV that name samples missing
   from the `.txt` are logged as warnings and ignored. **Unassigned samples are visible on
   Stage 1 only** — the input-summary panel shows them with a yellow `Unassigned (N samples)`
-  row so you know they exist, but they are dropped from the working matrix the moment you
-  click `Continue to DAM`. No normalization, deduplication, DAM statistic, or downstream
-  export ever sees them. To include a sample in analysis, add it to the metadata CSV with
+  row so you know they exist, but they are dropped from the working matrix when you
+  click `Start DAM` on the Stage 2 setup screen. No normalization, deduplication,
+  DAM statistic, or downstream export ever sees them. To include a sample in analysis, add it to the metadata CSV with
   a real group label; to exclude a sample entirely (so it doesn't even show on Stage 1),
   remove its column from the MS-DIAL `.txt` File type row (set the entry to `NA`).
   Metadata column order in the Stage 2 dropdown matches the CSV header order (not
@@ -587,8 +589,8 @@ The pipeline is:
    universe `N`. If they resolve to genuinely different cpds (very rare
    for sane PubChem records), each cpd counts. Features whose InChIKey
    has no PubChem CID, or whose CIDs all fail to map to a KEGG cpd, are
-   dropped from `K` and `N` and surfaced in the Stage 3 result UI as
-   "Mapped: M / N DAM features ...".
+   dropped from `K` and `N` and surfaced in the bottom-panel **Data** tab's
+   mapping funnel (`<N> InChIKeys → <N> PubChem CIDs → <N> KEGG cpds`).
 4. **Universe definition (N).** The universe is the union of unique
    cpd IDs across all annotated features that passed Stage 2's
    pre-filter AND successfully mapped through PubChem and KEGG conv —
@@ -603,9 +605,9 @@ The pipeline is:
    `M_p < min_entry_size` are **dropped entirely** from the run — they
    contribute no p-value to the FDR family, do not appear in the CSV,
    and do not appear on the dot plot. The dropped count is surfaced
-   in the Stage 3 result panel via a retention line
-   `Pathways tested: <surviving> / <total>  (filtered by min entry size = N)`
-   (or `Modules tested: ...` in module mode). The default `1` keeps the
+   in the bottom-panel **Data** tab via a retention line
+   `Tested: <surviving> / <total> (≥ N compounds in universe)`
+   (`Tested: <surviving> (≥ N compounds in universe)` in module mode). The default `1` keeps the
    pre-filter permissive — only `M_p = 0` entries are dropped (they were
    short-circuiting to `p = 1.0` anyway), so every pathway with at least one
    measurable compound is tested. Raising it to **`3` matches MetaboAnalyst's
@@ -665,12 +667,16 @@ The pipeline is:
    and in the leading `# FDR: BH` / `# FDR: BY` / `# FDR: None` line of
    the exported enrichment CSV. The CSV also carries a second comment
    line `# MinEntrySize: N` recording the pre-FDR filter threshold used
-   in that run, so the file is self-documenting. The dot plot itself also carries an annotation
-   strip below the X axis (`Universe: N=… | K=… | Direction: … | FDR: …
-   | m: <tested>/<total> (min_entry=N) | min_hit: …`) so reviewers can
-   reconstruct the FDR family from the figure alone — `m` is the
-   number of entries that reached BH/BY and is the divisor each
-   raw p-value was multiplied by.
+   in that run, so the file is self-documenting. The dot plot itself also carries a
+   four-line plain-language annotation block below the X axis so reviewers can
+   reconstruct the FDR family from the figure alone:
+   `Background universe = <N> compounds measured and mapped to KEGG` /
+   `Compounds of interest = <K> differentially abundant (increased | decreased | both directions)` /
+   `Pathways tested = <m>[ of <total>  ·  <dropped> skipped (< <min_entry> compounds each)][; ≥ <min_hit> hits required]` /
+   `Significance: FDR-adjusted, Benjamini–Hochberg (BH)` (or `… Benjamini–Yekutieli (BY)`,
+   or `raw p-value (no FDR correction)`). The `N` / `K` / `m` symbols are deliberately
+   spelled out rather than abbreviated; the tested count `<m>` is the number of entries
+   that reached BH/BY and is the divisor each raw p-value was multiplied by.
    The `m` denominator equals the count of pathways that **survived
    the pre-FDR `min_entry_size` filter** (step 5) — i.e.
    `m = entries.len() − entries_dropped_by_min_entry_size`. Pre-filter
@@ -779,9 +785,9 @@ per-species framing maps onto the global module catalogue.
 
 6. **Empty-COMPOUND module counter.** Some KEGG modules (signature / reaction-only
    modules) have no `COMPOUND` block at all. Their entries pass through ORA with
-   `compounds = []` and short-circuit to `p_value = 1.0`. The Stage 3 result header
-   surfaces an `Excluded (no compound list): N` counter so silent drops never erode trust.
-   (Symmetrical pathway-mode reporting is on the roadmap.)
+   `compounds = []` and short-circuit to `p_value = 1.0`. The bottom-panel **Data**
+   tab surfaces these as a `With compound list: <kept>  (−<empty> empty)` line so
+   silent drops never erode trust. (Symmetrical pathway-mode reporting is on the roadmap.)
 
 **Module-mode caveats worth knowing.**
 - **First-run cost.** A cold fetch of all ~573 currently-listed modules from KEGG takes
@@ -797,8 +803,9 @@ per-species framing maps onto the global module catalogue.
   for finer scoping.
 - **`min_group_overlap` is a research knob.** Default `1` (permissive ∃-overlap) is
   appropriate for exploratory work. For papers, consider testing a higher threshold to
-  ensure robustness — a module that only one of 836 Animals possesses is biologically
-  marginal for the "Animals" analytic frame even if it survives the default filter.
+  ensure robustness — a module that only one of the hundreds of organisms in a Group
+  (e.g. "Animals") possesses is biologically marginal for that analytic frame even if
+  it survives the default filter.
 - **Module CSV column names match pathway-mode CSV.** Both modes export the same header:
   `EntryID,EntryName,Hits,Total,Expected,EnrichmentRatio,PValue,FDR,HitKeggIDs`. In module
   mode the `EntryID` column carries `M00001`-style module IDs; in pathway mode it carries
@@ -857,7 +864,8 @@ specific error — add the `biosample` column or remove the second `.txt` to pro
 
 > **Single-mode does NOT need a `biosample` column.** It is only required when a
 > second `.txt` is loaded. With one `.txt`, the plain `sample,group` form is enough
-> (a `biosample` column, if present, is simply treated as an ignored metadata column).
+> (a `biosample` column, if present, is recognized by name and excluded from the
+> Stage 2 metadata-normalization radio — it is not offered as a numeric metadata column).
 
 ### Unbalanced or missing-mode samples
 
@@ -1011,9 +1019,9 @@ or force frequent full-refreshes. The Stage 3 result screen surfaces this as a t
 time span across the **retained** modules used in that run, not the entire cache.
 
 Cache locks:
-- **PubChem `inchikey.lock` + KEGG `cid_to_cpd.lock`** — short-lived, held only during
-  the cache write. 30 s wait with 100 ms polling.
-- **KEGG `modules.lock`** — long-running advisory lock held for the entire ~6–8 min
+- **PubChem `.inchikey.lock` + KEGG `.cid_to_cpd.lock`** — short-lived, held only during
+  the cache write. 30 s wait with 100 ms polling. (Both files are dot-prefixed / hidden.)
+- **KEGG `.modules.lock`** — long-running advisory lock held for the entire ~6–8 min
   module fetch. The lock file embeds the holder's PID and a heartbeat `last_seen_at`
   timestamp rewritten at most every 30 s. A concurrent app instance sees the live lock and
   waits up to 30 min (5 s polling) for it to clear. If the heartbeat is older than 90 s
@@ -1056,9 +1064,10 @@ the same snapshot and the same inputs, the analysis is bit-equal.
 
 A pretty-printed JSON containing:
 
-- `schema_version` (currently `2` — bumped from `1` by `add-log-transform-and-scaling`
-  archived 2026-05-27 when `log_transform: bool` joined `SessionSettings`),
-  `app_version`, `saved_at` (UTC), a `user_note` field initially `""` — you can
+- `schema_version` (currently `3` — `log_transform: bool` first bumped it `1 → 2`
+  via `add-log-transform-and-scaling`, then `min_entry_size` bumped it `2 → 3` via
+  `add-min-entry-size-filter`, both archived 2026-05-27), `app_version`,
+  `saved_at` (UTC), a `user_note` field initially `""` — you can
   open the file in any text editor and fill it in.
 - `input_files` — for each MS-DIAL `.txt` and the metadata `.csv` you had
   loaded at save time: the file's basename + its SHA-256. **Hashes only — your
@@ -1123,13 +1132,13 @@ The file is plain UTF-8 JSON, pretty-printed. You can:
 - Strip the `input_files` block to share a "settings only" snapshot
   (Load handles an empty `input_files` array — hash check is skipped).
 
-Hand-editing the `schema_version` to a number other than `2`, or
+Hand-editing the `schema_version` to a number other than `3`, or
 breaking the JSON syntax, surfaces a clear error toast on Load
 (e.g. *"This settings file uses schema version 1; this app expects
-version 2."* or *"Settings file is not valid JSON (line 7 column 15)
-…"*). Snapshots saved by versions before `add-log-transform-and-scaling`
-(2026-05-27) carry `schema_version == 1` and will be rejected — re-save
-from your current Stage 2 setup to produce a v2 snapshot.
+version 3."* or *"Settings file is not valid JSON (line 7 column 15)
+…"*). Snapshots saved before `add-min-entry-size-filter` (2026-05-27)
+carry `schema_version == 1` or `== 2` and will both be rejected — re-save
+from your current setup to produce a v3 snapshot.
 
 ## Reporting bugs
 
