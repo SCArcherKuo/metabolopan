@@ -3,7 +3,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/SCArcherKuo/metabolopan/ci.yml?branch=main&label=CI)](https://github.com/SCArcherKuo/metabolopan/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/SCArcherKuo/metabolopan)](https://github.com/SCArcherKuo/metabolopan/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/SCArcherKuo/metabolopan/total)](https://github.com/SCArcherKuo/metabolopan/releases)
-[![License](https://img.shields.io/github/license/SCArcherKuo/metabolopan)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-blue)](#requirements)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust%202024-dea584?logo=rust&logoColor=white)](https://www.rust-lang.org)
 
