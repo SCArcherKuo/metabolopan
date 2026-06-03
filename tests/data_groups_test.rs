@@ -67,14 +67,22 @@ fn rejects_duplicate_sample() {
 }
 
 #[test]
-fn rejects_wrong_header() {
+fn rejects_header_missing_sample_column() {
+    // `sample_name` is not `sample`: name-based detection finds no `sample`
+    // column, so this fails as a missing-required-column error (the prior
+    // positional parser rejected it as an unrecognized header shape).
     let f = write_tmp_csv("sample_name,group\nS01,ASAP\n");
-    let err =
-        load_group_mapping(f.path(), &["S01".to_string()]).expect_err("must error on wrong header");
+    let err = load_group_mapping(f.path(), &["S01".to_string()])
+        .expect_err("must error on missing sample column");
     let msg = format!("{err}");
+    assert!(msg.contains("sample"), "error must name the `sample` column: {msg}");
     assert!(
-        msg.contains("sample,group"),
-        "error must mention expected header 'sample,group': {msg}"
+        msg.to_lowercase().contains("missing"),
+        "error must say the column is missing: {msg}"
+    );
+    assert!(
+        msg.contains("sample_name,group"),
+        "error should echo the actual header: {msg}"
     );
 }
 

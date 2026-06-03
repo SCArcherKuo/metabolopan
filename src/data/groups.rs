@@ -16,9 +16,8 @@ pub struct GroupMapping {
     metadata_columns: HashMap<String, Vec<Option<f64>>>,
     /// CSV-header order of metadata column names (not alphabetical).
     metadata_order: Vec<String>,
-    /// Optional biosample column, present when the CSV header is
-    /// `sample,biosample,group[,...]` OR when a `biosample` column appears
-    /// among the metadata extras of a `sample,group[,...]` header. Per-sample
+    /// Optional biosample column, present when the CSV has a column named
+    /// `biosample` (recognized by name in any position). Per-sample
     /// values aligned to `sample_names` (`None` when the CSV row lacks a
     /// value, or when the column is absent entirely). The outer `Option`
     /// distinguishes "column not present" from "column present but values
@@ -64,9 +63,9 @@ impl GroupMapping {
             .count()
     }
 
-    /// Names of the numeric metadata columns parsed from the CSV (positions 2..N
-    /// of the header), in **CSV header order** (NOT alphabetically sorted).
-    /// Empty when the CSV had only `sample,group`.
+    /// Names of the numeric metadata columns parsed from the CSV (every column
+    /// other than `sample`, `group`, and `biosample`), in **CSV header order**
+    /// (NOT alphabetically sorted). Empty when the CSV had only `sample,group`.
     pub fn metadata_column_names(&self) -> Vec<String> {
         self.metadata_order.clone()
     }
@@ -216,33 +215,51 @@ pub fn load_group_mapping(csv_path: &Path, sample_cols: &[String]) -> Result<Gro
         .with_context(|| format!("failed to read header of {}", csv_path.display()))?;
     let header_vec: Vec<String> = headers.iter().map(|s| s.to_string()).collect();
 
-    // Two accepted header shapes:
-    //   - `sample,group[,...]`            — existing 2-column form (biosample
-    //     may appear among the extras at position 2+).
-    //   - `sample,biosample,group[,...]`  — dual-mode 3-column form.
-    // Detect which one we have and locate the group + optional biosample
-    // column indices accordingly.
-    let (group_col_idx, biosample_col_idx): (usize, Option<usize>) = match (
-        header_vec.first().map(|s| s.as_str()),
-        header_vec.get(1).map(|s| s.as_str()),
-        header_vec.get(2).map(|s| s.as_str()),
-    ) {
-        (Some("sample"), Some("group"), _) => {
-            let bio_idx = header_vec
-                .iter()
-                .enumerate()
-                .skip(2)
-                .find_map(|(i, h)| (h == "biosample").then_some(i));
-            (1, bio_idx)
-        }
-        (Some("sample"), Some("biosample"), Some("group")) => (2, Some(1)),
-        _ => {
-            let actual = header_vec.join(",");
-            bail!(
-                "expected header to be 'sample,group[,...]' or 'sample,biosample,group[,...]', got '{actual}' in {}",
-                csv_path.display()
-            );
-        }
+    // Name-based column discovery (positions/order are unconstrained): the CSV
+    // MUST contain columns named `sample` and `group` (exact, case-sensitive).
+    // An optional `biosample` column is recognized by name in any position and
+    // routed to a dedicated slot (never a metadata extra). Every other column
+    // is an optional metadata extra. See the `group-mapping` capability spec.
+    let positions = |name: &str| -> Vec<usize> {
+        header_vec
+            .iter()
+            .enumerate()
+            .filter_map(|(i, h)| (h.as_str() == name).then_some(i))
+            .collect::<Vec<_>>()
+    };
+    let header_str = header_vec.join(",");
+    let sample_col_idx = match positions("sample").as_slice() {
+        [idx] => *idx,
+        [] => bail!(
+            "metadata CSV is missing a required `sample` column; header was '{header_str}' in {}",
+            csv_path.display()
+        ),
+        hits => bail!(
+            "metadata CSV has {} `sample` columns; exactly one is required (header '{header_str}') in {}",
+            hits.len(),
+            csv_path.display()
+        ),
+    };
+    let group_col_idx = match positions("group").as_slice() {
+        [idx] => *idx,
+        [] => bail!(
+            "metadata CSV is missing a required `group` column; header was '{header_str}' in {}",
+            csv_path.display()
+        ),
+        hits => bail!(
+            "metadata CSV has {} `group` columns; exactly one is required (header '{header_str}') in {}",
+            hits.len(),
+            csv_path.display()
+        ),
+    };
+    let biosample_col_idx: Option<usize> = match positions("biosample").as_slice() {
+        [] => None,
+        [idx] => Some(*idx),
+        hits => bail!(
+            "metadata CSV has {} `biosample` columns; at most one is allowed (header '{header_str}') in {}",
+            hits.len(),
+            csv_path.display()
+        ),
     };
 
     // Metadata columns: every header position EXCEPT sample (0), group, and
@@ -250,7 +267,9 @@ pub fn load_group_mapping(csv_path: &Path, sample_cols: &[String]) -> Result<Gro
     let metadata_positions: Vec<(usize, String)> = header_vec
         .iter()
         .enumerate()
-        .filter(|(i, _)| *i != 0 && *i != group_col_idx && Some(*i) != biosample_col_idx)
+        .filter(|(i, _)| {
+            *i != sample_col_idx && *i != group_col_idx && Some(*i) != biosample_col_idx
+        })
         .map(|(i, h)| (i, h.clone()))
         .collect();
     let metadata_count = metadata_positions.len();
@@ -268,15 +287,16 @@ pub fn load_group_mapping(csv_path: &Path, sample_cols: &[String]) -> Result<Gro
         let row_no = row_idx + 2;
         let rec = rec
             .with_context(|| format!("failed to read row {} of {}", row_no, csv_path.display()))?;
-        if rec.len() <= group_col_idx {
+        let min_fields = sample_col_idx.max(group_col_idx);
+        if rec.len() <= min_fields {
             bail!(
                 "row {} in {} has fewer than {} fields (need at least sample + group columns)",
                 row_no,
                 csv_path.display(),
-                group_col_idx + 1
+                min_fields + 1
             );
         }
-        let sample = rec.get(0).unwrap_or("").trim().to_string();
+        let sample = rec.get(sample_col_idx).unwrap_or("").trim().to_string();
         let group = rec.get(group_col_idx).unwrap_or("").trim().to_string();
         if sample.is_empty() {
             bail!(
@@ -534,12 +554,65 @@ mod tests {
     }
 
     #[test]
-    fn unrecognized_header_returns_err_with_both_shapes_named() {
-        let f = write_csv("group,sample\nA,S01\n");
+    fn arbitrary_column_order_parses_by_name() {
+        // group before sample (the prior positional rule rejected this).
+        let f = write_csv("group,sample\nA,S01\nB,S02\n");
+        let m = load_group_mapping(f.path(), &sample_cols(&["S01", "S02"])).unwrap();
+        assert_eq!(m.group_of("S01"), "A");
+        assert_eq!(m.group_of("S02"), "B");
+
+        // A metadata column before the key columns.
+        let f2 = write_csv("dry_weight,sample,group\n1.5,S01,A\n2.5,S02,A\n");
+        let m2 = load_group_mapping(f2.path(), &sample_cols(&["S01", "S02"])).unwrap();
+        assert_eq!(m2.group_of("S01"), "A");
+        assert_eq!(m2.metadata_column_names(), vec!["dry_weight".to_string()]);
+        assert_eq!(
+            m2.metadata_values("dry_weight"),
+            Some([Some(1.5), Some(2.5)].as_ref())
+        );
+
+        // group, biosample, sample — biosample recognized by name mid-header.
+        let f3 = write_csv("group,biosample,sample\nA,BIO-1,S01\nA,BIO-2,S02\n");
+        let m3 = load_group_mapping(f3.path(), &sample_cols(&["S01", "S02"])).unwrap();
+        assert_eq!(m3.group_of("S01"), "A");
+        assert_eq!(m3.biosample_of("S01"), Some("BIO-1"));
+        assert_eq!(m3.biosample_of("S02"), Some("BIO-2"));
+        assert!(m3.metadata_column_names().is_empty());
+    }
+
+    #[test]
+    fn missing_sample_column_errors_naming_sample() {
+        let f = write_csv("id,group\nS01,A\n");
         let err = load_group_mapping(f.path(), &sample_cols(&["S01"])).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("sample,group"), "msg: {msg}");
-        assert!(msg.contains("sample,biosample,group"), "msg: {msg}");
+        assert!(msg.contains("sample"), "msg: {msg}");
+        assert!(msg.contains("id,group"), "header should be echoed; msg: {msg}");
+    }
+
+    #[test]
+    fn missing_group_column_errors_naming_group() {
+        let f = write_csv("sample,treatment\nS01,A\n");
+        let err = load_group_mapping(f.path(), &sample_cols(&["S01"])).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("group"), "msg: {msg}");
+    }
+
+    #[test]
+    fn duplicate_key_column_is_rejected() {
+        // duplicate `sample`
+        let f = write_csv("sample,group,sample\nS01,A,X\n");
+        let err = load_group_mapping(f.path(), &sample_cols(&["S01"])).unwrap_err();
+        assert!(err.to_string().contains("sample"), "msg: {err}");
+
+        // duplicate `group`
+        let f2 = write_csv("sample,group,group\nS01,A,B\n");
+        let err2 = load_group_mapping(f2.path(), &sample_cols(&["S01"])).unwrap_err();
+        assert!(err2.to_string().contains("group"), "msg: {err2}");
+
+        // duplicate `biosample`
+        let f3 = write_csv("sample,biosample,group,biosample\nS01,X,A,Y\n");
+        let err3 = load_group_mapping(f3.path(), &sample_cols(&["S01"])).unwrap_err();
+        assert!(err3.to_string().contains("biosample"), "msg: {err3}");
     }
 
     #[test]

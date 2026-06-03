@@ -139,12 +139,13 @@ on the Stage 2 setup screen (see [`USER_MANUAL.md`](USER_MANUAL.md) for the casc
 
 ### Group mapping `.csv`
 
-The header must be either `sample,group[,...]` or `sample,biosample,group[,...]`. `sample`
-is always first and `group` is the only other required column. An optional `biosample`
-column — the 2nd column in the 3-column form, or any later column literally named
-`biosample` — records a per-sample biological-replicate label used for dual-mode provenance
-and the Data tab's biosample counts; it loads but is never offered for normalization.
-**Any further columns are treated as optional metadata.** Columns whose non-empty cells all
+The CSV must contain a column named `sample` and a column named `group`; **their position and
+order don't matter** (`sample,group`, `group,sample`, and `dry_weight,sample,group` all work).
+An optional column literally named `biosample` — in any position — records a per-sample
+biological-replicate label used for dual-mode provenance and the Data tab's biosample counts; it
+loads but is never offered for normalization. Column names are matched exactly (case-sensitive);
+a missing `sample`/`group` column, or a duplicated `sample`/`group`/`biosample` column, is
+rejected with a clear error. **Any further columns are treated as optional metadata.** Columns whose non-empty cells all
 parse as numbers (e.g. `dry_weight`, `dilution`, `total_protein`) are exposed to Stage 2's
 "Metadata column" normalization. Other non-numeric columns load successfully but are
 **silently excluded from the normalization dropdown**; a per-column WARN line in the in-app
@@ -152,11 +153,11 @@ log pane names what was skipped, so typos in an otherwise-numeric column stay vi
 the typo, reload — the column reappears).
 
 ```csv
-sample,group,biosample,dry_weight,dilution
-S1-1,Treatment,CTR-01,12.4,1.0
-S1-2,Treatment,CTR-02,11.8,1.0
-S2-1,Control,TRT-01,12.1,2.0
-S2-2,Control,TRT-02,11.5,2.0
+sample,biosample,group,dry_weight,dilution
+S1-1,TRT-01,Treatment,12.4,1.0
+S1-2,TRT-02,Treatment,11.8,1.0
+S2-1,CTR-01,Control,12.1,2.0
+S2-2,CTR-02,Control,11.5,2.0
 ```
 
 In the example above, `biosample` is kept in the CSV for provenance but never appears in

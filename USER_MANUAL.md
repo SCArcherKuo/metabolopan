@@ -6,18 +6,36 @@ report. Read this once before publishing results that depend on the software.
 
 The pipeline operates in three stages. Default thresholds appear in square brackets `[...]`.
 
-- [Stage 1 — Input parsing](#stage-1--input-parsing)
-- [Stage 2 — Sample normalization](#stage-2--sample-normalization)
-- [Stage 2 — Deduplication by InChIKey](#stage-2--deduplication-by-inchikey)
-- [Stage 2 — DAM (Differentially Accumulated Metabolites)](#stage-2--dam-differentially-accumulated-metabolites)
-- [Stage 3 — Enrichment (over-representation analysis)](#stage-3--enrichment-over-representation-analysis)
-  - [Pathway mode](#pathway-mode)
-  - [Module mode](#module-mode)
-- [Dual-mode (positive + negative ionization) input](#dual-mode-positive--negative-ionization-input)
-- [Caches and provenance](#caches-and-provenance)
-- [Saving and loading session settings (reproducibility)](#saving-and-loading-session-settings-reproducibility)
-- [Reporting bugs](#reporting-bugs)
-- [Key references](#key-references)
+- [User Manual](#user-manual)
+  - [Stage 1 — Input parsing](#stage-1--input-parsing)
+  - [Stage 2 — Sample normalization](#stage-2--sample-normalization)
+  - [Stage 2 — Deduplication by InChIKey](#stage-2--deduplication-by-inchikey)
+    - [Cascade decision table](#cascade-decision-table)
+    - [Audit CSV](#audit-csv)
+    - [Opt-out](#opt-out)
+  - [Stage 2 — DAM (Differentially Accumulated Metabolites)](#stage-2--dam-differentially-accumulated-metabolites)
+  - [Stage 3 — Enrichment (over-representation analysis)](#stage-3--enrichment-over-representation-analysis)
+    - [Enrichment Analysis setup screen](#enrichment-analysis-setup-screen)
+    - [Pathway mode](#pathway-mode)
+    - [Module mode](#module-mode)
+    - [Starting a new analysis round](#starting-a-new-analysis-round)
+  - [Dual-mode (positive + negative ionization) input](#dual-mode-positive--negative-ionization-input)
+    - [When to use dual-mode](#when-to-use-dual-mode)
+    - [Preparing inputs](#preparing-inputs)
+    - [Unbalanced or missing-mode samples](#unbalanced-or-missing-mode-samples)
+    - [Stage 1 UI](#stage-1-ui)
+    - [Stage 2 (shared setup, per-mode DAM)](#stage-2-shared-setup-per-mode-dam)
+    - [Stage 3 — dual-mode N and K math](#stage-3--dual-mode-n-and-k-math)
+    - [Worked example](#worked-example)
+  - [Caches and provenance](#caches-and-provenance)
+  - [Saving and loading session settings (reproducibility)](#saving-and-loading-session-settings-reproducibility)
+    - [What's in the file](#whats-in-the-file)
+    - [When is each button available](#when-is-each-button-available)
+    - [Loading workflow](#loading-workflow)
+    - [What if I load settings before uploading metadata?](#what-if-i-load-settings-before-uploading-metadata)
+    - [Hand-editing the JSON](#hand-editing-the-json)
+  - [Reporting bugs](#reporting-bugs)
+  - [Key references](#key-references)
 
 ---
 
@@ -35,13 +53,14 @@ The pipeline operates in three stages. Default thresholds appear in square brack
   `Dot product` into `Simple` / `Weighted dot product`) parse identically; metabolopan uses
   only the columns shared by both versions.
 - **Missing values.** Empty / whitespace / `"null"` / `"NA"` / unparseable intensity cells
-  become `f64::NAN`. Explicit `"0"` stays `0.0`. This matches `pandas.read_csv` semantics and
+  become `f64::NAN`. Explicit `"0"` stays `0.0`. This
   prevents downstream statistics from confusing missing measurements with true zeros.
-- **Group mapping `.csv`.** The header must be either `sample,group` (strict
-  two-column) or `sample,biosample,group` (three-column; the `biosample` column is
-  required for dual-mode — see *Dual-mode input* below). Any further columns are
-  parsed as optional metadata. Empty `group` cells or duplicate `sample` names are
-  rejected with a descriptive error.
+- **Group mapping `.csv`.** The CSV must contain a column named `sample` and a column
+  named `group`, in **any position/order**. An optional `biosample` column (any position;
+  required for dual-mode — see *Dual-mode input* below) is recognized by name. Any further
+  columns are parsed as optional metadata. Column names are matched exactly (case-sensitive);
+  a missing `sample`/`group` column, a duplicated `sample`/`group`/`biosample` column, empty
+  `group` cells, or duplicate `sample` names are each rejected with a descriptive error.
   Metadata columns are classified per-column at load time: a column whose non-empty cells
   all parse as numbers is exposed to Stage 2's "Metadata column" normalization radio (e.g.
   `dry_weight`, `dilution`, `total_protein`); a column with any non-empty non-numeric cell
@@ -854,12 +873,13 @@ compound is reached by both an Up and a Down feature, which is now excluded.)
    auto-fill of slot 1's mode radio (see *Stage 1 UI* below) AND an advisory
    disagreement hint when the user manually overrides to the opposite polarity
    (adducts ending in `+` infer Positive, in `-` Negative).
-2. **One 3-column metadata CSV** with header `sample,biosample,group`. Each row maps a
-   per-mode sample name (e.g. `CTR_positive_01`, `CTR_negative_01`) to its **biosample
-   label** (the same `CTR-01` for both modes) and group. The biosample column lets the
-   tool recognize that two differently-named samples are the same biological replicate.
+2. **One metadata CSV that includes a `biosample` column** (e.g. header
+   `sample,biosample,group`; column order is free). Each row maps a per-mode sample name
+   (e.g. `CTR_positive_01`, `CTR_negative_01`) to its **biosample label** (the same `CTR-01`
+   for both modes) and group. The biosample column lets the tool recognize that two
+   differently-named samples are the same biological replicate.
 
-A dual-mode run with a 2-column `sample,group` CSV is blocked at Stage 1 with a
+A dual-mode run with a CSV that has no `biosample` column is blocked at Stage 1 with a
 specific error — add the `biosample` column or remove the second `.txt` to proceed.
 
 > **Single-mode does NOT need a `biosample` column.** It is only required when a
