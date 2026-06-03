@@ -78,7 +78,7 @@ your own MS-DIAL output.
    - **Windows:** click **More info** → **Run anyway** on the SmartScreen prompt.
    - **Linux:** `chmod +x metabolopan` and run it (needs a desktop session with
      X11/Wayland + OpenGL).
-3. The app opens a native window — see **Using the app** below.
+3. The app opens a native window and guides you through the three stages — see [**What it does**](#what-it-does) above for the full walkthrough and screenshots.
 
 **Verify your download (optional).** Every release artifact — and the attached
 `SHA256SUMS` — carries [Sigstore](https://www.sigstore.dev) build provenance, so
