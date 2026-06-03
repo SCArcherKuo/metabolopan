@@ -19,7 +19,7 @@ The pipeline operates in three stages. All plots (volcano plots and dot plots) a
 
 ### Stage 1 — Input
 
-Upload an MS-DIAL `.txt` (wide-format intensity table) and a group-mapping `.csv` (`sample,group` or `sample,biosample,group`). Click `Continue to DAM` once both files load cleanly. The bottom **Data** tab summarises every per-slot count and the group breakdown.
+Upload an MS-DIAL `.txt` (wide-format intensity table) and a group-mapping `.csv` (`sample,group` or `sample,biosample,group`). See [**Input format**](#input-format) below for the file content details. Click `Continue to DAM` once both files load cleanly. The bottom **Data** tab summarises every per-slot count and the group breakdown.
 
 ![Stage 1 — input](docs/screenshots/stage1_input.png)
 
@@ -55,9 +55,7 @@ The two modes share identical PubChem → KEGG conv → hypergeometric → user-
 - macOS, Linux, or Windows
 - Internet connection (first-time KEGG / PubChem lookups; cached afterwards)
 
-The executable is self-contained — Rust is a compile-time toolchain, so there is no
-runtime to install. You don't need to clone the repo or install Git LFS; just bring
-your own MS-DIAL output.
+The executable is self-contained — Rust is a compile-time toolchain, so there is no runtime to install. You don't need to clone the repo or install Git LFS; just bring your own MS-DIAL output.
 
 **To build from source** (developers):
 
@@ -71,18 +69,13 @@ your own MS-DIAL output.
 ### Option A — Download a prebuilt binary (no Rust)
 
 1. Download the executable for your platform from the [Releases](../../releases) page.
-2. First launch on macOS / Windows — the app isn't code-signed yet, so the OS warns about
-   an "unidentified developer":
-   - **macOS:** right-click the app → **Open** → **Open** (or run
-     `xattr -d com.apple.quarantine /path/to/metabolopan` once).
+2. First launch on macOS / Windows — the app isn't code-signed yet, so the OS warns about an "unidentified developer":
+   - **macOS:** right-click the app → **Open** → **Open** (or run `xattr -d com.apple.quarantine /path/to/metabolopan` once).
    - **Windows:** click **More info** → **Run anyway** on the SmartScreen prompt.
-   - **Linux:** `chmod +x metabolopan` and run it (needs a desktop session with
-     X11/Wayland + OpenGL).
+   - **Linux:** `chmod +x metabolopan` and run it (needs a desktop session with X11/Wayland + OpenGL).
 3. The app opens a native window and guides you through the three stages — see [**What it does**](#what-it-does) above for the full walkthrough and screenshots.
 
-**Verify your download (optional).** Every release artifact — and the attached
-`SHA256SUMS` — carries [Sigstore](https://www.sigstore.dev) build provenance, so
-you can confirm a file was built by this repository's CI and was not tampered with:
+**Verify your download (optional).** Every release artifact — and the attached `SHA256SUMS` — carries [Sigstore](https://www.sigstore.dev) build provenance, so you can confirm a file was built by this repository's CI and was not tampered with:
 
 ```bash
 # provenance (needs the GitHub CLI):
@@ -107,50 +100,36 @@ cargo run --release
 
 ## Input format
 
+### Single-mode vs dual-mode
+
+metabolopan runs in one of two input modes, chosen implicitly by how many MS-DIAL `.txt` files you load:
+
+- **Single-mode** — one MS-DIAL `.txt` + one group-mapping `.csv`. The everyday case.
+- **Dual-mode** — two MS-DIAL `.txt` files (one **positive**, one **negative** ionization) + one group-mapping `.csv`. The `.csv` must include a `biosample` column so the tool can pair each sample's positive- and negative-mode injections as the same biological replicate.
+
+Both modes use the same file formats described below; dual-mode just adds the second `.txt` and the required `biosample` column.
+
 #### Example data
 
-Want sample data to try first? A source checkout ships reference fixtures —
-`data/single-mode/MS-DIAL-output-example.txt` + `metadata-example.csv`, plus the dual-mode
-(positive + negative ionization) set under `data/double-mode/`.
+Want sample data to try first? A source checkout ships reference fixtures — `data/single-mode/MS-DIAL-output-example.txt` + `metadata-example.csv`, plus the dual-mode (positive + negative ionization) set under `data/double-mode/`.
 
 ### MS-DIAL `.txt`
 
-metabolopan reads the Alignment Result export from **both MS-DIAL 4 and MS-DIAL 5**. Columns
-are located by *name*, not position, so the two versions' different column ordering and
-scoring-column layout are both handled — MS-DIAL 5 splits the single `Dot product` column into
-`Simple dot product` + `Weighted dot product` and adds `Matched peaks count` / `percentage`, but
-metabolopan reads only the annotation and quality columns common to both versions.
+metabolopan reads the Alignment Result export from **both MS-DIAL 4 and MS-DIAL 5**.
 
-Tab-delimited wide table as exported by MS-DIAL's Alignment Result. The first four rows are
-metadata (`Class`, `File type`, `Injection order`, `Batch ID`); the fifth row is the column
-header. Any column whose `File type` value is non-empty, not `"NA"`, and not the literal label
-`"File type"` is treated as a real sample injection — this includes `Sample` AND `Blank`
-columns. Only MS-DIAL's per-group `Average` / `Stdev` aggregations (which carry `NA` as their
-File type) are excluded; the excluded set is surfaced in the input summary.
+Columns are located by *name*, not position, so the two versions' different column ordering and scoring-column layout are both handled — MS-DIAL 5 splits the single `Dot product` column into `Simple dot product` + `Weighted dot product` and adds `Matched peaks count` / `percentage`, but metabolopan reads only the annotation and quality columns common to both versions.
 
-In addition to the seven standard annotation columns (`Alignment ID`, `Metabolite name`,
-`INCHIKEY`, `Average Rt(min)`, `Average Mz`, `Formula`, `SMILES`), the parser also reads
-six *quality* columns used by Stage 2's optional InChIKey deduplication step:
-`Adduct type`, `Fill %`, `MS/MS matched`, `Isotope tracking weight number`, `Total score`,
-and `S/N average`. These are treated as **optional** — older MS-DIAL exports
-that lack any of them parse with a per-column `WARN` log; the dedup cascade then has less
-to rank with but still works. Deduplication is **on by default** with an opt-out checkbox
-on the Stage 2 setup screen (see [`USER_MANUAL.md`](USER_MANUAL.md) for the cascade rules).
+Tab-delimited wide table as exported by MS-DIAL's Alignment Result. The first four rows are metadata (`Class`, `File type`, `Injection order`, `Batch ID`); the fifth row is the column header. Any column whose `File type` value is non-empty, not `"NA"`, and not the literal label `"File type"` is treated as a real sample injection — this includes `Sample` AND `Blank` columns. Only MS-DIAL's per-group `Average` / `Stdev` aggregations (which carry `NA` as their File type) are excluded; the excluded set is surfaced in the input summary.
+
+In addition to the seven standard annotation columns (`Alignment ID`, `Metabolite name`, `INCHIKEY`, `Average Rt(min)`, `Average Mz`, `Formula`, `SMILES`), the parser also reads six *quality* columns used by Stage 2's optional InChIKey deduplication step: `Adduct type`, `Fill %`, `MS/MS matched`, `Isotope tracking weight number`, `Total score`, and `S/N average`. These are treated as **optional** — older MS-DIAL exports that lack any of them parse with a per-column `WARN` log; the dedup cascade then has less to rank with but still works. Deduplication is **on by default** with an opt-out checkbox on the Stage 2 setup screen (see [`USER_MANUAL.md`](USER_MANUAL.md) for the cascade rules).
 
 ### Group mapping `.csv`
 
-The CSV must contain a column named `sample` and a column named `group`; **their position and
-order don't matter** (`sample,group`, `group,sample`, and `dry_weight,sample,group` all work).
-An optional column literally named `biosample` — in any position — records a per-sample
-biological-replicate label used for dual-mode provenance and the Data tab's biosample counts; it
-loads but is never offered for normalization. Column names are matched exactly (case-sensitive);
-a missing `sample`/`group` column, or a duplicated `sample`/`group`/`biosample` column, is
-rejected with a clear error. **Any further columns are treated as optional metadata.** Columns whose non-empty cells all
-parse as numbers (e.g. `dry_weight`, `dilution`, `total_protein`) are exposed to Stage 2's
-"Metadata column" normalization. Other non-numeric columns load successfully but are
-**silently excluded from the normalization dropdown**; a per-column WARN line in the in-app
-log pane names what was skipped, so typos in an otherwise-numeric column stay visible (fix
-the typo, reload — the column reappears).
+The CSV must contain a column named `sample` and a column named `group`; **their position and order don't matter** (`sample,group`, `group,sample`, and `dry_weight,sample,group` all work).
+
+An optional column literally named `biosample` — in any position — records a per-sample biological-replicate label used for dual-mode provenance and the Data tab's biosample counts; it loads but is never offered for normalization.
+
+Column names are matched exactly (case-sensitive); a missing `sample`/`group` column, or a duplicated `sample`/`group`/`biosample` column, is rejected with a clear error. **Any further columns are treated as optional metadata.** Columns whose non-empty cells all parse as numbers (e.g. `dry_weight`, `dilution`, `total_protein`) are exposed to Stage 2's "Metadata column" normalization. Other non-numeric columns load successfully but are **silently excluded from the normalization dropdown**; a per-column WARN line in the in-app log pane names what was skipped, so typos in an otherwise-numeric column stay visible (fix the typo, reload — the column reappears).
 
 ```csv
 sample,biosample,group,dry_weight,dilution
@@ -160,14 +139,9 @@ S2-1,CTR-01,Control,12.1,2.0
 S2-2,CTR-02,Control,11.5,2.0
 ```
 
-In the example above, `biosample` is kept in the CSV for provenance but never appears in
-the Stage 2 dropdown; only `dry_weight` and `dilution` do.
+In the example above, `biosample` is kept in the CSV for provenance but never appears in the Stage 2 dropdown; only `dry_weight` and `dilution` do.
 
-Groups can be any non-empty string (including numeric labels like `1`, `9`). Samples not
-listed in the CSV but present in the MS-DIAL `.txt` are flagged as `Unassigned`. Numeric
-metadata cells may be empty (parsed as `None`; the sample is then dropped from
-Metadata-column normalization). Negative or zero metadata values parse successfully but
-error at Stage 2 if that column is chosen for normalization.
+Groups can be any non-empty string (including numeric labels like `1`, `9`). Samples not listed in the CSV but present in the MS-DIAL `.txt` are flagged as `Unassigned`. Numeric metadata cells may be empty (parsed as `None`; the sample is then dropped from Metadata-column normalization). Negative or zero metadata values parse successfully but error at Stage 2 if that column is chosen for normalization.
 
 ## Project layout
 

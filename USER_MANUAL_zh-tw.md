@@ -24,6 +24,12 @@
 <a id="stage-1--input-parsing"></a>
 ## 第一階段 — 輸入解析（Input parsing）
 
+metabolopan 的輸入分為兩種模式，依你載入的 MS-DIAL `.txt` 檔數量隱含決定。**單模式（single-mode）**
+是一個 MS-DIAL `.txt` + 一個分組對應 `.csv`；**雙模式（dual-mode）** 是兩個 MS-DIAL `.txt`
+（一個正離子、一個負離子）+ 一個含 `biosample` 欄的分組對應 `.csv`。下方的檔案格式對兩種模式皆
+適用；雙模式特有的機制（biosample 配對、群組對等性檢查、逐模式 DAM）詳見下方的 *雙模式（正離子 +
+負離子）輸入* 章節。
+
 - **MS-DIAL `.txt`。** 前 4 列是 MS-DIAL 的中繼資料（`Class`、`File type`、`Injection
   order`、`Batch ID`）；第 5 列是欄位標題。當某一欄的 `File type` 值非空白、且不是
   `"NA"`、也不是字面上的列標籤 `"File type"` 時，該欄會被視為真正的樣本進樣——並保留

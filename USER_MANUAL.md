@@ -41,6 +41,13 @@ The pipeline operates in three stages. Default thresholds appear in square brack
 
 ## Stage 1 — Input parsing
 
+metabolopan takes input in one of two modes, chosen implicitly by how many MS-DIAL `.txt` files
+you load. **Single-mode** is one MS-DIAL `.txt` + one group-mapping `.csv`; **dual-mode** is two
+MS-DIAL `.txt` files (one positive, one negative ionization) + one group-mapping `.csv` that
+includes a `biosample` column. The file formats below apply to both modes; the dual-mode-specific
+mechanics (biosample pairing, group parity checks, per-mode DAM) are covered in *Dual-mode
+(positive + negative ionization) input* below.
+
 - **MS-DIAL `.txt`.** First 4 rows are MS-DIAL metadata (`Class`, `File type`, `Injection
   order`, `Batch ID`); the 5th row is the column header. A column is treated as a real sample
   injection — and kept in `sample_cols` — when its `File type` value is non-empty AND not
