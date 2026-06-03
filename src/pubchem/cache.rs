@@ -5,8 +5,8 @@
 //! Cache location resolution mirrors `kegg::cache::cache_dir()`:
 //! 1. `set_cache_root_for_tests` override (tests only).
 //! 2. `PUBCHEM_CACHE_DIR` environment variable (full path).
-//! 3. `<binary_dir>/data/cache/pubchem`.
-//! 4. `./data/cache/pubchem` fallback.
+//! 3. `<data_dir>/metabolopan/cache/pubchem` (via `dirs::data_dir()`).
+//! 4. `./data/cache/pubchem` fallback (when `data_dir()` is unavailable).
 //!
 //! Negative answers (`cids: []`) are persisted just like positive ones so
 //! we never re-query a known no-match. Missing keys in the JSON map mean

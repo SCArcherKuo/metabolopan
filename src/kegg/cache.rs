@@ -24,10 +24,10 @@ pub fn set_cache_root_for_tests(path: PathBuf) {
 /// Resolution order:
 /// 1. `set_cache_root_for_tests` override (tests only).
 /// 2. `KEGG_CACHE_DIR` environment variable (full path; the value is used verbatim).
-/// 3. `<binary_dir>/data/cache/kegg`, where `binary_dir` is the parent of
-///    `std::env::current_exe()`. This anchors the cache to the binary so it
-///    travels with the executable wherever it lives (e.g. `target/release/`
-///    during development, or alongside an installed app bundle).
+/// 3. `<data_dir>/metabolopan/cache/kegg`, where `<data_dir>` is
+///    `dirs::data_dir()` (macOS `~/Library/Application Support`, Linux
+///    `~/.local/share`, Windows `%APPDATA%`). Re-anchored off the binary so the
+///    app runs from a read-only install (`.app` bundle, `/Applications`).
 /// 4. Fallback if `current_exe()` is not resolvable (very rare on supported
 ///    platforms): `./data/cache/kegg` relative to the current working directory.
 pub fn cache_dir() -> PathBuf {
@@ -323,6 +323,15 @@ mod tests {
             std::env::set_var("KEGG_CACHE_DIR", dir.path());
         }
         dir
+    }
+
+    #[test]
+    fn cache_dir_env_override_beats_data_dir_default() {
+        // With KEGG_CACHE_DIR set, the env override must win over the new
+        // dirs::data_dir() default — precedence is unchanged by the data-dir move.
+        let _g = SERIAL.lock().unwrap();
+        let tmp = setup_tmp_root();
+        assert_eq!(cache_dir(), tmp.path());
     }
 
     #[test]

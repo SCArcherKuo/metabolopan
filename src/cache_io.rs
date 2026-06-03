@@ -95,9 +95,14 @@ pub(crate) fn load_json<T: DeserializeOwned>(
 }
 
 /// Resolve a cache directory: test override cell → env var →
-/// `<binary_dir>/data/cache/<leaf>` → `./data/cache/<leaf>` fallback. The
-/// override cell is passed in by reference so KEGG and PubChem keep SEPARATE
-/// `OnceLock` statics (design D2 — a shared static would couple test isolation).
+/// `<data_dir>/metabolopan/cache/<leaf>` → `./data/cache/<leaf>` fallback,
+/// where `<data_dir>` is `dirs::data_dir()` (macOS `~/Library/Application
+/// Support`, Linux `~/.local/share`, Windows `%APPDATA%`). Re-anchored off the
+/// binary directory so the app runs from a read-only install (`.app` bundle,
+/// `/Applications`, `C:\Program Files`); the `*_CACHE_DIR` env override keeps
+/// its precedence ahead of the default. The override cell is passed in by
+/// reference so KEGG and PubChem keep SEPARATE `OnceLock` statics (design D2 —
+/// a shared static would couple test isolation).
 pub(crate) fn resolve_cache_dir(
     env_var: &str,
     leaf: &str,
@@ -111,11 +116,8 @@ pub(crate) fn resolve_cache_dir(
     {
         return PathBuf::from(env_path);
     }
-    match std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(Path::to_path_buf))
-    {
-        Some(dir) => dir.join("data").join("cache").join(leaf),
+    match dirs::data_dir() {
+        Some(dir) => dir.join("metabolopan").join("cache").join(leaf),
         None => PathBuf::from(format!("data/cache/{leaf}")),
     }
 }
@@ -212,5 +214,20 @@ mod tests {
             resolve_cache_dir("PUBCHEM_CACHE_DIR", "pubchem", &cell_b),
             dir_b.path()
         );
+    }
+
+    #[test]
+    fn resolve_cache_dir_default_is_under_data_dir() {
+        // No override cell + an env var that is never set → the default resolves
+        // under `dirs::data_dir()` (re-anchored off the binary directory), with a
+        // CWD-relative fallback only when `data_dir()` is unavailable. The
+        // override-cell branch (above) and the env-var branch (exercised by the
+        // kegg/pubchem cache unit + integration tests) are unchanged.
+        let cell: OnceLock<PathBuf> = OnceLock::new();
+        let got = resolve_cache_dir("METABOLOPAN_NEVER_SET_CACHE_DIR", "kegg", &cell);
+        match dirs::data_dir() {
+            Some(base) => assert_eq!(got, base.join("metabolopan").join("cache").join("kegg")),
+            None => assert_eq!(got, PathBuf::from("data/cache/kegg")),
+        }
     }
 }

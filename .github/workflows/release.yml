@@ -133,5 +133,6 @@ jobs:
             **macOS** — first launch is blocked by Gatekeeper (unsigned): right-click
             the binary -> **Open**, or run `xattr -d com.apple.quarantine metabolopan`.
             **Windows** — SmartScreen: **More info** -> **Run anyway**.
-            **All platforms** — the app writes its KEGG cache next to the binary
-            (`./data/cache/kegg/`), so run it from a writable folder.
+            **All platforms** — the app stores its KEGG/PubChem cache + session logs
+            under your OS data dir (macOS `~/Library/Application Support/metabolopan/`,
+            Linux `~/.local/share/metabolopan/`, Windows `%APPDATA%\metabolopan\`).

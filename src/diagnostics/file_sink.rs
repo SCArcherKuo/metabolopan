@@ -14,15 +14,14 @@ use tracing_subscriber::fmt::{format::Writer, time::FormatTime};
 pub const FILE_SINK_DIRECTIVE: &str = "metabolopan=info,\
     h2=warn,hyper=warn,reqwest=warn,rustls=warn,hickory_resolver=warn";
 
-/// Returns `<binary_dir>/data/logs/`. Same resolution semantics as
-/// `kegg::cache::cache_dir()` minus the `KEGG_CACHE_DIR` override:
-/// log directory always sits next to the binary.
+/// Returns `<data_dir>/metabolopan/logs/`, where `<data_dir>` is
+/// `dirs::data_dir()` — the same anchor as `kegg::cache::cache_dir()`,
+/// re-anchored off the binary directory so a read-only install (`.app`
+/// bundle, `/Applications`) can still write logs. Falls back to a
+/// CWD-relative `./data/logs` only when `data_dir()` is unavailable.
 pub fn session_log_dir() -> PathBuf {
-    match std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(|p| p.to_path_buf()))
-    {
-        Some(dir) => dir.join("data").join("logs"),
+    match dirs::data_dir() {
+        Some(dir) => dir.join("metabolopan").join("logs"),
         None => PathBuf::from("data/logs"),
     }
 }
@@ -151,6 +150,17 @@ mod tests {
     use chrono::TimeZone;
     use filetime::{FileTime, set_file_mtime};
     use tempfile::tempdir;
+
+    #[test]
+    fn session_log_dir_is_under_data_dir() {
+        // Re-anchored off the binary directory onto `dirs::data_dir()` so a
+        // read-only install / `.app` bundle can still write logs; CWD-relative
+        // fallback only when `data_dir()` is unavailable.
+        match dirs::data_dir() {
+            Some(base) => assert_eq!(session_log_dir(), base.join("metabolopan").join("logs")),
+            None => assert_eq!(session_log_dir(), PathBuf::from("data/logs")),
+        }
+    }
 
     fn touch(path: &Path) {
         File::create(path).expect("create log fixture");

@@ -101,8 +101,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "metabolopan starting"
     );
     tracing::info!(
-        path = %metabolopan::kegg::cache::cache_dir().display(),
-        "KEGG cache directory"
+        cache_dir = %metabolopan::kegg::cache::cache_dir().display(),
+        log_dir = %log_dir.display(),
+        "runtime data directories"
     );
 
     let rt = TokioRuntimeBuilder::new_multi_thread()

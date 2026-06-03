@@ -2846,6 +2846,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "csv",
+ "dirs",
  "eframe",
  "egui",
  "egui_extras",
