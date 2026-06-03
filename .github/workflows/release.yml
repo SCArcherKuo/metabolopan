@@ -3,10 +3,13 @@ name: Release
 # Builds per-platform binaries on tag push (v*) and attaches them to the GitHub
 # Release. Binary name is `metabolopan` (Cargo.toml [package].name).
 #
-# Ships RAW binaries (tar.gz / zip) — no installer, no code signing, no .app
-# bundle. (A macOS .app needs the KEGG cache moved off <binary_dir> to
-# dirs::data_dir() first, since a bundle's internals are read-only — separate
-# spec'd change. Raw binaries are correct for now.)
+# Ships RAW binaries (tar.gz / zip) — no installer, no .app bundle. Each release
+# carries Sigstore build provenance (actions/attest-build-provenance) + a
+# SHA256SUMS manifest for verification. Windows Authenticode signing (SignPath
+# Foundation, free for OSS) is scaffolded in the build job, commented out until
+# the SignPath project is approved and SIGNPATH_API_TOKEN is set on this repo.
+# macOS stays unsigned for now (notarization needs an Apple Developer Program
+# cert — future change).
 #
 # Every target is built with an explicit `--target`, so the macOS Intel binary
 # is CROSS-COMPILED on the Apple Silicon runner (macos-14). GitHub's native
@@ -78,6 +81,38 @@ jobs:
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
 
+      # --- FUTURE: Windows Authenticode signing (SignPath Foundation, free OSS) ---
+      # Activate once the SignPath project is approved and SIGNPATH_API_TOKEN is set
+      # on this repo. Sign metabolopan.exe HERE (before the zip step packages it),
+      # and point the Windows zip step at signed/metabolopan.exe. The verify step
+      # enforces "never ship an unsigned exe labelled as signed".
+      #   - name: Upload unsigned exe for signing
+      #     if: runner.os == 'Windows'
+      #     id: unsigned
+      #     uses: actions/upload-artifact@v4
+      #     with: { name: unsigned-windows-exe, path: target/${{ matrix.target }}/release/metabolopan.exe }
+      #   - name: Sign with SignPath
+      #     if: runner.os == 'Windows'
+      #     uses: SignPath/github-action-submit-signing-request@v1   # pin to a release tag
+      #     with:
+      #       api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+      #       organization-id: <signpath-org-id>
+      #       project-slug: metabolopan
+      #       signing-policy-slug: release-signing
+      #       github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+      #       wait-for-completion: true
+      #       output-artifact-directory: signed
+      #   - name: Verify signature present
+      #     if: runner.os == 'Windows'
+      #     shell: pwsh
+      #     run: signtool verify /pa signed/metabolopan.exe
+      #
+      # --- FUTURE: macOS Developer ID signing + notarization (needs Apple cert) ---
+      #   codesign --options runtime --timestamp --sign "Developer ID Application: NAME (TEAMID)" <bin>
+      #   ditto -c -k --keepParent <bin> <bin>.zip
+      #   xcrun notarytool submit <bin>.zip --apple-id ID --team-id TEAMID --password APP_PW --wait
+      #   (stapling needs a .app/.dmg/.pkg — a bare Mach-O cannot be stapled)
+
       - name: Package (tar.gz)
         if: matrix.archive == 'tar.gz'
         run: |
@@ -106,12 +141,33 @@ jobs:
     name: attach binaries to the Release
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the Release + upload assets
+      id-token: write # OIDC, required by attest-build-provenance
+      attestations: write # write the Sigstore build-provenance attestation
     steps:
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
           merge-multiple: true
+
+      # Restrict the glob to archive extensions so SHA256SUMS neither self-includes
+      # nor picks up re-run residue. Written INTO artifacts/ so the attest step below
+      # (subject-path: artifacts/*) covers the manifest too.
+      - name: Generate SHA256SUMS
+        run: |
+          cd artifacts
+          sha256sum *.tar.gz *.zip > SHA256SUMS
+          cat SHA256SUMS
+
+      # Runs AFTER SHA256SUMS is written so the manifest is attested alongside the
+      # archives. Build-host vs target arch is irrelevant here (post-build), so the
+      # cross-compiled macOS Intel archive is attested identically.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: artifacts/*
 
       - name: Attach to GitHub Release
         uses: softprops/action-gh-release@v2
@@ -121,7 +177,9 @@ jobs:
           body: |
             ## metabolopan ${{ github.ref_name }}
 
-            Raw per-platform binaries — no installer / code signing yet.
+            Raw per-platform binaries — no installer. macOS/Windows are not
+            code-signed yet (see below), but every artifact carries build
+            provenance and a `SHA256SUMS` manifest is attached.
 
             | platform | file |
             | --- | --- |
@@ -129,6 +187,11 @@ jobs:
             | macOS Apple Silicon | `*-macos-arm64.tar.gz` |
             | macOS Intel | `*-macos-x86_64.tar.gz` |
             | Windows x86_64 | `*-windows-x86_64.zip` |
+
+            **Verify your download** — every artifact (and `SHA256SUMS`) has Sigstore
+            build provenance:
+            `gh attestation verify <file> --repo SCArcherKuo/metabolopan`. Check
+            integrity with `sha256sum -c SHA256SUMS`.
 
             **macOS** — first launch is blocked by Gatekeeper (unsigned): right-click
             the binary -> **Open**, or run `xattr -d com.apple.quarantine metabolopan`.

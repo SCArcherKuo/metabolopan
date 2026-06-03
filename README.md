@@ -80,6 +80,17 @@ your own MS-DIAL output.
      X11/Wayland + OpenGL).
 3. The app opens a native window — see **Using the app** below.
 
+**Verify your download (optional).** Every release artifact — and the attached
+`SHA256SUMS` — carries [Sigstore](https://www.sigstore.dev) build provenance, so
+you can confirm a file was built by this repository's CI and was not tampered with:
+
+```bash
+# provenance (needs the GitHub CLI):
+gh attestation verify metabolopan-<version>-<platform>.tar.gz --repo SCArcherKuo/metabolopan
+# integrity (run in the folder holding the downloaded archives + SHA256SUMS):
+sha256sum -c SHA256SUMS
+```
+
 ### Option B — Build from source
 
 ```bash
