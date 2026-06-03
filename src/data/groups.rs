@@ -586,7 +586,10 @@ mod tests {
         let err = load_group_mapping(f.path(), &sample_cols(&["S01"])).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("sample"), "msg: {msg}");
-        assert!(msg.contains("id,group"), "header should be echoed; msg: {msg}");
+        assert!(
+            msg.contains("id,group"),
+            "header should be echoed; msg: {msg}"
+        );
     }
 
     #[test]

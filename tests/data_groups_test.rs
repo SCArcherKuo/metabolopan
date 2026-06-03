@@ -75,7 +75,10 @@ fn rejects_header_missing_sample_column() {
     let err = load_group_mapping(f.path(), &["S01".to_string()])
         .expect_err("must error on missing sample column");
     let msg = format!("{err}");
-    assert!(msg.contains("sample"), "error must name the `sample` column: {msg}");
+    assert!(
+        msg.contains("sample"),
+        "error must name the `sample` column: {msg}"
+    );
     assert!(
         msg.to_lowercase().contains("missing"),
         "error must say the column is missing: {msg}"
