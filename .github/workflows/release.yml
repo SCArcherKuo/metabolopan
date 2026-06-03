@@ -5,12 +5,16 @@ name: Release
 #
 # Ships RAW binaries (tar.gz / zip) — no installer, no code signing, no .app
 # bundle. (A macOS .app needs the KEGG cache moved off <binary_dir> to
-# dirs::data_dir() first, since a bundle's internals are read-only — that is a
-# separate, spec'd change. Raw binaries are correct for now.)
+# dirs::data_dir() first, since a bundle's internals are read-only — separate
+# spec'd change. Raw binaries are correct for now.)
 #
-# Two phases on purpose: the matrix only BUILDS + uploads artifacts; a single
-# `release` job then attaches them all. This avoids the race where parallel
-# matrix jobs each try to create the Release and produce duplicates.
+# Every target is built with an explicit `--target`, so the macOS Intel binary
+# is CROSS-COMPILED on the Apple Silicon runner (macos-14). GitHub's native
+# Intel runners (macos-13) are being retired and can leave a job queued for
+# hours, so we never depend on them.
+#
+# Two phases: the matrix only BUILDS + uploads artifacts; a single `release`
+# job then attaches them all, avoiding the parallel-matrix duplicate-release race.
 
 on:
   push:
@@ -31,18 +35,22 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
             target_label: linux-x86_64
             bin: metabolopan
             archive: tar.gz
-          - os: macos-13 # Intel
-            target_label: macos-x86_64
-            bin: metabolopan
-            archive: tar.gz
-          - os: macos-14 # Apple Silicon
+          - os: macos-14 # Apple Silicon (native)
+            target: aarch64-apple-darwin
             target_label: macos-arm64
             bin: metabolopan
             archive: tar.gz
+          - os: macos-14 # Apple Silicon runner, cross-compiling Intel
+            target: x86_64-apple-darwin
+            target_label: macos-x86_64
+            bin: metabolopan
+            archive: tar.gz
           - os: windows-latest
+            target: x86_64-pc-windows-msvc
             target_label: windows-x86_64
             bin: metabolopan.exe
             archive: zip
@@ -61,16 +69,20 @@ jobs:
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
 
       - name: Build release binary
-        run: cargo build --release
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Package (tar.gz)
         if: matrix.archive == 'tar.gz'
         run: |
           mkdir -p dist
-          cp "target/release/${{ matrix.bin }}" dist/
+          cp "target/${{ matrix.target }}/release/${{ matrix.bin }}" dist/
           cp README.md LICENSE NOTICE USER_MANUAL.md dist/
           tar -C dist -czf "metabolopan-${{ github.ref_name }}-${{ matrix.target_label }}.tar.gz" .
 
@@ -79,7 +91,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item "target/release/${{ matrix.bin }}" dist/
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.bin }}" dist/
           Copy-Item README.md,LICENSE,NOTICE,USER_MANUAL.md dist/
           Compress-Archive -Path dist/* -DestinationPath "metabolopan-${{ github.ref_name }}-${{ matrix.target_label }}.zip"
 
