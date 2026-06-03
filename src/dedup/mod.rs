@@ -3,8 +3,8 @@
 //! Pure-function entry point `run_dedup` that takes `&[FeatureMeta]`
 //! and returns a kept-index set plus a `DedupReport` enumerating every
 //! dup-loser. The cascade is documented in `cascade.rs`; adduct
-//! classification in `adduct.rs`. See `openspec/specs/msdial-deduplication`
-//! for the formal capability spec.
+//! classification in `adduct.rs`. See the `msdial-deduplication` capability
+//! spec for the formal contract.
 //!
 //! No I/O, no tracing, no global state. `run_dam` calls this function
 //! pre-loop and consumes the kept set as an iteration-time skip; the

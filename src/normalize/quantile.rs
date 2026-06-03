@@ -8,8 +8,8 @@
 //! reference regions, and diverges for `N ≥ 3` ties on a non-linear
 //! reference (common at the bottom of LOD-imputed metabolomics samples).
 //! We implement the principle directly, so our outputs differ from
-//! preprocessCore / limma in exactly that case — see CLAUDE.md and
-//! USER_MANUAL.md for the worked example. Reference:
+//! preprocessCore / limma in exactly that case — see USER_MANUAL.md
+//! for the worked example. Reference:
 //! <https://support.bioconductor.org/p/1569/>.
 //!
 //! When samples have unequal non-NaN counts (e.g. heterogeneous

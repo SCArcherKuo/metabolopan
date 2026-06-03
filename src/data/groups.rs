@@ -150,7 +150,7 @@ impl GroupMapping {
     /// disappears), every per-numeric-column `metadata_columns` slot, and
     /// `biosample`. Surviving groups are reindexed against the narrowed
     /// `sample_names` axis. The original mapping is not mutated. See
-    /// `openspec/specs/group-mapping/` for the full contract.
+    /// the `group-mapping` capability spec for the full contract.
     pub fn without_unassigned_samples(&self) -> Self {
         let kept: Vec<usize> = self
             .sample_col_to_group

@@ -1,6 +1,6 @@
 //! Validate snapshot settings against the currently-loaded session.
 //!
-//! See `openspec/specs/session-settings-io/spec.md` (Requirement:
+//! See the `session-settings-io` capability spec (Requirement:
 //! `validate_against_inputs` SHALL identify input-dependent field
 //! resets, and `apply_snapshot` SHALL overwrite settings with per-field
 //! resets honored).

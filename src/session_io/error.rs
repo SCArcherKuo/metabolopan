@@ -5,7 +5,7 @@
 //! strings suitable for the error-toast modal in `app-shell`; the OS-level
 //! cause stays in the `source` chain for developers.
 //!
-//! See `openspec/specs/session-settings-io/spec.md` (Requirement:
+//! See the `session-settings-io` capability spec (Requirement:
 //! `SnapshotError` SHALL distinguish IO, parse, version, and write
 //! failures) for the normative contract.
 

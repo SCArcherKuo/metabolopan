@@ -56,7 +56,7 @@ pub struct MetabolomicsTable {
     /// ONCE at construction (the Unknown count is `features.len() - annotated_count`).
     /// `without_unassigned_samples` preserves it verbatim (the feature axis is
     /// untouched). Replaces the old per-call `annotated_count()` scan. See
-    /// `openspec/specs/msdial-input/`.
+    /// the `msdial-input` capability spec.
     pub annotated_count: usize,
 }
 
@@ -66,7 +66,7 @@ impl MetabolomicsTable {
     /// `mapping.group_of(name) != UNASSIGNED`. `features` and `excluded_cols`
     /// are cloned verbatim (the feature axis is untouched; `excluded_cols`
     /// is name-keyed, not index-keyed, so verbatim cloning is safe). See
-    /// `openspec/specs/msdial-input/` for the full contract.
+    /// the `msdial-input` capability spec for the full contract.
     pub fn without_unassigned_samples(&self, mapping: &GroupMapping) -> Self {
         let kept: Vec<usize> = self
             .sample_cols

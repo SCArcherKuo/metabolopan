@@ -2,7 +2,7 @@
 //! entries (pathways in pathway mode, modules in module mode), plus
 //! CSV export.
 //!
-//! See the `enrichment-ora` capability in `openspec/specs/` for the
+//! See the `enrichment-ora` capability spec for the
 //! requirement contract.
 
 pub mod export;

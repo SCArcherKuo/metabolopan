@@ -686,7 +686,7 @@ pub(crate) enum BoundaryResult {
 /// `BoundaryResult::Stage1GateRegression` in release builds when every
 /// sample is Unassigned so the caller can degrade gracefully (error log
 /// then user-visible toast). Mirrors ORA's K ⊆ N invariant pattern; see
-/// CLAUDE.md `Numerical/biological conventions`.
+/// the project's numerical / biological conventions.
 pub(crate) fn build_stage2_boundary_view(
     original_mapping: &crate::data::GroupMapping,
     original_ion_tables: &[crate::data::IonModeTable],

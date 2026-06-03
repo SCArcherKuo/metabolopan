@@ -2,9 +2,9 @@
 //! `run_dam` with `dedup_enabled = true` / `false` against a synthetic
 //! `MetabolomicsTable` containing controlled InChIKey duplicates.
 //!
-//! See `openspec/changes/add-msdial-duplicate-filter/specs/dam-analysis/spec.md`
-//! "System SHALL apply deduplication mask before pre-filter when
-//! `dedup_enabled` is true" for the requirement we're validating.
+//! See the `dam-analysis` capability spec, "System SHALL apply
+//! deduplication mask before pre-filter when `dedup_enabled` is true",
+//! for the requirement we're validating.
 
 use std::io::Write;
 

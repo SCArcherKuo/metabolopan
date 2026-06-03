@@ -1,9 +1,9 @@
 //! Metabolopan colour palette + global egui Visuals install.
 //!
 //! Single source of truth for every UI colour decision in the binary. Token
-//! contract + install timing are pinned by `openspec/specs/theme/spec.md`
-//! (capability `theme`) and the component system by
-//! `openspec/specs/interactive-component-styles/spec.md` — keep the specs and
+//! contract + install timing are pinned by the `theme` capability spec
+//! and the component system by the `interactive-component-styles`
+//! capability spec — keep the specs and
 //! this file in lockstep.
 //!
 //! The DEFAULT widget appearance installed here is the `ui-color.md` §2/§3

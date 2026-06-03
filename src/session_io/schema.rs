@@ -4,7 +4,7 @@
 //! names + variant names are part of the schema contract — renaming or
 //! removing any of them requires a `SCHEMA_VERSION` bump (see the
 //! "Snapshot schema version SHALL be a tracked invariant" requirement in
-//! `openspec/specs/session-settings-io/spec.md`).
+//! the `session-settings-io` capability spec).
 
 use serde::{Deserialize, Serialize};
 

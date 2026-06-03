@@ -100,10 +100,10 @@ impl AnalysisPayload {
 /// Central store for every user-tunable parameter across all stages.
 /// Introduced by the `refactor-session-settings` change so that
 /// settings survive transitions without each transition function
-/// hand-copying field subsets. See `openspec/specs/app-shell/spec.md`
-/// for the normative field list and default values; see
-/// `openspec/changes/archive/<…>-refactor-session-settings/design.md`
-/// D11 for the table of reset/clear API surfaces.
+/// hand-copying field subsets. See the `app-shell` capability spec
+/// for the normative field list and default values, and the
+/// `refactor-session-settings` change's design notes (decision D11)
+/// for the table of reset/clear API surfaces.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionSettings {
     // ── Stage 1 / mode-related ──
@@ -314,8 +314,8 @@ pub struct SessionInputs {
 ///
 /// `App::organisms` (the eager-loaded KEGG organism roster) is NOT in
 /// this struct — it is session-immutable lookup data, loaded once at
-/// startup, and lives directly on `App`. See `openspec/specs/app-shell/
-/// spec.md` D10 / preamble for the rule.
+/// startup, and lives directly on `App`. See the `app-shell` capability
+/// spec (decision D10 / preamble) for the rule.
 #[derive(Debug, Default, Clone)]
 pub struct SessionCache {
     pub species_kegg: Option<SpeciesKegg>,
@@ -352,8 +352,8 @@ pub enum AppState {
     /// receivers, progress accumulators, computed outputs, textures, and
     /// screen-local error strings. Every user-tunable parameter lives on
     /// `App::settings`; every loaded input lives on `App::inputs`; every
-    /// per-analysis fetched cache lives on `App::cache`. See
-    /// `openspec/specs/app-shell/spec.md` for the normative contract.
+    /// per-analysis fetched cache lives on `App::cache`. See the
+    /// `app-shell` capability spec for the normative contract.
     Initializing {
         load_rx: mpsc::Receiver<Result<Vec<KeggOrganism>, String>>,
         /// Pre-loaded stale cache, surfaced as a fallback on failure.
@@ -793,7 +793,7 @@ pub fn default_bundle_filename() -> String {
 
 pub struct App {
     // ── The four sibling fields introduced by the `refactor-session-settings`
-    // change. See `openspec/specs/app-shell/spec.md` preamble for the
+    // change. See the `app-shell` capability spec preamble for the
     // normative contract. As of the Phase 2 commit of that refactor, these
     // fields are populated alongside the existing per-variant fields on
     // `AppState`; Phase 3 will slim `AppState` and migrate every callsite to
@@ -1845,8 +1845,8 @@ fn spawn_eager_organism_load(
 mod tests {
     //! Unit tests for `SessionSettings` / `SessionCache` defaults, named
     //! reset APIs, and cache clearing behavior. The reset surfaces here
-    //! lock in today's pre-refactor behavior bit-equally — see
-    //! `openspec/changes/refactor-session-settings/design.md` D11 for
+    //! lock in today's pre-refactor behavior bit-equally — see the
+    //! `refactor-session-settings` change's design notes (D11) for
     //! the full inventory.
     use super::*;
 

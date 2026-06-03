@@ -2,7 +2,7 @@
 //! plus SHA-256 hashes of the currently-loaded MS-DIAL `.txt` +
 //! metadata `.csv` inputs for drift detection.
 //!
-//! See `openspec/specs/session-settings-io/spec.md` for the normative
+//! See the `session-settings-io` capability spec for the normative
 //! contract. The on-disk schema is owned by `schema::Snapshot`; the
 //! `SCHEMA_VERSION` constant + golden fixture + version-rock test form
 //! the triple-lock against schema drift.

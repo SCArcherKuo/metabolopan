@@ -1,6 +1,6 @@
 //! SHA-256 streaming helper for the `session-settings-io` capability.
 //!
-//! See `openspec/specs/session-settings-io/spec.md` (Requirement: SHA-256
+//! See the `session-settings-io` capability spec (Requirement: SHA-256
 //! helper SHALL stream files in chunks).
 
 use std::fs::File;
