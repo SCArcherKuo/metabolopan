@@ -58,7 +58,7 @@ jobs:
             bin: metabolopan.exe
             archive: zip
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           lfs: false # release binaries do not bundle the LFS test fixtures
 
@@ -89,7 +89,7 @@ jobs:
       #   - name: Upload unsigned exe for signing
       #     if: runner.os == 'Windows'
       #     id: unsigned
-      #     uses: actions/upload-artifact@v4
+      #     uses: actions/upload-artifact@v6
       #     with: { name: unsigned-windows-exe, path: target/${{ matrix.target }}/release/metabolopan.exe }
       #   - name: Sign with SignPath
       #     if: runner.os == 'Windows'
@@ -131,7 +131,7 @@ jobs:
           Compress-Archive -Path dist/* -DestinationPath "metabolopan-${{ github.ref_name }}-${{ matrix.target_label }}.zip"
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: metabolopan-${{ matrix.target_label }}
           path: metabolopan-${{ github.ref_name }}-${{ matrix.target_label }}.*
@@ -147,7 +147,7 @@ jobs:
       attestations: write # write the Sigstore build-provenance attestation
     steps:
       - name: Download all build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           path: artifacts
           merge-multiple: true
@@ -170,7 +170,7 @@ jobs:
           subject-path: artifacts/*
 
       - name: Attach to GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: artifacts/*
           fail_on_unmatched_files: true
