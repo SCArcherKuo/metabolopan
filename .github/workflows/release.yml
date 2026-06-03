@@ -113,12 +113,14 @@ jobs:
       #   xcrun notarytool submit <bin>.zip --apple-id ID --team-id TEAMID --password APP_PW --wait
       #   (stapling needs a .app/.dmg/.pkg — a bare Mach-O cannot be stapled)
 
+      # Bundle the committed English manual PDF (docs/manual/USER_MANUAL.pdf,
+      # present in the checkout) into each archive in place of the old USER_MANUAL.md.
       - name: Package (tar.gz)
         if: matrix.archive == 'tar.gz'
         run: |
           mkdir -p dist
           cp "target/${{ matrix.target }}/release/${{ matrix.bin }}" dist/
-          cp README.md LICENSE NOTICE USER_MANUAL.md dist/
+          cp README.md LICENSE NOTICE docs/manual/USER_MANUAL.pdf dist/
           tar -C dist -czf "metabolopan-${{ github.ref_name }}-${{ matrix.target_label }}.tar.gz" .
 
       - name: Package (zip)
@@ -127,7 +129,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/${{ matrix.bin }}" dist/
-          Copy-Item README.md,LICENSE,NOTICE,USER_MANUAL.md dist/
+          Copy-Item README.md,LICENSE,NOTICE,docs/manual/USER_MANUAL.pdf dist/
           Compress-Archive -Path dist/* -DestinationPath "metabolopan-${{ github.ref_name }}-${{ matrix.target_label }}.zip"
 
       - name: Upload build artifact
@@ -146,19 +148,29 @@ jobs:
       id-token: write # OIDC, required by attest-build-provenance
       attestations: write # write the Sigstore build-provenance attestation
     steps:
+      # Checkout to pick up the committed manual PDFs (docs/manual/*.pdf), which
+      # are attached to the Release as standalone assets.
+      - uses: actions/checkout@v5
+        with:
+          lfs: false
+
       - name: Download all build artifacts
         uses: actions/download-artifact@v7
         with:
           path: artifacts
           merge-multiple: true
 
-      # Restrict the glob to archive extensions so SHA256SUMS neither self-includes
-      # nor picks up re-run residue. Written INTO artifacts/ so the attest step below
+      - name: Stage manual PDFs alongside the archives
+        run: cp docs/manual/USER_MANUAL.pdf docs/manual/USER_MANUAL_zh-tw.pdf artifacts/
+
+      # Hash the archives AND both committed manual PDFs (staged into artifacts/
+      # above). The glob stays explicit so SHA256SUMS neither self-includes nor
+      # picks up re-run residue. Written INTO artifacts/ so the attest step below
       # (subject-path: artifacts/*) covers the manifest too.
       - name: Generate SHA256SUMS
         run: |
           cd artifacts
-          sha256sum *.tar.gz *.zip > SHA256SUMS
+          sha256sum *.tar.gz *.zip *.pdf > SHA256SUMS
           cat SHA256SUMS
 
       # Runs AFTER SHA256SUMS is written so the manifest is attested alongside the
@@ -187,6 +199,10 @@ jobs:
             | macOS Apple Silicon | `*-macos-arm64.tar.gz` |
             | macOS Intel | `*-macos-x86_64.tar.gz` |
             | Windows x86_64 | `*-windows-x86_64.zip` |
+
+            The user manual is attached as `USER_MANUAL.pdf` (English) and
+            `USER_MANUAL_zh-tw.pdf` (Traditional Chinese); the English PDF is also
+            bundled inside each archive.
 
             **Verify your download** — every artifact (and `SHA256SUMS`) has Sigstore
             build provenance:

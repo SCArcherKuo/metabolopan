@@ -15,7 +15,7 @@ A cross-platform desktop GUI application that takes raw MS-DIAL (v4 or v5) metab
 
 The pipeline operates in three stages. All plots (volcano plots and dot plots) are rendered with `plotters` so that the in-window preview and the 600 DPI PNG export share a single rendering engine.
 
-**For the numerical and operational details** — exact statistical methods, default thresholds, deviations from MetaboAnalyst-style defaults, edge-case handling, references — see [USER_MANUAL.md](USER_MANUAL.md).
+**For the numerical and operational details** — exact statistical methods, default thresholds, deviations from MetaboAnalyst-style defaults, edge-case handling, references — see [USER_MANUAL.md](docs/manual/USER_MANUAL.md).
 
 ### Stage 1 — Input
 
@@ -121,7 +121,7 @@ Columns are located by *name*, not position, so the two versions' different colu
 
 Tab-delimited wide table as exported by MS-DIAL's Alignment Result. The first four rows are metadata (`Class`, `File type`, `Injection order`, `Batch ID`); the fifth row is the column header. Any column whose `File type` value is non-empty, not `"NA"`, and not the literal label `"File type"` is treated as a real sample injection — this includes `Sample` AND `Blank` columns. Only MS-DIAL's per-group `Average` / `Stdev` aggregations (which carry `NA` as their File type) are excluded; the excluded set is surfaced in the input summary.
 
-In addition to the seven standard annotation columns (`Alignment ID`, `Metabolite name`, `INCHIKEY`, `Average Rt(min)`, `Average Mz`, `Formula`, `SMILES`), the parser also reads six *quality* columns used by Stage 2's optional InChIKey deduplication step: `Adduct type`, `Fill %`, `MS/MS matched`, `Isotope tracking weight number`, `Total score`, and `S/N average`. These are treated as **optional** — older MS-DIAL exports that lack any of them parse with a per-column `WARN` log; the dedup cascade then has less to rank with but still works. Deduplication is **on by default** with an opt-out checkbox on the Stage 2 setup screen (see [`USER_MANUAL.md`](USER_MANUAL.md) for the cascade rules).
+In addition to the seven standard annotation columns (`Alignment ID`, `Metabolite name`, `INCHIKEY`, `Average Rt(min)`, `Average Mz`, `Formula`, `SMILES`), the parser also reads six *quality* columns used by Stage 2's optional InChIKey deduplication step: `Adduct type`, `Fill %`, `MS/MS matched`, `Isotope tracking weight number`, `Total score`, and `S/N average`. These are treated as **optional** — older MS-DIAL exports that lack any of them parse with a per-column `WARN` log; the dedup cascade then has less to rank with but still works. Deduplication is **on by default** with an opt-out checkbox on the Stage 2 setup screen (see [`USER_MANUAL.md`](docs/manual/USER_MANUAL.md) for the cascade rules).
 
 ### Group mapping `.csv`
 
@@ -174,8 +174,8 @@ data/                             Example input files
   single-mode/                    MS-DIAL .txt + metadata .csv (canonical single-mode fixture)
   double-mode/                    POS + NEG MS-DIAL .txt + 3-column metadata .csv (dual-mode fixture)
 tests/                            Integration tests + fixtures
+docs/manual/                      User manual (EN + zh-TW) — methodology, defaults, references
 README.md                         This file
-USER_MANUAL.md                    Analysis methodology, defaults, references — read before publishing
 ```
 
 ## Development workflow

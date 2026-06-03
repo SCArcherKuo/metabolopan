@@ -11,7 +11,7 @@ Be as specific as you can.
 
 ## What you've tried / checked
 
-Did `USER_MANUAL.md` or the README cover it? What was unclear?
+Did the user manual (`docs/manual/USER_MANUAL.md`) or the README cover it? What was unclear?
 
 ## Context
 

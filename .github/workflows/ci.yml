@@ -63,3 +63,38 @@ jobs:
 
       - name: Build release (catch release-only breakage)
         run: cargo build --release
+
+  # Guard: the committed manual PDFs (docs/manual/*.pdf) must not go stale vs
+  # their Markdown sources. Fails if a manual .md was committed more recently
+  # than its .pdf — i.e. someone edited the manual but forgot to re-run
+  # release/build-manuals.sh and commit the refreshed PDF. Uses last-commit
+  # timestamps (not a byte rebuild), so it does not depend on PDF reproducibility
+  # or on having pandoc/Typst/CJK fonts in CI.
+  manuals:
+    name: manual PDFs in sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          lfs: false
+          fetch-depth: 0 # need full history for the last-commit-date comparison
+      - name: Check each manual PDF is not older than its Markdown
+        run: |
+          set -euo pipefail
+          fail=0
+          for base in USER_MANUAL USER_MANUAL_zh-tw; do
+            md="docs/manual/$base.md"
+            pdf="docs/manual/$base.pdf"
+            if [ ! -f "$pdf" ]; then
+              echo "::error file=$pdf::$pdf is missing — run release/build-manuals.sh and commit it."
+              fail=1; continue
+            fi
+            md_t=$(git log -1 --format=%ct -- "$md")
+            pdf_t=$(git log -1 --format=%ct -- "$pdf")
+            if [ "$md_t" -gt "$pdf_t" ]; then
+              echo "::error file=$md::$md changed after $pdf was last built. Run 'release/build-manuals.sh' and commit the refreshed $pdf."
+              fail=1
+            fi
+          done
+          [ "$fail" -eq 0 ] && echo "Manual PDFs are in sync with their Markdown sources."
+          exit "$fail"

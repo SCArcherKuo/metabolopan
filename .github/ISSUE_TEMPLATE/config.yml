@@ -3,7 +3,7 @@
 blank_issues_enabled: true
 contact_links:
   - name: User manual (analysis methodology + thresholds)
-    url: https://github.com/SCArcherKuo/metabolopan/blob/main/USER_MANUAL.md
+    url: https://github.com/SCArcherKuo/metabolopan/blob/main/docs/manual/USER_MANUAL.md
     about: Statistical methods, normalization, FDR, and KEGG conventions are documented here.
   - name: KEGG REST API
     url: https://www.kegg.jp/kegg/rest/keggapi.html
