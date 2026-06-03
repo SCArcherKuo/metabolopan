@@ -1,0 +1,125 @@
+name: Release
+
+# Builds per-platform binaries on tag push (v*) and attaches them to the GitHub
+# Release. Binary name is `metabolopan` (Cargo.toml [package].name).
+#
+# Ships RAW binaries (tar.gz / zip) — no installer, no code signing, no .app
+# bundle. (A macOS .app needs the KEGG cache moved off <binary_dir> to
+# dirs::data_dir() first, since a bundle's internals are read-only — that is a
+# separate, spec'd change. Raw binaries are correct for now.)
+#
+# Two phases on purpose: the matrix only BUILDS + uploads artifacts; a single
+# `release` job then attaches them all. This avoids the race where parallel
+# matrix jobs each try to create the Release and produce duplicates.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # create the Release + upload assets
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build ${{ matrix.target_label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target_label: linux-x86_64
+            bin: metabolopan
+            archive: tar.gz
+          - os: macos-13 # Intel
+            target_label: macos-x86_64
+            bin: metabolopan
+            archive: tar.gz
+          - os: macos-14 # Apple Silicon
+            target_label: macos-arm64
+            bin: metabolopan
+            archive: tar.gz
+          - os: windows-latest
+            target_label: windows-x86_64
+            bin: metabolopan.exe
+            archive: zip
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false # release binaries do not bundle the LFS test fixtures
+
+      # eframe / winit / rfd need a few system libs to LINK on Linux.
+      - name: Install Linux build deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-3-dev libxkbcommon-dev libwayland-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Package (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          mkdir -p dist
+          cp "target/release/${{ matrix.bin }}" dist/
+          cp README.md LICENSE NOTICE USER_MANUAL.md dist/
+          tar -C dist -czf "metabolopan-${{ github.ref_name }}-${{ matrix.target_label }}.tar.gz" .
+
+      - name: Package (zip)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item "target/release/${{ matrix.bin }}" dist/
+          Copy-Item README.md,LICENSE,NOTICE,USER_MANUAL.md dist/
+          Compress-Archive -Path dist/* -DestinationPath "metabolopan-${{ github.ref_name }}-${{ matrix.target_label }}.zip"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: metabolopan-${{ matrix.target_label }}
+          path: metabolopan-${{ github.ref_name }}-${{ matrix.target_label }}.*
+          if-no-files-found: error
+
+  release:
+    name: attach binaries to the Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Attach to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          fail_on_unmatched_files: true
+          body: |
+            ## metabolopan ${{ github.ref_name }}
+
+            Raw per-platform binaries — no installer / code signing yet.
+
+            | platform | file |
+            | --- | --- |
+            | Linux x86_64 | `*-linux-x86_64.tar.gz` |
+            | macOS Apple Silicon | `*-macos-arm64.tar.gz` |
+            | macOS Intel | `*-macos-x86_64.tar.gz` |
+            | Windows x86_64 | `*-windows-x86_64.zip` |
+
+            **macOS** — first launch is blocked by Gatekeeper (unsigned): right-click
+            the binary -> **Open**, or run `xattr -d com.apple.quarantine metabolopan`.
+            **Windows** — SmartScreen: **More info** -> **Run anyway**.
+            **All platforms** — the app writes its KEGG cache next to the binary
+            (`./data/cache/kegg/`), so run it from a writable folder.
