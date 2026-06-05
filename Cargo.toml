@@ -1,6 +1,6 @@
 [package]
 name = "metabolopan"
-version = "1.2.1"
+version = "1.2.2"
 edition = "2024"
 authors = ["Shang-Che Kuo"]
 description = "Cross-platform desktop GUI for metabolomic differential analysis (DAM) and KEGG over-representation analysis (ORA), built in Rust."

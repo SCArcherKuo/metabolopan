@@ -119,7 +119,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     eframe::run_native(
-        "Metabolopan — Metabolomic Enrichment Analysis",
+        concat!(
+            "Metabolopan (v",
+            env!("CARGO_PKG_VERSION"),
+            ") — Metabolomic Enrichment Analysis"
+        ),
         native_options,
         Box::new(move |cc| {
             egui_extras::install_image_loaders(&cc.egui_ctx);

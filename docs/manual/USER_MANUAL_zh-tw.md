@@ -1,6 +1,6 @@
 # 使用手冊
 
-軟體版本：metabolopan v1.2.1
+軟體版本：metabolopan v1.2.2
 
 更新日期：2026-06-05
 
@@ -1005,7 +1005,7 @@ Data 分頁中的兩個按鈕——**[Save settings…]** 與 **[Load settings�
 ```json
 {
   "schema_version": 1,
-  "app_version": "1.2.1",
+  "app_version": "1.2.2",
   "saved_at": "2026-06-04T09:15:22Z",
   "user_note": "",
   "input_files": [
