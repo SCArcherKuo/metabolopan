@@ -149,7 +149,18 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
     });
 
     if let Some(target) = jump_to {
-        navigate_back_to(app, target);
+        if crate::app::needs_nav_confirm(&app.state) {
+            // A long module fetch is in flight: defer the jump behind a
+            // confirm modal instead of cancelling silently. Respect the
+            // App-level modal mutual-exclusion family.
+            if app.any_modal_open() {
+                tracing::warn!("back-navigation request dropped: another modal is open");
+            } else {
+                app.pending_back_nav = Some(target);
+            }
+        } else {
+            navigate_back_to(app, target);
+        }
     }
 }
 
@@ -173,7 +184,19 @@ fn take_dam_results(prev: AppState) -> Option<Vec<DamResult>> {
 /// strictly before the current one (the caller only enables past steps), and
 /// any target that needs `dam_results` is only reachable from a state that
 /// carries them, so the `expect` below is unreachable by construction.
-fn navigate_back_to(app: &mut App, target: usize) {
+pub(crate) fn navigate_back_to(app: &mut App, target: usize) {
+    // Cancel any in-flight background task on the leaving state BEFORE it is
+    // dropped, so a running enrichment/DAM run or a fetch/refresh is aborted
+    // rather than orphaned. Silent for every state except a long module
+    // fetch, which is gated by a confirm before this is reached (see `show`
+    // and `App::show_back_nav_confirm_modal`).
+    if crate::app::is_busy(&app.state) {
+        tracing::info!(
+            target_step = target,
+            "stopping in-flight work: navigated back to an earlier step via the stepper"
+        );
+    }
+    crate::app::abort_in_flight(&app.state);
     let prev = std::mem::take(&mut app.state);
     let dam_results = take_dam_results(prev);
 

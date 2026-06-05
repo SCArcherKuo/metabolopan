@@ -21,9 +21,40 @@ use tracing::info;
 
 use crate::data::GroupMapping;
 
-/// Apply `config.method` to `raw` and return the working matrix. Pure
-/// function — no I/O, no mutation of inputs. Emits a single INFO `tracing`
-/// event per non-`None` invocation in a greppable single-line format.
+/// Apply `config.method` to `raw` and return the working matrix. Thin logging
+/// wrapper over [`run`]: emits exactly one INFO `tracing` event per non-`None`
+/// invocation in a greppable single-line format (`None` emits nothing). Pure —
+/// no mutation of inputs. See [`run`] for the per-mode `sample_cols` contract,
+/// and [`validate`] for the non-logging sibling used by the Stage 2 preflight.
+pub fn apply(
+    config: &NormalizationConfig,
+    raw: &Array2<f64>,
+    mapping: &GroupMapping,
+    sample_cols: &[String],
+) -> Result<Array2<f64>, NormalizationError> {
+    run(config, raw, mapping, sample_cols, true)
+}
+
+/// Validate that `config.method` applies cleanly to `raw` WITHOUT emitting the
+/// `normalize:` INFO summary line and WITHOUT returning the matrix: `Ok(())` on
+/// success, or the IDENTICAL `Err` [`apply`] would return for the same inputs.
+/// Used by the Stage 2 `start_dam` preflight so a dual-mode run logs each mode's
+/// normalization once — from the real DAM worker — instead of twice. Lower-level
+/// per-method diagnostics (e.g. the Metadata missing-value WARN) still fire;
+/// only the summary INFO line is suppressed.
+pub fn validate(
+    config: &NormalizationConfig,
+    raw: &Array2<f64>,
+    mapping: &GroupMapping,
+    sample_cols: &[String],
+) -> Result<(), NormalizationError> {
+    run(config, raw, mapping, sample_cols, false).map(|_| ())
+}
+
+/// Dispatch `config.method` over `raw`, emitting the `normalize:` INFO summary
+/// line only when `log_stats`. The single shared body behind [`apply`] (logs)
+/// and [`validate`] (silent) — one dispatch, one per-method implementation.
+/// Pure — no mutation of inputs.
 ///
 /// `sample_cols` is the per-mode sample column names for `raw` (i.e.
 /// `IonModeTable.sample_cols`). In dual-mode the `mapping` is built from the
@@ -31,11 +62,12 @@ use crate::data::GroupMapping;
 /// `apply_metadata` and `apply_pqn` MUST use these per-mode names (NOT the
 /// union-indexed positional accessor on `mapping`) to avoid cross-mode
 /// index confusion (Findings #1, #2, #3 in the 2026-05-25 audit).
-pub fn apply(
+fn run(
     config: &NormalizationConfig,
     raw: &Array2<f64>,
     mapping: &GroupMapping,
     sample_cols: &[String],
+    log_stats: bool,
 ) -> Result<Array2<f64>, NormalizationError> {
     if raw.nrows() == 0 || raw.ncols() == 0 {
         return Err(NormalizationError::EmptyMatrix);
@@ -49,6 +81,7 @@ pub fn apply(
         NormalizationMethod::Sum => {
             let (out, scale, nan_in, nan_out) = sum::apply_sum(raw, mapping, sample_cols)?;
             log_norm_stats(
+                log_stats,
                 "Sum",
                 n_samples,
                 n_features,
@@ -65,6 +98,7 @@ pub fn apply(
         NormalizationMethod::Median => {
             let (out, scale, nan_in, nan_out) = median::apply_median(raw, mapping, sample_cols)?;
             log_norm_stats(
+                log_stats,
                 "Median",
                 n_samples,
                 n_features,
@@ -82,6 +116,7 @@ pub fn apply(
             let (out, scale, nan_in, nan_out) =
                 metadata::apply_metadata(raw, mapping, sample_cols, column)?;
             log_norm_stats(
+                log_stats,
                 "Metadata",
                 n_samples,
                 n_features,
@@ -98,6 +133,7 @@ pub fn apply(
         NormalizationMethod::Quantile => {
             let (out, scale, nan_in, nan_out) = quantile::apply_quantile(raw, mapping)?;
             log_norm_stats(
+                log_stats,
                 "Quantile",
                 n_samples,
                 n_features,
@@ -119,6 +155,7 @@ pub fn apply(
                 PqnReference::Group(name) => format!("Group({name})"),
             };
             log_norm_stats(
+                log_stats,
                 "PQN",
                 n_samples,
                 n_features,
@@ -143,12 +180,14 @@ pub(crate) struct NormStats {
 }
 
 /// Emit the single greppable `normalize: …` INFO line shared by every method.
+/// A no-op when `enabled` is `false` (the `validate` / Stage 2 preflight path).
 /// `pre_samples` is inserted between `method=` and `samples=` (Metadata's
 /// `column=…`, PQN's `reference=…`); `pre_scale` between `features=` and
 /// `scaling_to_median_factor=` (PQN's `reference_features_used=…`). Both empty
 /// for Sum / Median / Quantile. The two slots reproduce each method's prior
 /// field order byte-for-byte.
 fn log_norm_stats(
+    enabled: bool,
     method: &str,
     n_samples: usize,
     n_features: usize,
@@ -156,6 +195,9 @@ fn log_norm_stats(
     pre_scale: &str,
     s: &NormStats,
 ) {
+    if !enabled {
+        return;
+    }
     info!(
         "normalize: method={method} {pre_samples}samples={n_samples} features={n_features} {pre_scale}scaling_to_median_factor={scale:.6e} nan_cells_in={nan_in} nan_cells_out={nan_out}",
         scale = s.scale,
@@ -380,5 +422,61 @@ mod tests {
             .unwrap();
             assert_eq!(out.shape(), raw.shape(), "method {m:?} must preserve shape");
         }
+    }
+
+    #[test]
+    fn validate_ok_when_apply_ok() {
+        // A non-`None` method `apply` accepts; `validate` must mirror it —
+        // return `Ok(())` and discard the matrix.
+        let raw = array![
+            [100.0, 200.0, 150.0],
+            [400.0, 800.0, 600.0],
+            [500.0, 1000.0, 750.0]
+        ];
+        let mapping = mapping_for(&["A", "B", "C"], &["G1", "G1", "G1"]);
+        let sc = cols(&["A", "B", "C"]);
+        let config = NormalizationConfig {
+            method: NormalizationMethod::Sum,
+        };
+        assert!(apply(&config, &raw, &mapping, &sc).is_ok());
+        assert!(validate(&config, &raw, &mapping, &sc).is_ok());
+    }
+
+    #[test]
+    fn validate_returns_same_err_as_apply() {
+        // Degenerate-PQN fixture (mirrors `pqn::tests`): sample D's quotient
+        // median is 0 → `PqnDegenerateSamples`. `validate` must surface the
+        // identical error `apply` would, proving the Setup-gate check still
+        // fires when logging is suppressed.
+        let raw = array![
+            [10.0, 10.0, 10.0, 0.0],
+            [20.0, 20.0, 20.0, 0.0],
+            [30.0, 30.0, 30.0, 0.0],
+            [40.0, 40.0, 40.0, 100.0],
+        ];
+        let mapping = mapping_for(&["A", "B", "C", "D"], &["G1", "G1", "G1", "G1"]);
+        let sc = cols(&["A", "B", "C", "D"]);
+        let config = NormalizationConfig {
+            method: NormalizationMethod::Pqn {
+                reference: PqnReference::AllSamples,
+            },
+        };
+        assert!(matches!(
+            apply(&config, &raw, &mapping, &sc),
+            Err(NormalizationError::PqnDegenerateSamples { .. })
+        ));
+        assert!(matches!(
+            validate(&config, &raw, &mapping, &sc),
+            Err(NormalizationError::PqnDegenerateSamples { .. })
+        ));
+    }
+
+    #[test]
+    fn validate_none_returns_ok() {
+        // Parity with `apply`'s `None` passthrough: `validate(None)` is `Ok(())`.
+        let raw = array![[1.0, 2.0], [3.0, 4.0]];
+        let mapping = mapping_for(&["A", "B"], &["G1", "G2"]);
+        let sc = cols(&["A", "B"]);
+        assert!(validate(&NormalizationConfig::default(), &raw, &mapping, &sc).is_ok());
     }
 }

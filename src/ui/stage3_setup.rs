@@ -8,8 +8,11 @@
 //! and a fetch triggered by the user picking a species / Group writes
 //! into `Stage3EnrichSetup.kegg_fetch` / `modules_fetch` rather than
 //! transitioning to a dedicated fetching variant. Toggling mode while a
-//! fetch is in flight does NOT cancel the in-flight fetch — both
-//! `<mode>_fetch` slots can coexist (D2 + D6).
+//! fetch is IN FLIGHT cancels + clears that fetch (and blanks its
+//! un-fetched selection) via `cancel_inflight_for_mode_switch`, so the two
+//! modes never fetch at once and contend for the shared KEGG rate limit —
+//! superseding the older "both slots coexist in flight (D2 + D6)" stance;
+//! completed caches/selections still coexist across the toggle.
 
 use egui::RichText;
 use std::sync::mpsc;
@@ -59,7 +62,12 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
         // === Mode-aware selector ===
         match app.settings.analysis_mode {
             AnalysisMode::Pathway => render_species_selector(ui, app),
-            AnalysisMode::Module => render_organism_group_selector(ui, app),
+            AnalysisMode::Module => {
+                render_organism_group_selector(ui, app);
+                // Module-mode-only Group-overlap threshold, directly under the
+                // Level + Group picker (binds the existing min_group_overlap).
+                render_min_group_overlap(ui, app);
+            }
         }
         ui.add_space(6.0);
 
@@ -180,6 +188,12 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
             Action::Run => start_run(app),
         }
         });
+
+    // Stage-3-local organism-roster refresh confirm — drained + rendered after
+    // the scroll area so the modal floats above it (outside the App-level
+    // four-modal family; see the `app-shell` organism-roster refresh spec).
+    let ctx = ui.ctx().clone();
+    drain_organisms_refresh_confirm(app, &ctx);
 }
 
 /// Render the Pathway / Module radio. On change, update
@@ -200,6 +214,10 @@ fn render_mode_toggle(ui: &mut egui::Ui, app: &mut App) {
     });
 
     if new_mode != current_mode {
+        // Cancel the in-flight fetch on the mode being left (so it stops
+        // hitting the shared KEGG client / rate limit) and blank an
+        // incomplete selection. Completed caches + selections still persist.
+        cancel_inflight_for_mode_switch(app, new_mode);
         // The body of this API was reduced to `self.analysis_mode = new_mode;`
         // by Phase 2 of `reorder-gui-and-move-mode-to-stage3`, but the call
         // site stays so spec scenarios remain anchored to a named API.
@@ -208,9 +226,49 @@ fn render_mode_toggle(ui: &mut egui::Ui, app: &mut App) {
     }
 }
 
+/// Cancel the in-flight fetch on the mode being left (so it stops contending
+/// for the shared KEGG client) and, because an INCOMPLETE fetch leaves its
+/// selection with no completed cache backing, reset that selection to blank.
+/// A COMPLETED selection/cache (no fetch in flight) is left untouched, so the
+/// `analysis-mode-toggle` coexistence contract still holds. `new_mode` is used
+/// only for the diagnostic log.
+pub(crate) fn cancel_inflight_for_mode_switch(app: &mut App, new_mode: AnalysisMode) {
+    let (species_incomplete, group_incomplete) = match &app.state {
+        AppState::Stage3EnrichSetup {
+            kegg_fetch,
+            modules_fetch,
+            ..
+        } => (kegg_fetch.is_some(), modules_fetch.is_some()),
+        _ => (false, false),
+    };
+
+    crate::app::abort_and_clear_setup_fetches(&mut app.state);
+
+    if species_incomplete {
+        info!(
+            ?new_mode,
+            "stopping in-flight KEGG species fetch: analysis mode was switched before it finished; resetting the incomplete species selection to blank"
+        );
+        app.settings.kegg_species = None;
+        app.cache.species_kegg = None;
+        app.species_selector = species_selector::SpeciesSelectorState::default();
+    }
+    if group_incomplete {
+        info!(
+            ?new_mode,
+            "stopping in-flight KEGG module fetch: analysis mode was switched before it finished; resetting the incomplete group selection to blank"
+        );
+        app.settings.organism_group = None;
+        app.settings.organism_group_level = None;
+        app.cache.group_org_codes = None;
+        app.organism_group_selector =
+            crate::ui::organism_group_selector::OrganismGroupSelectorState::default();
+    }
+}
+
 fn render_species_selector(ui: &mut egui::Ui, app: &mut App) {
     let (organisms_view, loading, load_error) = match &app.organisms.state {
-        OrganismsLoadState::Loaded(v) => (Some(v.as_slice()), false, None),
+        OrganismsLoadState::Loaded { organisms, .. } => (Some(organisms.as_slice()), false, None),
         OrganismsLoadState::Loading { .. } => (None, true, None),
         OrganismsLoadState::Failed(msg) => (None, false, Some(msg.as_str())),
         OrganismsLoadState::Idle => (None, false, None),
@@ -292,6 +350,55 @@ fn render_organism_group_selector(ui: &mut egui::Ui, app: &mut App) {
             }
         }
     }
+}
+
+/// Effective `DragValue` ceiling for `min_group_overlap`: the selected Group's
+/// organism count (`group_len`) soft-capped at 20, but never below an
+/// already-`stored` value so a hand-set value above the soft cap is preserved
+/// rather than silently truncated (review M2). `group_len == usize::MAX` (no
+/// Group selected/fetched) ⇒ only the soft cap applies. Callers then
+/// `stored.clamp(1, eff_max)`, which only ever lowers a value to the Group's
+/// actual organism count — the real domain limit.
+fn min_group_overlap_eff_max(group_len: usize, stored: usize) -> usize {
+    group_len.min(stored.max(20))
+}
+
+/// Module-mode-only control: the minimum number of the selected Group's
+/// organisms a module must be complete in to enter the analysis. Binds the
+/// existing `app.settings.min_group_overlap` (default 1; previously had no UI
+/// and was pinned to its default). The drag ceiling is the selected Group's
+/// organism count soft-capped at 20, but expands to preserve a value already
+/// set above 20 (only reachable via a hand-edited session JSON) rather than
+/// silently truncating it; the stored value is clamped to the Group's ACTUAL
+/// organism count so an out-of-range leftover from a previously-larger Group
+/// can't silently zero out module retention. Changing it re-filters the
+/// already-fetched modules (no KEGG re-fetch) and the Data tab's
+/// `In selected Group` count updates live (its memo keys on this value).
+fn render_min_group_overlap(ui: &mut egui::Ui, app: &mut App) {
+    // `usize::MAX` when no Group is selected/fetched ⇒ no group cap (soft cap 20
+    // still applies via `.max(20)`). Read `app.cache` / write `app.settings`
+    // directly here — this runs before `show`'s `let settings = &mut ...`
+    // re-borrow, so reusing that alias would overlap borrows of `app`.
+    let group_len = app
+        .cache
+        .group_org_codes
+        .as_ref()
+        .map(|c| c.len())
+        .unwrap_or(usize::MAX);
+    let eff_max = min_group_overlap_eff_max(group_len, app.settings.min_group_overlap);
+    app.settings.min_group_overlap = app.settings.min_group_overlap.clamp(1, eff_max);
+    ui.horizontal(|ui| {
+        ui.label("Minimum number of group organisms a module must be complete in:");
+        ui.add(
+            egui::DragValue::new(&mut app.settings.min_group_overlap)
+                .speed(1)
+                .range(1..=eff_max),
+        )
+        .on_hover_text(
+            "Keep only modules that are complete in at least N organisms of the selected group. \
+             Higher values retain only modules conserved across the group.",
+        );
+    });
 }
 
 /// Render the inline progress strip for whichever fetch the ACTIVE mode
@@ -532,6 +639,22 @@ fn handle_species_selected(app: &mut App, code: String) {
     app.settings.kegg_species = Some(code.clone());
     app.cache.species_kegg = None;
 
+    // The selection changed: cancel any in-flight fetch for the PREVIOUS
+    // species and clear its progress strip NOW, on every downstream path.
+    // The cache fast-path below returns before `spawn_species_fetch` (whose
+    // own abort-prior would otherwise never run), so a switch to an
+    // already-cached species would leave the old fetch streaming and its
+    // progress bar visible.
+    if let AppState::Stage3EnrichSetup { kegg_fetch, .. } = &mut app.state
+        && let Some(prev) = kegg_fetch.take()
+    {
+        info!(
+            species = %code,
+            "stopping the in-flight KEGG species fetch: a different species was selected"
+        );
+        prev.abort_tasks();
+    }
+
     // Cache fast-path.
     match kegg::cache::read_species(&code) {
         Ok(Some(species_data)) => {
@@ -546,6 +669,52 @@ fn handle_species_selected(app: &mut App, code: String) {
     }
 
     spawn_species_fetch(app, code);
+}
+
+/// Drain `LogPaneState.organisms_refresh_requested` and render the Stage-3-local
+/// organism-roster refresh confirm. `pub(crate)` so BOTH `stage3_setup::show` and
+/// `stage3_result::show` can call it (the `Refresh KEGG organism list` button is
+/// mode-independent and appears on both screens). Modelled on the `RefreshState`
+/// cache-refresh confirms: it is NOT an App-level `*ModalState` and sits OUTSIDE
+/// the four-modal mutual-exclusion family / `drain_modal_requests` (see the
+/// `app-shell` organism-roster refresh requirement). On confirm it calls
+/// `App::handle_organisms_refresh`.
+pub(crate) fn drain_organisms_refresh_confirm(app: &mut App, ctx: &egui::Context) {
+    if std::mem::take(&mut app.log_ui.organisms_refresh_requested)
+        && matches!(app.organisms.state, OrganismsLoadState::Loaded { .. })
+    {
+        app.log_ui.organisms_refresh_confirm_open = true;
+    }
+    if !app.log_ui.organisms_refresh_confirm_open {
+        return;
+    }
+    let mut want_refresh = false;
+    let mut want_cancel = false;
+    egui::Window::new("Refresh KEGG organism list")
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .show(ctx, |ui| {
+            ui.label(
+                "Re-fetch the full KEGG organism roster from KEGG and rebuild the organism groups?",
+            );
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button("Cancel").clicked() {
+                    want_cancel = true;
+                }
+                if ui.button("Refresh").clicked() {
+                    want_refresh = true;
+                }
+            });
+        });
+    if want_cancel {
+        app.log_ui.organisms_refresh_confirm_open = false;
+    }
+    if want_refresh {
+        app.log_ui.organisms_refresh_confirm_open = false;
+        app.handle_organisms_refresh();
+    }
 }
 
 // `pub(crate)` so the bottom-panel Data tab's relocated `Refresh KEGG pathway
@@ -580,33 +749,47 @@ fn spawn_species_fetch(app: &mut App, code: String) {
     let client = app.kegg.clone();
     let code_for_task = code.clone();
 
-    app.rt.spawn(async move {
-        while let Some(p) = progress_rx.recv().await {
-            if event_tx_for_progress.send(KeggEvent::Progress(p)).is_err() {
-                break;
+    let relay_handle = app
+        .rt
+        .spawn(async move {
+            while let Some(p) = progress_rx.recv().await {
+                if event_tx_for_progress.send(KeggEvent::Progress(p)).is_err() {
+                    break;
+                }
             }
-        }
-    });
+        })
+        .abort_handle();
 
-    app.rt.spawn(async move {
-        info!(code = %code_for_task, "starting KEGG species fetch");
-        let outcome = kegg::fetch_species_pathways(&client, &code_for_task, progress_tx).await;
-        let event = match outcome {
-            Ok(s) => KeggEvent::Done(s),
-            Err(e) => {
-                error!(code = %code_for_task, error = %e, "KEGG species fetch failed");
-                KeggEvent::Failed(e.to_string())
-            }
-        };
-        let _ = event_tx.send(event);
-    });
+    let fetch_handle = app
+        .rt
+        .spawn(async move {
+            info!(code = %code_for_task, "starting KEGG species fetch");
+            let outcome = kegg::fetch_species_pathways(&client, &code_for_task, progress_tx).await;
+            let event = match outcome {
+                Ok(s) => KeggEvent::Done(s),
+                Err(e) => {
+                    error!(code = %code_for_task, error = %e, "KEGG species fetch failed");
+                    KeggEvent::Failed(e.to_string())
+                }
+            };
+            let _ = event_tx.send(event);
+        })
+        .abort_handle();
 
     if let AppState::Stage3EnrichSetup { kegg_fetch, .. } = &mut app.state {
+        // Cancel a prior in-flight fetch before replacing the slot so the
+        // abandoned fetch stops issuing KEGG requests on the shared client
+        // instead of running to completion and discarding its result.
+        if let Some(prev) = kegg_fetch.take() {
+            prev.abort_tasks();
+        }
         *kegg_fetch = Some(KeggFetchInFlight {
             progress_rx: event_rx,
             completed: 0,
             total: 0,
             current_pathway: String::new(),
+            fetch_handle,
+            relay_handle,
         });
     }
 }
@@ -637,36 +820,50 @@ pub(crate) fn spawn_modules_fetch(
     let event_tx_for_progress = event_tx.clone();
     let kegg_client = app.kegg.clone();
 
-    app.rt.spawn(async move {
-        while let Some(p) = progress_rx.recv().await {
-            if event_tx_for_progress
-                .send(crate::app::ModulesFetchEvent::Progress(p))
-                .is_err()
-            {
-                break;
+    let relay_handle = app
+        .rt
+        .spawn(async move {
+            while let Some(p) = progress_rx.recv().await {
+                if event_tx_for_progress
+                    .send(crate::app::ModulesFetchEvent::Progress(p))
+                    .is_err()
+                {
+                    break;
+                }
             }
-        }
-    });
+        })
+        .abort_handle();
 
-    app.rt.spawn(async move {
-        let event = match crate::kegg::fetch_modules(&kegg_client, force_refresh, progress_tx).await
-        {
-            Ok(cache) => crate::app::ModulesFetchEvent::Done(cache),
-            Err(e) => {
-                error!(error = %e, "fetch_modules failed");
-                crate::app::ModulesFetchEvent::Failed(e.to_string())
-            }
-        };
-        let _ = event_tx.send(event);
-    });
+    let fetch_handle = app
+        .rt
+        .spawn(async move {
+            let event =
+                match crate::kegg::fetch_modules(&kegg_client, force_refresh, progress_tx).await {
+                    Ok(cache) => crate::app::ModulesFetchEvent::Done(cache),
+                    Err(e) => {
+                        error!(error = %e, "fetch_modules failed");
+                        crate::app::ModulesFetchEvent::Failed(e.to_string())
+                    }
+                };
+            let _ = event_tx.send(event);
+        })
+        .abort_handle();
 
     if let AppState::Stage3EnrichSetup { modules_fetch, .. } = &mut app.state {
+        // Cancel a prior in-flight fetch before replacing the slot. Aborting
+        // the fetch task drops its future, running `ModulesFetchGuard::Drop`
+        // and releasing `.modules.lock`.
+        if let Some(prev) = modules_fetch.take() {
+            prev.abort_tasks();
+        }
         *modules_fetch = Some(ModulesFetchInFlight {
             progress_rx: event_rx,
             completed: 0,
             total: 0,
             current_id: String::new(),
             eta_secs: None,
+            fetch_handle,
+            relay_handle,
         });
     }
 }
@@ -761,6 +958,14 @@ fn start_run(app: &mut App) {
     // error message.
     let spawn_inputs = build_stage3_spawn_inputs(&app.state, &app.settings, &app.cache);
 
+    // Cancel any in-flight setup-screen fetch before leaving the state, so a
+    // still-streaming other-mode fetch (or a refresh) is not orphaned by the
+    // transition. Covers the cache-missing arm below, which rebuilds setup
+    // with both fetch slots `None`.
+    if crate::app::is_busy(&app.state) {
+        info!("stopping the in-flight setup fetch: starting the enrichment run");
+    }
+    crate::app::abort_in_flight(&app.state);
     let prev = std::mem::take(&mut app.state);
     let AppState::Stage3EnrichSetup { dam_results, .. } = prev else {
         return;
@@ -804,6 +1009,23 @@ mod build_run_inputs_tests {
     use crate::dam::fdr::FdrMethod;
     use crate::dam::types::{DamFeature, FcBasis};
     use crate::kegg::{KeggCompoundSet, SpeciesKegg};
+
+    #[test]
+    fn min_group_overlap_eff_max_soft_caps_and_preserves() {
+        // Default / any ≤20 value under a large group → soft cap 20.
+        assert_eq!(min_group_overlap_eff_max(157, 1), 20);
+        // Small group → capped at the group's actual organism count (the
+        // domain limit); a stale larger stored value then clamps down to it.
+        assert_eq!(min_group_overlap_eff_max(4, 12), 4);
+        assert_eq!(12usize.clamp(1, min_group_overlap_eff_max(4, 12)), 4);
+        // A hand-set value above the soft cap under a big group is PRESERVED,
+        // not silently truncated to 20 (review M2).
+        assert_eq!(min_group_overlap_eff_max(100, 25), 25);
+        assert_eq!(25usize.clamp(1, min_group_overlap_eff_max(100, 25)), 25);
+        // No Group selected/fetched (usize::MAX) → only the soft cap applies.
+        assert_eq!(min_group_overlap_eff_max(usize::MAX, 1), 20);
+        assert_eq!(min_group_overlap_eff_max(usize::MAX, 25), 25);
+    }
 
     fn feat(inchikey: Option<&str>) -> DamFeature {
         DamFeature {
@@ -905,6 +1127,202 @@ mod build_run_inputs_tests {
         let settings = SessionSettings::default();
         let cache = SessionCache::default(); // species_kegg = None
         assert!(build_stage3_run_inputs(&dam_results, &settings, &cache).is_none());
+    }
+
+    #[test]
+    fn reselect_species_aborts_and_clears_prior_inflight_fetch() {
+        // Regression (found in smoke testing: select `csab` then `hsa`, csab's
+        // progress bar kept running): switching species while a fetch is in
+        // flight must cancel it and clear the progress strip on EVERY path —
+        // including ones that never reach `spawn_species_fetch`'s own abort
+        // (the cache fast-path, or — as exercised here — the early-return when
+        // inputs are absent). The clear lives in `handle_species_selected`.
+        let parked_rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("parked-task runtime");
+        let fj = parked_rt.spawn(std::future::pending::<()>());
+        let rj = parked_rt.spawn(std::future::pending::<()>());
+        let fetch_handle = fj.abort_handle();
+        let relay_handle = rj.abort_handle();
+        let (_tx, progress_rx) = std::sync::mpsc::channel::<KeggEvent>();
+
+        let app_rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("app runtime");
+        let mut app = App::new(
+            crate::logging::LogStore::new(16),
+            "info".to_string(),
+            app_rt,
+            None,
+        );
+        app.settings.kegg_species = Some("csab".to_string());
+        app.state = AppState::Stage3EnrichSetup {
+            dam_results: vec![],
+            error: None,
+            kegg_fetch: Some(KeggFetchInFlight {
+                progress_rx,
+                completed: 0,
+                total: 0,
+                current_pathway: String::new(),
+                fetch_handle,
+                relay_handle,
+            }),
+            modules_fetch: None,
+        };
+
+        // Switch to a different, uncached species. `inputs` is empty, so
+        // `spawn_species_fetch` early-returns without installing a new fetch —
+        // isolating the clear that `handle_species_selected` must perform.
+        handle_species_selected(&mut app, "zzqx_uncached_code".to_string());
+
+        // The prior fetch's slot is cleared (no leaked progress strip)...
+        assert!(matches!(
+            &app.state,
+            AppState::Stage3EnrichSetup {
+                kegg_fetch: None,
+                ..
+            }
+        ));
+        // ...and both of its tasks were aborted.
+        assert!(parked_rt.block_on(fj).unwrap_err().is_cancelled());
+        assert!(parked_rt.block_on(rj).unwrap_err().is_cancelled());
+    }
+
+    fn parked_app_rt() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("parked-task runtime")
+    }
+
+    fn empty_app() -> App {
+        let app_rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("app runtime");
+        App::new(
+            crate::logging::LogStore::new(16),
+            "info".to_string(),
+            app_rt,
+            None,
+        )
+    }
+
+    #[test]
+    fn mode_switch_blanks_incomplete_species_selection() {
+        // Requirement: switching mode while the pathway species fetch is still
+        // running must cancel it AND reset the (un-fetched) species selection
+        // to blank — there is no completed cache to preserve.
+        let rt = parked_app_rt();
+        let fj = rt.spawn(std::future::pending::<()>());
+        let rj = rt.spawn(std::future::pending::<()>());
+        let (fetch_handle, relay_handle) = (fj.abort_handle(), rj.abort_handle());
+        let (_tx, progress_rx) = std::sync::mpsc::channel::<KeggEvent>();
+
+        let mut app = empty_app();
+        app.settings.analysis_mode = AnalysisMode::Pathway;
+        app.settings.kegg_species = Some("csab".to_string());
+        app.state = AppState::Stage3EnrichSetup {
+            dam_results: vec![],
+            error: None,
+            kegg_fetch: Some(KeggFetchInFlight {
+                progress_rx,
+                completed: 0,
+                total: 0,
+                current_pathway: String::new(),
+                fetch_handle,
+                relay_handle,
+            }),
+            modules_fetch: None,
+        };
+
+        cancel_inflight_for_mode_switch(&mut app, AnalysisMode::Module);
+
+        assert_eq!(app.settings.kegg_species, None, "selection blanked");
+        assert!(app.cache.species_kegg.is_none());
+        assert!(matches!(
+            &app.state,
+            AppState::Stage3EnrichSetup {
+                kegg_fetch: None,
+                ..
+            }
+        ));
+        assert!(rt.block_on(fj).unwrap_err().is_cancelled());
+        assert!(rt.block_on(rj).unwrap_err().is_cancelled());
+    }
+
+    #[test]
+    fn mode_switch_blanks_incomplete_group_selection() {
+        let rt = parked_app_rt();
+        let fj = rt.spawn(std::future::pending::<()>());
+        let rj = rt.spawn(std::future::pending::<()>());
+        let (fetch_handle, relay_handle) = (fj.abort_handle(), rj.abort_handle());
+        let (_tx, progress_rx) = std::sync::mpsc::channel::<crate::app::ModulesFetchEvent>();
+
+        let mut app = empty_app();
+        app.settings.analysis_mode = AnalysisMode::Module;
+        app.settings.organism_group_level = Some(3);
+        app.settings.organism_group = Some("Mammals".to_string());
+        app.organism_group_selector.level = 3;
+        app.state = AppState::Stage3EnrichSetup {
+            dam_results: vec![],
+            error: None,
+            kegg_fetch: None,
+            modules_fetch: Some(ModulesFetchInFlight {
+                progress_rx,
+                completed: 0,
+                total: 0,
+                current_id: String::new(),
+                eta_secs: None,
+                fetch_handle,
+                relay_handle,
+            }),
+        };
+
+        cancel_inflight_for_mode_switch(&mut app, AnalysisMode::Pathway);
+
+        assert_eq!(app.settings.organism_group, None, "group blanked");
+        assert_eq!(app.settings.organism_group_level, None, "level blanked");
+        assert!(app.cache.group_org_codes.is_none());
+        assert_eq!(
+            app.organism_group_selector.level, 2,
+            "selector level reset to default"
+        );
+        assert!(matches!(
+            &app.state,
+            AppState::Stage3EnrichSetup {
+                modules_fetch: None,
+                ..
+            }
+        ));
+        assert!(rt.block_on(fj).unwrap_err().is_cancelled());
+        assert!(rt.block_on(rj).unwrap_err().is_cancelled());
+    }
+
+    #[test]
+    fn mode_switch_preserves_completed_selection() {
+        // Coexistence contract: with NO fetch in flight (completed cache), the
+        // selection + cache MUST survive the toggle untouched.
+        let mut app = empty_app();
+        app.settings.kegg_species = Some("hsa".to_string());
+        app.cache.species_kegg = Some(crate::kegg::SpeciesKegg {
+            code: "hsa".into(),
+            fetched_at: chrono::Utc::now(),
+            pathways: vec![],
+        });
+        app.state = AppState::Stage3EnrichSetup {
+            dam_results: vec![],
+            error: None,
+            kegg_fetch: None,
+            modules_fetch: None,
+        };
+
+        cancel_inflight_for_mode_switch(&mut app, AnalysisMode::Module);
+
+        assert_eq!(app.settings.kegg_species.as_deref(), Some("hsa"));
+        assert!(app.cache.species_kegg.is_some());
     }
 }
 

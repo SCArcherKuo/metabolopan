@@ -564,18 +564,21 @@ fn start_dam(app: &mut App) {
         }
     }
 
-    // Synchronous per-mode normalization smoke-test: invoke `apply` on every
+    // Synchronous per-mode normalization smoke-test: invoke `validate` on every
     // ion table BEFORE spawning any tokio worker; surface every per-mode
     // failure in one error message (PR-L, Finding #4). Pre-2026-05-26 this
     // hardcoded `ion_tables[0]` (POS only) — Finding #12 in the 2026-05-25
-    // audit, fixed in PR-H. The produced matrix is discarded; each worker
-    // recomputes it inside its own async task. Cost is millisecond-scale
+    // audit, fixed in PR-H. `validate` is the non-logging sibling of `apply`:
+    // it runs the identical per-mode check but does NOT emit the `normalize:`
+    // INFO line, so each mode's normalization is logged once (by the real DAM
+    // worker that recomputes it inside its own async task) instead of twice.
+    // The check's result is discarded either way. Cost is millisecond-scale
     // vs the value of catching NEG-only failures (e.g. PQN ReferenceAllNan
     // on NEG, Median ZeroFactor on a sparse NEG sample) at the Setup gate
     // instead of mid-flight in an async worker.
     let mut apply_failures: Vec<String> = Vec::new();
     for it in &ion_tables {
-        if let Err(e) = crate::normalize::apply(
+        if let Err(e) = crate::normalize::validate(
             &norm_config,
             &it.table.intensity_raw,
             &mapping,
@@ -599,6 +602,7 @@ fn start_dam(app: &mut App) {
     let (tx, rx) = mpsc::channel::<(usize, Result<dam::DamResult, String>)>();
     let mut mode_total: Vec<usize> = Vec::with_capacity(n_modes);
     let mut progress_rxs: Vec<mpsc::Receiver<dam::DamProgress>> = Vec::with_capacity(n_modes);
+    let mut worker_handles: Vec<tokio::task::AbortHandle> = Vec::with_capacity(n_modes);
 
     // Bundle the six DAM configuration values into one `DamConfig` before the
     // fan-out. Each mode's spawned worker gets a clone — the config is identical
@@ -625,26 +629,30 @@ fn start_dam(app: &mut App) {
         let (per_mode_prog_tx, per_mode_prog_rx) = mpsc::channel::<dam::DamProgress>();
         progress_rxs.push(per_mode_prog_rx);
 
-        app.rt.spawn(async move {
-            let mut table_for_dam = table_clone;
-            let result = match dam::run_dam(
-                &mut table_for_dam,
-                &mapping_clone,
-                &num_clone,
-                &den_clone,
-                &config_for_task,
-                Some(per_mode_prog_tx),
-            )
-            .await
-            {
-                Ok(r) => Ok(r),
-                Err(e) => {
-                    error!(mode_idx = idx, error = %e, "DAM failed");
-                    Err(e.to_string())
-                }
-            };
-            let _ = tx_for_task.send((idx, result));
-        });
+        let handle = app
+            .rt
+            .spawn(async move {
+                let mut table_for_dam = table_clone;
+                let result = match dam::run_dam(
+                    &mut table_for_dam,
+                    &mapping_clone,
+                    &num_clone,
+                    &den_clone,
+                    &config_for_task,
+                    Some(per_mode_prog_tx),
+                )
+                .await
+                {
+                    Ok(r) => Ok(r),
+                    Err(e) => {
+                        error!(mode_idx = idx, error = %e, "DAM failed");
+                        Err(e.to_string())
+                    }
+                };
+                let _ = tx_for_task.send((idx, result));
+            })
+            .abort_handle();
+        worker_handles.push(handle);
     }
     drop(tx);
 
@@ -658,6 +666,7 @@ fn start_dam(app: &mut App) {
         mode_completed,
         mode_total,
         dam_results_accum,
+        worker_handles,
     };
 }
 

@@ -1,5 +1,5 @@
 //! Over-representation analysis (ORA): per-entry hypergeometric test +
-//! user-selected FDR correction (BH default, BY opt-in) over all entries.
+//! user-selected FDR correction (BY default for Stage 3 ORA; BH/None opt-in) over all entries.
 //! An "entry" is a `KeggCompoundSet` — either a KEGG pathway (pathway
 //! mode) or a KEGG module (module mode); the math is identical for both.
 
@@ -23,7 +23,7 @@ use crate::kegg::KeggCompoundSet;
 ///   (short-circuit to avoid undefined CDF arguments). Otherwise
 ///   `1 - HypergeometricCDF(k_p - 1; N, M_p, K)`.
 ///
-/// `fdr_method` selects the FDR correction (BH default, BY opt-in). The
+/// `fdr_method` selects the FDR correction (BY default for Stage 3 ORA; BH/None opt-in). The
 /// chosen method is corrected over ALL entries' p-values (including those
 /// that short-circuited to 1.0) and recorded on `EnrichmentResult.fdr_method`.
 /// BY is the more conservative choice when entries share compounds, which is
@@ -140,21 +140,10 @@ pub fn run_ora(
             f64::NAN
         };
 
-        let p_value = if k_p == 0 || m_p == 0 || k_size == 0 || n_universe == 0 {
-            1.0
-        } else {
-            // Hypergeometric in statrs: parameters are
-            // (population N, successes-in-population K_pop, draws n).
-            // We test "probability of seeing AT LEAST k_p" =
-            // 1 - P(X <= k_p - 1).
-            match Hypergeometric::new(n_universe as u64, m_p as u64, k_size as u64) {
-                Ok(dist) => 1.0 - dist.cdf((k_p as u64).saturating_sub(1)),
-                Err(_) => {
-                    domain_errors += 1;
-                    1.0
-                }
-            }
-        };
+        let (p_value, domain_err) = entry_pvalue(n_universe, m_p, k_size, k_p);
+        if domain_err {
+            domain_errors += 1;
+        }
 
         pre.push(PreFdrRow {
             entry_id: p.id.clone(),
@@ -229,6 +218,31 @@ pub fn run_ora(
     }
 }
 
+/// Pure per-entry p-value decision, factored out of `run_ora`'s loop so the
+/// domain-error path is unit-testable in debug without tripping `run_ora`'s
+/// K ⊆ N `debug_assert!`. Owns the WHOLE decision and returns `(p_value, domain_err)`:
+///
+/// - zero-input short-circuit (`k_p == 0 || m_p == 0 || k_size == 0 || n_universe == 0`)
+///   → `(1.0, false)` — a legitimate zero-hit (`k_p == 0`) row is NOT a domain error;
+/// - `Hypergeometric::new` Err arm → `(1.0, true)` — reachable only when `k_size > n_universe`
+///   (i.e. K ⊄ N), since `m_p ≤ n_universe` always (it is an intersection with the universe);
+/// - otherwise → `(1 - CDF(k_p - 1; n_universe, m_p, k_size), false)`.
+///
+/// Carries no `debug_assert!`, so feeding `m_p > n_universe` / `k_size > n_universe`
+/// exercises the `domain_err = true` arm directly in a debug `cargo test`.
+fn entry_pvalue(n_universe: usize, m_p: usize, k_size: usize, k_p: usize) -> (f64, bool) {
+    if k_p == 0 || m_p == 0 || k_size == 0 || n_universe == 0 {
+        return (1.0, false);
+    }
+    // Hypergeometric in statrs: parameters are
+    // (population N, successes-in-population K_pop, draws n).
+    // We test "probability of seeing AT LEAST k_p" = 1 - P(X <= k_p - 1).
+    match Hypergeometric::new(n_universe as u64, m_p as u64, k_size as u64) {
+        Ok(dist) => (1.0 - dist.cdf((k_p as u64).saturating_sub(1)), false),
+        Err(_) => (1.0, true),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,6 +258,38 @@ mod tests {
 
     fn make_set<I: IntoIterator<Item = &'static str>>(items: I) -> HashSet<String> {
         items.into_iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn entry_pvalue_owns_short_circuit_and_flags_only_out_of_range() {
+        // Out-of-range inputs are the ONLY ones that flag a domain error — and
+        // they are reachable in a real run only when K ⊄ N. Tested here directly
+        // because run_ora's debug_assert! would panic on such inputs first.
+        let (p, err) = entry_pvalue(5, 6, 3, 2); // m_p > n_universe
+        assert_eq!(p, 1.0);
+        assert!(err, "m_p > n_universe must flag domain_err");
+        let (p, err) = entry_pvalue(5, 3, 6, 2); // k_size > n_universe
+        assert_eq!(p, 1.0);
+        assert!(err, "k_size > n_universe must flag domain_err");
+
+        // Every zero-input short-circuit yields (1.0, false): a legitimate
+        // zero-hit (k_p == 0) row is NOT a domain error.
+        for (n, m, k, kp) in [(5, 3, 2, 0), (5, 0, 2, 1), (5, 3, 0, 1), (0, 3, 2, 1)] {
+            let (p, err) = entry_pvalue(n, m, k, kp);
+            assert_eq!(
+                p, 1.0,
+                "short-circuit must yield p=1.0 for ({n},{m},{k},{kp})"
+            );
+            assert!(
+                !err,
+                "short-circuit must NOT flag domain_err for ({n},{m},{k},{kp})"
+            );
+        }
+
+        // Valid in-range input: finite upper-tail p in (0, 1], no domain error.
+        let (p, err) = entry_pvalue(100, 10, 20, 5);
+        assert!(!err, "valid in-range input must not flag domain_err");
+        assert!(p > 0.0 && p <= 1.0, "valid p must be in (0, 1], got {p}");
     }
 
     #[test]

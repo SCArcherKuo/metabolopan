@@ -1,15 +1,20 @@
-//! Quantile normalization following the **principle** Bolstad and Smyth
-//! converged on in the Bioconductor support thread #1569 (2003): tied
-//! values should be assigned the **mean of the pooled-quantile values at
-//! all their tied positions**. Both `preprocessCore::normalize.quantiles`
-//! (Bolstad's own) and `limma::normalizeQuantiles` (Smyth's) ship a
-//! simpler approximation — average-rank lookup with linear interpolation,
-//! which equals the principle for `N == 2` ties or locally-linear
-//! reference regions, and diverges for `N ≥ 3` ties on a non-linear
-//! reference (common at the bottom of LOD-imputed metabolomics samples).
-//! We implement the principle directly, so our outputs differ from
-//! preprocessCore / limma in exactly that case — see USER_MANUAL.md
-//! for the worked example. Reference:
+//! Quantile normalization. Each run of tied values in a sample (sorted
+//! positions `[k, k2)`) is assigned `mean(reference[k..k2])` — the mean of
+//! the reference (pooled-quantile) values across every rank position the
+//! tie spans. This is metabolopan's *literal* reading of Smyth's remark in
+//! the Bioconductor support thread #1569 (2003) that tied items should get
+//! "the average of the corresponding pooled quantiles"; it is NOT a
+//! consensus Bolstad and Smyth reached — the thread's only worked example
+//! is a 2-way tie, where every reading coincides, and it never adjudicated
+//! `N ≥ 3`. The canonical tools — including Smyth's own
+//! `limma::normalizeQuantiles` with `ties=TRUE` (the default: `rank()`
+//! average-rank then `approx()` interpolation) and Bolstad's
+//! `preprocessCore::normalize.quantiles` — instead return the reference
+//! value at the tie's middle rank. The two coincide for `N == 2` ties or
+//! locally-linear reference regions and diverge for `N ≥ 3` ties on a
+//! non-linear reference (common at the bottom of LOD-imputed metabolomics
+//! samples). metabolopan therefore differs from BOTH tools in that case, by
+//! design — see USER_MANUAL.md for the worked example. Reference:
 //! <https://support.bioconductor.org/p/1569/>.
 //!
 //! When samples have unequal non-NaN counts (e.g. heterogeneous
@@ -17,8 +22,8 @@
 //! fractional-rank grid of size `K = max(n_j)` and linearly interpolate
 //! each sample's sorted values onto it (matching the
 //! `(r − 1) / (n − 1)` ∈ [0, 1] scheme limma uses). Tied assignment then
-//! evaluates Smyth's principle on the interpolated reference at each
-//! tied position's fractional rank. When all samples share the same
+//! evaluates the mean-of-tied-positions rule on the interpolated reference
+//! at each tied position's fractional rank. When all samples share the same
 //! non-NaN count, the fractional grid collapses onto the integer rank
 //! grid and the implementation is bit-equal to the equal-length-only
 //! version we used prior to this change. NaN cells stay NaN.
@@ -69,7 +74,7 @@ pub fn apply_quantile(
     // interpolated value at q = k/(K−1) on its own sorted-rank axis
     // (q = i/(n_j − 1)). This matches limma::normalizeQuantiles's
     // approx-based grid; the difference vs limma is purely in step 3
-    // (Smyth's principle vs limma's average-rank lookup).
+    // (our mean-of-tied-positions vs limma's average-rank lookup).
     let mut reference: Vec<f64> = vec![0.0; k_grid];
     let mut contrib: Vec<usize> = vec![0; k_grid];
     for sorted in &sorted_per_sample {
@@ -93,9 +98,11 @@ pub fn apply_quantile(
         reference[k] /= contrib[k] as f64;
     }
 
-    // Step 3: per Bolstad-Smyth thread #1569 (2003), every tied value in
-    // a sample is assigned the MEAN of the reference values at the
-    // fractional-rank positions the tied items collectively span:
+    // Step 3: every tied value in a sample is assigned the MEAN of the
+    // reference values at the fractional-rank positions the tied items
+    // collectively span (metabolopan's literal reading of Smyth's #1569
+    // remark; diverges from limma `ties=TRUE` / preprocessCore for N ≥ 3,
+    // see the module doc-comment):
     //   for a tied block at sorted positions [k, k2) of length N,
     //   output = mean( ref(s / (n_j − 1)) for s in k..k2 )
     // where ref(q) is the linearly-interpolated reference at q ∈ [0, 1].
@@ -243,7 +250,7 @@ mod tests {
     #[test]
     fn quantile_two_way_tie_matches_mean_of_two_reference_positions() {
         // Regression guard: 2-way ties produce identical output under the old
-        // linear-interpolation code and the new Bolstad mean-of-tied-positions
+        // linear-interpolation code and the mean-of-tied-positions rule
         // (interpolating between ref[0] and ref[1] with frac=0.5 IS the mean).
         // A has a 2-way tie at the bottom; B has no ties.
         //
@@ -279,14 +286,17 @@ mod tests {
     fn quantile_four_way_tie_uses_mean_of_all_tied_reference_positions() {
         // Bug-revealing case: 4-way tie spanning a NON-LINEAR section of the
         // reference. The pre-2026-05-26 linear-interpolation between ref[1]
-        // and ref[2] (frac=0.5) would return 8.0; Bolstad 2003's
-        // mean-of-tied-positions returns 7.167. Divergence ≈ 0.83.
+        // and ref[2] (frac=0.5) would return 8.0; the mean-of-tied-positions
+        // rule returns 7.167. Divergence ≈ 0.83. (limma `ties=TRUE` /
+        // preprocessCore use average-rank lookup: this 4-way tie's average
+        // rank is 1.5, so they return ref interpolated at 1.5 =
+        // (ref[1]+ref[2])/2 = 8.0 — metabolopan's 7.167 diverges from both.)
         //
         // Sample A: [5, 5, 5, 5] — all values tied (k=0, k2=4).
         // Sample B: [1, 10, 11, 12], Sample C: [2, 8, 9, 13].
         // Reference: ref[0]=mean(5,1,2)=8/3, ref[1]=mean(5,10,8)=23/3,
         //            ref[2]=mean(5,11,9)=25/3, ref[3]=mean(5,12,13)=10.
-        // Bolstad: tied_ref = mean(ref[0..4]) = (8/3+23/3+25/3+10)/4 = 86/12.
+        // mean-of-tied-positions: tied_ref = mean(ref[0..4]) = (8/3+23/3+25/3+10)/4 = 86/12.
         let raw = array![
             [5.0, 1.0, 2.0],
             [5.0, 10.0, 8.0],
@@ -299,7 +309,7 @@ mod tests {
         for i in 0..4 {
             assert!(
                 (out[[i, 0]] - expected).abs() < 1e-9,
-                "Bolstad mean-over-tied-positions: A[{i}] expected {expected}, got {}",
+                "mean-over-tied-positions: A[{i}] expected {expected}, got {}",
                 out[[i, 0]]
             );
         }
@@ -397,8 +407,8 @@ mod tests {
         // A's sorted position 2: q = 1 → ref[4] = 8.5
         assert!(
             (out[[0, 0]] - 2.75).abs() < 1e-9,
-            "tied A[0] → 2.75 (mean of ref[0]=2 and ref[2]=3.5 — Smyth principle \
-             on fractional ranks), got {}",
+            "tied A[0] → 2.75 (mean of ref[0]=2 and ref[2]=3.5 — mean-of-tied-positions \
+             rule on fractional ranks), got {}",
             out[[0, 0]]
         );
         assert!(
@@ -416,8 +426,8 @@ mod tests {
     #[test]
     fn quantile_three_way_tie_linear_reference_unchanged() {
         // Sanity: 3-way tie + locally-linear reference produces the same
-        // answer under both old interpolation and new Bolstad averaging
-        // (the integer-mid-rank ref position equals the mean of the three
+        // answer under both old interpolation and the mean-of-tied-positions
+        // rule (the integer-mid-rank ref position equals the mean of the three
         // ref positions when they're evenly spaced).
         //
         // Sample A: [5, 5, 5, 10] — 3-way tie at the bottom.

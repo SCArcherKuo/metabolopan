@@ -30,6 +30,9 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
     drain_render(app, ui.ctx());
     drain_refresh(app);
     drain_cache_actions(app);
+    // Stage-3-local organism-roster refresh confirm (shared with setup; outside
+    // the App-level four-modal family — see the `app-shell` spec).
+    crate::ui::stage3_setup::drain_organisms_refresh_confirm(app, ui.ctx());
 
     // Snapshot read-only fields we need to render.
     let snap = match &app.state {
@@ -554,6 +557,7 @@ fn drain_refresh(app: &mut App) {
                 result_rx,
                 completed,
                 total,
+                ..
             } => {
                 while let Ok(p) = progress_rx.try_recv() {
                     *completed = p.from_cache + p.fetched;
@@ -568,6 +572,7 @@ fn drain_refresh(app: &mut App) {
                 result_rx,
                 completed,
                 total,
+                ..
             } => {
                 while let Ok(p) = progress_rx.try_recv() {
                     *completed = p.from_cache + p.fetched;
@@ -658,6 +663,7 @@ fn download_csv(app: &App) {
     let AppState::Stage3EnrichResult {
         enrichment_result,
         dual_mode_breakdown,
+        module_retention,
         ..
     } = &app.state
     else {
@@ -674,7 +680,16 @@ fn download_csv(app: &App) {
         }
     };
     let is_dual = dual_mode_breakdown.is_some();
-    if let Err(e) = export_csv_with_mode(&mut file, enrichment_result, true, is_dual) {
+    // Module-mode runs self-document the Group-overlap threshold used; Pathway
+    // runs (`module_retention == None`) pass `None` so the line is omitted.
+    let min_group_overlap = module_retention.as_ref().map(|r| r.min_group_overlap);
+    if let Err(e) = export_csv_with_mode(
+        &mut file,
+        enrichment_result,
+        true,
+        is_dual,
+        min_group_overlap,
+    ) {
         error!(error = %e, "enrichment CSV export failed");
     } else {
         info!(path = %path.display(), is_dual, "enrichment CSV exported");
@@ -846,20 +861,23 @@ fn start_refresh(app: &mut App, is_pubchem: bool) {
         });
 
     let kegg_client = app.kegg.clone();
-    app.rt.spawn(async move {
-        let pubchem = PubchemClient::new();
-        let r = run_stage3(
-            &pubchem,
-            &kegg_client,
-            &dam_results,
-            &target,
-            params,
-            pub_tx_run,
-            kegg_tx_run,
-        )
-        .await;
-        let _ = result_tx.send(r.map_err(|e| e.to_string()));
-    });
+    let run_handle = app
+        .rt
+        .spawn(async move {
+            let pubchem = PubchemClient::new();
+            let r = run_stage3(
+                &pubchem,
+                &kegg_client,
+                &dam_results,
+                &target,
+                params,
+                pub_tx_run,
+                kegg_tx_run,
+            )
+            .await;
+            let _ = result_tx.send(r.map_err(|e| e.to_string()));
+        })
+        .abort_handle();
 
     if let AppState::Stage3EnrichResult { refresh_state, .. } = &mut app.state {
         *refresh_state = if is_pubchem {
@@ -868,6 +886,7 @@ fn start_refresh(app: &mut App, is_pubchem: bool) {
                 result_rx,
                 completed: 0,
                 total: pubchem_total,
+                run_handle,
             }
         } else {
             RefreshState::RefreshingKegg {
@@ -875,6 +894,7 @@ fn start_refresh(app: &mut App, is_pubchem: bool) {
                 result_rx,
                 completed: 0,
                 total: 0,
+                run_handle,
             }
         };
     }

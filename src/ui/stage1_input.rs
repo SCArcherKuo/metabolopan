@@ -291,6 +291,37 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
             // list moved to the bottom-panel Data tab (`data-summary-panel`).
             // The Stage 1 body keeps only the pickers + Continue gate.
 
+            // === CSV-only samples banner (persistent, non-blocking) ===
+            // Metadata rows whose `sample` matched no .txt column are ignored
+            // (and WARN-logged) but retained on the mapping; surface them loudly
+            // here so a casing/underscore typo isn't silently dropped (turning a
+            // 6-vs-6 comparison into 6-vs-5). Distinct from Unassigned (.txt
+            // columns with no CSV row, shown yellow in the Data tab). Does NOT
+            // gate Continue — see the `stage1-ui` capability spec.
+            if let Some(mapping) = app.inputs.mapping.as_ref() {
+                let unmatched = mapping.unmatched_csv_samples();
+                if !unmatched.is_empty() {
+                    ui.add_space(8.0);
+                    egui::Frame::group(ui.style())
+                        .stroke(egui::Stroke::new(1.0, theme::ERROR))
+                        .show(ui, |ui| {
+                            ui.colored_label(
+                                theme::ERROR,
+                                RichText::new(format!(
+                                    "{} metadata row(s) name samples not found in the MS-DIAL .txt — these rows are ignored:",
+                                    unmatched.len()
+                                ))
+                                .strong(),
+                            );
+                            ui.colored_label(theme::ERROR, unmatched.join(", "));
+                            ui.colored_label(
+                                theme::ERROR,
+                                "Fix the `sample` column in your .csv (check casing / underscores) or remove these rows.",
+                            );
+                        });
+                }
+            }
+
             ui.add_space(12.0);
 
             // === Error block ===

@@ -84,7 +84,20 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
     // pattern as `dedup_download`.
     let mut setup_module_refresh = false;
     let mut setup_pathway_refresh = false;
+    let mut organisms_refresh = false;
     let mut result_cache_action = ResultCacheAction::None;
+
+    // Organism roster fetched-date + loading state for the Cache-data block
+    // (mode-independent, Stage 3 only). While a refresh is in flight the state is
+    // `Loading`; show the stashed prior timestamp so the date line persists.
+    let (organisms_fetched_at, organisms_loading) = match &app.organisms.state {
+        crate::app::OrganismsLoadState::Loaded { fetched_at, .. } => (Some(*fetched_at), false),
+        crate::app::OrganismsLoadState::Loading { .. } => (
+            app.organisms.refresh_stash.as_ref().map(|c| c.fetched_at),
+            true,
+        ),
+        _ => (None, false),
+    };
 
     // Session settings save / load toolbar — relocated from the Log pane
     // toolbar by `move-settings-buttons-to-data-tab`. Rendered above the
@@ -166,8 +179,11 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                         settings,
                         cache,
                         module_fetch_in_flight,
+                        organisms_fetched_at,
+                        organisms_loading,
                         &mut setup_module_refresh,
                         &mut setup_pathway_refresh,
+                        &mut organisms_refresh,
                     );
                     render_enrichment_setup_block(ui, settings, cache);
                     ui.add_space(8.0);
@@ -193,10 +209,9 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                     pubchem_time_span,
                     kegg_conv_time_span,
                     refresh_state,
-                    rendering,
                     ..
                 } => {
-                    let busy = !matches!(refresh_state, RefreshState::Idle) || *rendering;
+                    let busy = crate::app::is_busy(&app.state);
                     render_cache_block_result(
                         ui,
                         settings.analysis_mode,
@@ -206,7 +221,10 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                         *kegg_conv_time_span,
                         refresh_state,
                         busy,
+                        organisms_fetched_at,
+                        organisms_loading,
                         &mut result_cache_action,
+                        &mut organisms_refresh,
                     );
                     render_enrichment_result_block(
                         ui,
@@ -258,6 +276,12 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
         ResultCacheAction::RefreshKegg => app.log_ui.refresh_kegg_conv_requested = true,
         ResultCacheAction::Rerun => app.log_ui.rerun_enrichment_requested = true,
         ResultCacheAction::None => {}
+    }
+    // The organism-roster refresh button (setup OR result) sets a flag drained by
+    // `stage3_setup::show` / `stage3_result::show`, which open the Stage-3-local
+    // refresh confirm (NOT an App-level modal — see the `app-shell` spec).
+    if organisms_refresh {
+        app.log_ui.organisms_refresh_requested = true;
     }
     if dedup_download {
         crate::ui::stage2_threshold::download_dedup_audit_csv(app);
@@ -555,15 +579,59 @@ fn render_enrichment_result_block(
 /// `Cache data` block for Stage 3 **setup**: the cache fetched-date line + the
 /// `Refresh` button, relocated from the setup body. Records the click intent in
 /// the `out_*` flags (the caller acts on `&mut app` after the scroll closure).
+/// The mode-independent `KEGG organism list: <fetched_at>` line + `Refresh KEGG
+/// organism list` button, shared by the setup and result Cache-data blocks. The
+/// roster underlies both selectors, so it renders in both Pathway and Module
+/// mode. `organisms_fetched_at` is the loaded roster's timestamp (or the stashed
+/// prior timestamp while a refresh is in flight); when `None` (Idle / failed
+/// eager load) the row is omitted. The button is disabled while a refresh is in
+/// flight. Records the click intent in `out_organisms_refresh`.
+fn render_organism_cache_row(
+    ui: &mut egui::Ui,
+    organisms_fetched_at: Option<DateTime<Utc>>,
+    organisms_loading: bool,
+    out_organisms_refresh: &mut bool,
+) {
+    let Some(ts) = organisms_fetched_at else {
+        return;
+    };
+    kv_line_colored(
+        ui,
+        &format!("KEGG organism list: {}", ts.format("%Y-%m-%d %H:%M UTC")),
+        theme::TEXT_SECONDARY,
+    );
+    let resp = ui
+        .add_enabled(
+            !organisms_loading,
+            egui::Button::new("Refresh KEGG organism list"),
+        )
+        .on_disabled_hover_text("Refreshing organism list…");
+    if resp.clicked() {
+        *out_organisms_refresh = true;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn render_cache_block_setup(
     ui: &mut egui::Ui,
     settings: &SessionSettings,
     cache: &SessionCache,
     module_fetch_in_flight: bool,
+    organisms_fetched_at: Option<DateTime<Utc>>,
+    organisms_loading: bool,
     out_module_refresh: &mut bool,
     out_pathway_refresh: &mut bool,
+    out_organisms_refresh: &mut bool,
 ) {
     section_header(ui, "Cache data");
+    // Organism roster (mode-independent) sits at the TOP of the Cache-data
+    // block, above the mode-specific pathway/module entries.
+    render_organism_cache_row(
+        ui,
+        organisms_fetched_at,
+        organisms_loading,
+        out_organisms_refresh,
+    );
     match settings.analysis_mode {
         AnalysisMode::Pathway => {
             if let Some(sk) = &cache.species_kegg {
@@ -626,9 +694,21 @@ fn render_cache_block_result(
     kegg_conv_time_span: Option<(DateTime<Utc>, DateTime<Utc>, usize)>,
     refresh_state: &RefreshState,
     busy: bool,
+    organisms_fetched_at: Option<DateTime<Utc>>,
+    organisms_loading: bool,
     out: &mut ResultCacheAction,
+    out_organisms_refresh: &mut bool,
 ) {
     section_header(ui, "Cache data");
+
+    // Organism roster (mode-independent) sits at the TOP of the Cache-data
+    // block, above the mode-specific catalogue / PubChem / KEGG-conv entries.
+    render_organism_cache_row(
+        ui,
+        organisms_fetched_at,
+        organisms_loading,
+        out_organisms_refresh,
+    );
 
     // Mode-aware fetched-date line.
     match mode {

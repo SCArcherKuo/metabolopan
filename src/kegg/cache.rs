@@ -398,6 +398,22 @@ mod tests {
     }
 
     #[test]
+    fn modules_fetch_guard_releases_lock_on_drop() {
+        // Window-close / abort safety: dropping the guard (which happens when
+        // an aborted fetch future is dropped) must release `.modules.lock`.
+        let _g = SERIAL.lock().unwrap();
+        let _tmp = setup_tmp_root();
+        ensure_cache_dir().unwrap();
+
+        let lock = modules_lock_path();
+        {
+            let _guard = acquire_modules_fetch_lock().expect("acquire");
+            assert!(lock.exists(), "lock present while guard is held");
+        }
+        assert!(!lock.exists(), "guard Drop released the lock");
+    }
+
+    #[test]
     fn cid_to_cpd_write_releases_lock_on_success() {
         let _g = SERIAL.lock().unwrap();
         let _tmp = setup_tmp_root();

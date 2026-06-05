@@ -24,7 +24,7 @@ pub use types::{
 /// Either path also rewrites the derived `organism_groups.json` precompute
 /// cache so the two stay coherent (Track C / kegg-fetching spec). The
 /// group-index `fetched_at` MUST equal the organisms cache's `fetched_at`.
-pub async fn list_organisms(client: &KeggClient) -> Result<Vec<KeggOrganism>> {
+pub async fn list_organisms(client: &KeggClient) -> Result<OrganismsCache> {
     if let Some(cached) = cache::read_organisms()? {
         info!(
             count = cached.organisms.len(),
@@ -35,25 +35,25 @@ pub async fn list_organisms(client: &KeggClient) -> Result<Vec<KeggOrganism>> {
         if let Err(e) = cache::write_organism_group_index(&index) {
             tracing::warn!(error = %e, "failed to persist organism group index");
         }
-        return Ok(cached.organisms);
+        return Ok(cached);
     }
 
     let organisms = client.list_organisms().await?;
     let fetched_at = chrono::Utc::now();
     let cache_entry = OrganismsCache {
         fetched_at,
-        organisms: organisms.clone(),
+        organisms,
     };
     cache::write_organisms(&cache_entry)?;
-    let index = build_organism_group_index(&organisms, fetched_at);
+    let index = build_organism_group_index(&cache_entry.organisms, fetched_at);
     if let Err(e) = cache::write_organism_group_index(&index) {
         tracing::warn!(error = %e, "failed to persist organism group index");
     }
     info!(
-        count = organisms.len(),
+        count = cache_entry.organisms.len(),
         "fetched KEGG organism list from REST and cached"
     );
-    Ok(organisms)
+    Ok(cache_entry)
 }
 
 /// Public entry point for fetching a species' pathway/compound data. Reads

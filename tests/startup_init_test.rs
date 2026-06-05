@@ -104,8 +104,8 @@ async fn cache_hit_writes_organism_group_index() {
 
     // list_organisms returns the cached data AND writes the group index.
     let client = KeggClient::new();
-    let organisms = list_organisms(&client).await.expect("list ok");
-    assert_eq!(organisms.len(), 3);
+    let loaded = list_organisms(&client).await.expect("list ok");
+    assert_eq!(loaded.organisms.len(), 3);
 
     let index = cache::read_organism_group_index()
         .expect("read index")
@@ -136,10 +136,10 @@ async fn cache_first_stale_cache_short_circuits_rest() {
     // Don't register any matchers; any incoming request fails the test.
 
     let client = KeggClient::with_base_url(server.uri().parse().expect("uri parses"));
-    let organisms = list_organisms(&client)
+    let loaded = list_organisms(&client)
         .await
         .expect("list ok from stale cache");
-    assert_eq!(organisms.len(), 3);
+    assert_eq!(loaded.organisms.len(), 3);
 
     // Verify no requests reached the mock.
     let received = server.received_requests().await.expect("requests");
@@ -173,9 +173,9 @@ async fn fresh_fetch_writes_both_caches_with_matching_timestamps() {
 
     let before = Utc::now();
     let client = KeggClient::with_base_url(server.uri().parse().expect("uri parses"));
-    let organisms = list_organisms(&client).await.expect("list ok");
+    let loaded = list_organisms(&client).await.expect("list ok");
     let after = Utc::now();
-    assert_eq!(organisms.len(), 2);
+    assert_eq!(loaded.organisms.len(), 2);
 
     // Both caches written.
     let orgs_cache = cache::read_organisms().expect("read").expect("present");
@@ -207,4 +207,63 @@ fn build_index_round_trips_via_persistent_cache() {
         .expect("read")
         .expect("present");
     assert_eq!(read, index);
+}
+
+/// The user-triggered organism-roster refresh dance (`add-organism-list-refresh`):
+/// invalidating `organisms.json` then re-invoking `list_organisms` re-fetches a
+/// fresh roster from REST and rewrites BOTH caches with a new matching
+/// `fetched_at`, even though an (old) cache existed beforehand.
+#[tokio::test]
+async fn refresh_invalidates_then_relists_and_rewrites_both_caches() {
+    use metabolopan::kegg::types::KeggCacheScope;
+    let _g = serial().await;
+    ensure_cache_root();
+    reset_caches();
+
+    // An old roster + index already on disk (3 organisms, 50 days old).
+    let old_fetched_at = Utc::now() - Duration::days(50);
+    cache::write_organisms(&OrganismsCache {
+        fetched_at: old_fetched_at,
+        organisms: sample_organisms(),
+    })
+    .expect("write old organisms");
+    cache::write_organism_group_index(&build_organism_group_index(
+        &sample_organisms(),
+        old_fetched_at,
+    ))
+    .expect("write old index");
+
+    // The refresh action invalidates the roster cache first.
+    cache::invalidate_cache(KeggCacheScope::Organisms).expect("invalidate");
+
+    // REST now returns a DIFFERENT roster (2 organisms).
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/list/organism"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            "T01001\thsa\tHomo sapiens (human)\tEukaryotes;Animals;Mammals;Primates\n\
+             T00041\tath\tArabidopsis thaliana\tEukaryotes;Plants;Eudicots;Brassicales\n",
+        ))
+        .mount(&server)
+        .await;
+
+    let before = Utc::now();
+    let client = KeggClient::with_base_url(server.uri().parse().expect("uri parses"));
+    let loaded = list_organisms(&client).await.expect("re-list ok");
+    let after = Utc::now();
+
+    // Fresh roster returned (the 2-organism REST body, not the old 3).
+    assert_eq!(loaded.organisms.len(), 2);
+    assert!(loaded.fetched_at >= before && loaded.fetched_at <= after);
+
+    // Both caches rewritten with the new matching timestamp.
+    let orgs_cache = cache::read_organisms().expect("read").expect("present");
+    let index = cache::read_organism_group_index()
+        .expect("read")
+        .expect("present");
+    assert_eq!(orgs_cache.organisms.len(), 2);
+    assert_eq!(orgs_cache.fetched_at, index.fetched_at);
+    assert_eq!(index.fetched_at, loaded.fetched_at);
+    assert_eq!(index.by_level[1]["Animals"].len(), 1);
+    assert_eq!(index.by_level[1]["Plants"].len(), 1);
 }

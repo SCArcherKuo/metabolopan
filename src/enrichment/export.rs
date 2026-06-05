@@ -22,17 +22,22 @@ pub fn export_csv<W: Write>(
     result: &EnrichmentResult,
     only_displayed: bool,
 ) -> Result<()> {
-    export_csv_with_mode(writer, result, only_displayed, false)
+    export_csv_with_mode(writer, result, only_displayed, false, None)
 }
 
-/// Variant of `export_csv` that prepends a `# Mode: dual (POS+NEG)`
-/// comment line when `is_dual = true`. Used by Stage 3 dual-mode runs.
-/// Single-mode callers stick with `export_csv` for bit-equal output.
+/// Variant of `export_csv` that prepends a `# Mode: dual (POS+NEG)` comment
+/// line when `is_dual = true`, and appends a `# MinGroupOverlap: N` line
+/// (after `# MinEntrySize:`) when `min_group_overlap = Some(n)` — i.e. for
+/// Module-mode runs, where `n` is the run's
+/// `module_retention.min_group_overlap`. Pathway runs pass `None`, so the line
+/// is omitted and the output stays bit-equal to the pre-change exporter.
+/// Single-mode/Pathway callers via `export_csv` get bit-equal output.
 pub fn export_csv_with_mode<W: Write>(
     writer: &mut W,
     result: &EnrichmentResult,
     only_displayed: bool,
     is_dual: bool,
+    min_group_overlap: Option<usize>,
 ) -> Result<()> {
     if is_dual {
         writeln!(writer, "# Mode: dual (POS+NEG)").context("write Mode tag line")?;
@@ -45,6 +50,12 @@ pub fn export_csv_with_mode<W: Write>(
     // were dropped before FDR.
     writeln!(writer, "# MinEntrySize: {}", result.min_entry_size)
         .context("write MinEntrySize tag line")?;
+    // Module-mode Group-overlap filter tag line (Module mode only — Pathway
+    // passes `None`). Self-documents the `min_group_overlap` the run used.
+    if let Some(overlap) = min_group_overlap {
+        writeln!(writer, "# MinGroupOverlap: {overlap}")
+            .context("write MinGroupOverlap tag line")?;
+    }
     // Rows go through `csv::Writer` for RFC-4180-correct quoting (the prior
     // hand-rolled `csv_escape` missed bare `\r` and surrounding whitespace).
     // The csv crate's default `\n` terminator matches the previous `writeln!`,
@@ -152,6 +163,49 @@ mod tests {
             s2.contains("\n# MinEntrySize: 5\n"),
             "expected MinEntrySize=5 tag; got: {s2}"
         );
+    }
+
+    #[test]
+    fn min_group_overlap_tag_line_module_vs_pathway() {
+        // Module mode: `Some(3)` emits `# MinGroupOverlap: 3` immediately
+        // after `# MinEntrySize:`, before the header row.
+        let mut buf = Vec::new();
+        export_csv_with_mode(&mut buf, &sample_result(), false, false, Some(3)).unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        let lines: Vec<&str> = s.lines().collect();
+        assert_eq!(lines[0], "# FDR: BY");
+        assert_eq!(lines[1], "# MinEntrySize: 1");
+        assert_eq!(lines[2], "# MinGroupOverlap: 3");
+        assert_eq!(lines[3], HEADER);
+
+        // Pathway mode: `None` emits no MinGroupOverlap line and is
+        // byte-identical to the 3-arg `export_csv` wrapper.
+        let mut buf_none = Vec::new();
+        export_csv_with_mode(&mut buf_none, &sample_result(), false, false, None).unwrap();
+        let mut buf_wrapper = Vec::new();
+        export_csv(&mut buf_wrapper, &sample_result(), false).unwrap();
+        assert_eq!(
+            buf_none, buf_wrapper,
+            "None must match the 3-arg export_csv wrapper byte-for-byte"
+        );
+        assert!(
+            !String::from_utf8(buf_none)
+                .unwrap()
+                .contains("# MinGroupOverlap"),
+            "Pathway export must not contain a MinGroupOverlap line"
+        );
+
+        // Dual-mode Pathway (`is_dual = true`, `None`): unchanged order
+        // `# Mode:` / `# FDR:` / `# MinEntrySize:` / header, no overlap line.
+        let mut buf_dual = Vec::new();
+        export_csv_with_mode(&mut buf_dual, &sample_result(), false, true, None).unwrap();
+        let dual = String::from_utf8(buf_dual).unwrap();
+        let dlines: Vec<&str> = dual.lines().collect();
+        assert_eq!(dlines[0], "# Mode: dual (POS+NEG)");
+        assert_eq!(dlines[1], "# FDR: BY");
+        assert_eq!(dlines[2], "# MinEntrySize: 1");
+        assert_eq!(dlines[3], HEADER);
+        assert!(!dual.contains("# MinGroupOverlap"));
     }
 
     #[test]
@@ -277,7 +331,7 @@ mod tests {
 
         // Dual-mode: first line is the Mode tag, also raw.
         let mut buf2 = Vec::new();
-        export_csv_with_mode(&mut buf2, &sample_result(), false, true).unwrap();
+        export_csv_with_mode(&mut buf2, &sample_result(), false, true, None).unwrap();
         let s2 = String::from_utf8(buf2).unwrap();
         let first2 = s2.lines().next().unwrap();
         assert!(

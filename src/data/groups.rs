@@ -23,6 +23,14 @@ pub struct GroupMapping {
     /// distinguishes "column not present" from "column present but values
     /// missing for some samples".
     biosample: Option<Vec<Option<String>>>,
+    /// CSV-only samples: the `sample` value of every CSV row that matched no
+    /// entry in `sample_cols` (the rows ignored-with-a-WARN at load). Retained
+    /// (not just logged) so Stage 1 can surface them in a banner. Sorted
+    /// ascending, deduplicated (CSV `sample` values are unique — duplicate rows
+    /// are rejected at parse), and disjoint from the `Unassigned` set (which is
+    /// the opposite direction: `sample_cols` entries with no CSV row). See the
+    /// `group-mapping` capability spec.
+    unmatched_csv_samples: Vec<String>,
 }
 
 impl GroupMapping {
@@ -61,6 +69,15 @@ impl GroupMapping {
             .iter()
             .filter(|g| g.as_str() != UNASSIGNED)
             .count()
+    }
+
+    /// CSV-only samples: the `sample` value of every CSV row that named a
+    /// sample absent from `sample_cols` (ignored-with-a-WARN at load). Sorted
+    /// ascending, no repeats, and disjoint from the `Unassigned` set. Empty
+    /// when every CSV row matched a sample column. Stage 1 lists these in a
+    /// `theme::ERROR` banner (see the `stage1-ui` capability spec).
+    pub fn unmatched_csv_samples(&self) -> &[String] {
+        &self.unmatched_csv_samples
     }
 
     /// Names of the numeric metadata columns parsed from the CSV (every column
@@ -200,6 +217,9 @@ impl GroupMapping {
             metadata_columns,
             metadata_order: self.metadata_order.clone(),
             biosample,
+            // Carried through unchanged: CSV-only samples are about the original
+            // CSV load, not the (narrowed) sample axis. Stage 2+ never reads it.
+            unmatched_csv_samples: self.unmatched_csv_samples.clone(),
         }
     }
 }
@@ -413,13 +433,21 @@ pub fn load_group_mapping(csv_path: &Path, sample_cols: &[String]) -> Result<Gro
             .collect::<Vec<Option<String>>>()
     });
 
+    // CSV-only samples: rows that named a sample absent from `sample_cols`.
+    // Ignored-with-a-WARN as before, but now ALSO retained on the mapping so
+    // Stage 1 can list them in a banner. `from_csv` is keyed by unique sample
+    // values (duplicate rows already rejected), so no repeats; sort for a
+    // deterministic banner + reproducible tests.
+    let mut unmatched_csv_samples: Vec<String> = Vec::new();
     for csv_sample in from_csv.keys() {
         if !matched_csv_samples.contains(csv_sample.as_str()) {
             warn!(
                 "metadata sample '{csv_sample}' is not present in MS-DIAL sample columns; ignoring"
             );
+            unmatched_csv_samples.push(csv_sample.clone());
         }
     }
+    unmatched_csv_samples.sort();
 
     let mapping = GroupMapping {
         sample_names: sample_cols.to_vec(),
@@ -428,6 +456,7 @@ pub fn load_group_mapping(csv_path: &Path, sample_cols: &[String]) -> Result<Gro
         metadata_columns,
         metadata_order,
         biosample,
+        unmatched_csv_samples,
     };
 
     if mapping.assigned_count() == 0 {
@@ -764,5 +793,59 @@ mod tests {
         let f = write_csv("sample,group\nS01,control\nS02,control\n");
         let m = load_group_mapping(f.path(), &sample_cols(&["S01", "S02"])).unwrap();
         assert_eq!(m.biosample_count("control"), None);
+    }
+
+    #[test]
+    fn unmatched_csv_samples_retained_and_listed() {
+        // S99 names a sample absent from sample_cols → CSV-only.
+        let f = write_csv("sample,group\nS01,ASAP\nS99,Other\n");
+        let m = load_group_mapping(f.path(), &sample_cols(&["S01"])).unwrap();
+        // The row is still ignored from the mapping...
+        assert!(!m.groups().contains(&"Other".to_string()));
+        assert_eq!(m.group_of("S99"), UNASSIGNED);
+        // ...but its name is now retained.
+        assert_eq!(m.unmatched_csv_samples(), &["S99".to_string()]);
+    }
+
+    #[test]
+    fn unmatched_csv_samples_empty_when_fully_matched() {
+        let f = write_csv("sample,group\nS01,ASAP\nS02,CK\n");
+        let m = load_group_mapping(f.path(), &sample_cols(&["S01", "S02"])).unwrap();
+        assert!(m.unmatched_csv_samples().is_empty());
+    }
+
+    #[test]
+    fn unmatched_csv_samples_lists_all_on_no_overlap() {
+        // Every CSV sample is CSV-only (no overlap with sample_cols).
+        let f = write_csv("sample,group\nX01,A\nX02,B\n");
+        let m = load_group_mapping(f.path(), &sample_cols(&["S01", "S02"])).unwrap();
+        assert_eq!(m.assigned_count(), 0);
+        assert_eq!(
+            m.unmatched_csv_samples(),
+            &["X01".to_string(), "X02".to_string()]
+        );
+    }
+
+    #[test]
+    fn unmatched_csv_samples_sorted_deterministically() {
+        // CSV row order Z9, A1, M5 — none in sample_cols → all CSV-only.
+        // Byte-lexicographic sort regardless of row / HashMap iteration order.
+        let f = write_csv("sample,group\nZ9,A\nA1,B\nM5,C\n");
+        let m = load_group_mapping(f.path(), &sample_cols(&["S01"])).unwrap();
+        assert_eq!(
+            m.unmatched_csv_samples(),
+            &["A1".to_string(), "M5".to_string(), "Z9".to_string()]
+        );
+    }
+
+    #[test]
+    fn unmatched_csv_samples_carried_through_without_unassigned() {
+        // A, B assigned to g1; C is Unassigned (.txt-only); S99 is CSV-only.
+        let f = write_csv("sample,group\nA,g1\nB,g1\nS99,Other\n");
+        let m = load_group_mapping(f.path(), &sample_cols(&["A", "B", "C"])).unwrap();
+        assert_eq!(m.unmatched_csv_samples(), &["S99".to_string()]);
+        // The Stage 1 → Stage 2 narrowing preserves the CSV-only list verbatim.
+        let narrowed = m.without_unassigned_samples();
+        assert_eq!(narrowed.unmatched_csv_samples(), m.unmatched_csv_samples());
     }
 }

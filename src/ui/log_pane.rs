@@ -59,6 +59,17 @@ pub struct LogPaneState {
     /// `stage3_result::show` drains it by navigating back to Stage 3 setup
     /// (Group/species preserved) and triggering the force re-fetch there.
     pub refresh_catalogue_requested: bool,
+    /// Set to `true` when the user clicks `Refresh KEGG organism list` in the
+    /// Data tab's Stage 3 Cache-data block (setup OR result; the roster is
+    /// mode-independent). Drained by `stage3_setup::show` / `stage3_result::show`,
+    /// which open the Stage-3-local refresh confirm (NOT an App-level modal — see
+    /// the `app-shell` organism-roster refresh requirement).
+    pub organisms_refresh_requested: bool,
+    /// `true` while the organism-roster refresh confirm dialog is open. Gated
+    /// here (a Stage-3-local confirm, like `RefreshState`) rather than as an
+    /// App-level `*ModalState`, so it sits outside the four-modal mutual-exclusion
+    /// rule and `drain_modal_requests`.
+    pub organisms_refresh_confirm_open: bool,
 }
 
 fn format_timestamp(ts: SystemTime) -> String {

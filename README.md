@@ -7,7 +7,7 @@
 [![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-blue)](#requirements)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust%202024-dea584?logo=rust&logoColor=white)](https://www.rust-lang.org)
 
-A cross-platform desktop GUI application that takes raw MS-DIAL (v4 or v5) metabolomics output and produces KEGG over-representation analysis (ORA) results end-to-end.
+A cross-platform desktop GUI application that takes raw [MS-DIAL](https://systemsomicslab.github.io/compms/msdial/main.html) (v4 or v5) metabolomics output and produces KEGG over-representation analysis (ORA) results end-to-end.
 
 ## What it does
 

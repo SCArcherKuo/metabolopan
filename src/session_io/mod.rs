@@ -427,7 +427,7 @@ mod tests {
         match err {
             SnapshotError::UnsupportedSchemaVersion { found, expected } => {
                 assert_eq!(found, 4);
-                assert_eq!(expected, 3);
+                assert_eq!(expected, 1);
             }
             other => panic!("expected UnsupportedSchemaVersion, got {other:?}"),
         }

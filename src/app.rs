@@ -6,7 +6,8 @@ use chrono::{DateTime, Utc};
 use eframe::{App as EframeApp, Frame};
 use egui::{CentralPanel, Context, TopBottomPanel};
 use tokio::runtime::Runtime;
-use tracing::{error, info};
+use tokio::task::AbortHandle;
+use tracing::{error, info, warn};
 
 use crate::dam::fdr::FdrMethod;
 use crate::dam::{DamMethod, DamResult};
@@ -126,8 +127,7 @@ pub struct SessionSettings {
     /// Welch / Student pre-test arcsinh toggle. `true` = apply the project's
     /// "generalised log" (asinh) before the t-test; `false` = pass the working
     /// matrix to the t-test directly. BM ignores this field (rank-invariant
-    /// under monotone arcsinh). Added in SCHEMA_VERSION 2 by
-    /// add-log-transform-and-scaling.
+    /// under monotone arcsinh). Part of the v1 baseline schema.
     #[serde(default = "default_log_transform")]
     pub log_transform: bool,
     pub dam_fdr_method: FdrMethod,
@@ -148,7 +148,7 @@ pub struct SessionSettings {
     /// Pre-FDR entry-size filter for Stage 3 ORA. Entries with `m_p`
     /// (universe-restricted compound count) below this threshold are
     /// dropped before FDR — they don't enter the FDR family `m`.
-    /// Added in SCHEMA_VERSION 3 by add-min-entry-size-filter.
+    /// Part of the v1 baseline schema.
     #[serde(default = "default_min_entry_size")]
     pub min_entry_size: usize,
     pub enrichment_fdr_method: FdrMethod,
@@ -159,17 +159,19 @@ pub struct SessionSettings {
     pub stage3_export_dpi: u32,
 }
 
-/// Serde-default helper for the `log_transform` field. Returning `true` so
-/// snapshots saved before SCHEMA_VERSION 2 — if any bypassed the strict version
-/// gate — would fall back to the pre-change pipeline behaviour. The gate
-/// normally rejects v1 outright; this is defensive.
+/// Serde-default helper for the `log_transform` field. Returning `true` (the
+/// `SessionSettings::default()` value) so a snapshot missing this field — e.g. a
+/// hand-edited or programmatically-built one that bypasses the strict version
+/// gate — recovers the default rather than failing to deserialise. Defensive:
+/// the gate normally rejects any non-current `schema_version` outright.
 fn default_log_transform() -> bool {
     true
 }
 
 /// Serde-default helper for the `min_entry_size` field. Returning `1` to
-/// match `SessionSettings::default()`. Defensive against snapshots saved
-/// before SCHEMA_VERSION 3 that bypass the strict version gate.
+/// match `SessionSettings::default()`. Defensive against a snapshot missing
+/// this field that bypasses the strict version gate (the gate normally
+/// rejects any non-current `schema_version` outright).
 fn default_min_entry_size() -> usize {
     1
 }
@@ -233,7 +235,7 @@ impl Default for SessionSettings {
             enrichment_fdr_threshold: 0.05,
             min_hit_count: 1,
             min_entry_size: default_min_entry_size(),
-            enrichment_fdr_method: FdrMethod::BenjaminiHochberg,
+            enrichment_fdr_method: FdrMethod::BenjaminiYekutieli,
 
             // Stage 3 result (default height = top_n * 0.3 + 1.0 = 7.0)
             stage3_export_width_in: 3.5,
@@ -355,7 +357,7 @@ pub enum AppState {
     /// per-analysis fetched cache lives on `App::cache`. See the
     /// `app-shell` capability spec for the normative contract.
     Initializing {
-        load_rx: mpsc::Receiver<Result<Vec<KeggOrganism>, String>>,
+        load_rx: mpsc::Receiver<Result<OrganismsCache, String>>,
         /// Pre-loaded stale cache, surfaced as a fallback on failure.
         fallback_cache: Option<OrganismsCache>,
         /// Latest error from a previous load attempt, if any.
@@ -397,6 +399,13 @@ pub enum AppState {
         mode_total: Vec<usize>,
         /// Accumulator for per-mode terminal results.
         dam_results_accum: Vec<Option<Result<DamResult, String>>>,
+        /// Abort handles for the per-mode `run_dam` workers (one per ion
+        /// table). Cancellation is BEST-EFFORT: `run_dam` has no `.await`,
+        /// so abort only stops a worker the runtime has not yet polled; an
+        /// already-running worker finishes its loop and its result is
+        /// discarded on the dropped channel. Stored anyway so a queued
+        /// second-mode worker is cancelled and the contract is uniform.
+        worker_handles: Vec<AbortHandle>,
     },
     /// Stage 2 — DAM result (threshold) screen. Carries the computed
     /// `dam_results` plus volcano-rendering runtime. Thresholds and
@@ -425,9 +434,12 @@ pub enum AppState {
     /// screen, and a fetch triggered by the user picking a
     /// species/Group renders progress INLINE on this screen rather than
     /// transitioning to a separate `KeggFetching` / `ModulesFetching`
-    /// variant. The two flat optionals (instead of one enum) allow
-    /// either mode's fetch to coexist in flight; toggling mode while a
-    /// fetch is in flight does not cancel it (D6).
+    /// variant. The two flat optionals (instead of one enum) let a
+    /// pathway and a module fetch be represented independently. Toggling
+    /// mode while a fetch is IN FLIGHT now cancels + clears that fetch
+    /// (`cancel_inflight_for_mode_switch`) so the two never contend for the
+    /// shared KEGG rate limit — superseding the older "coexist in flight
+    /// (D6)" stance; completed caches/selections still coexist.
     Stage3EnrichSetup {
         dam_results: Vec<DamResult>,
         error: Option<String>,
@@ -454,6 +466,10 @@ pub enum AppState {
         pubchem_total: usize,
         kegg_conv_completed: usize,
         kegg_conv_total: usize,
+        /// Abort handle for the `run_stage3` orchestrator task. Aborted on
+        /// back-navigation so the run stops issuing PubChem/KEGG requests
+        /// instead of running to completion and discarding its result.
+        run_handle: AbortHandle,
     },
     /// Stage 3 — enrichment result screen. Carries the computed output
     /// (`enrichment_result`, `feature_to_cpds`, `mapped_universe`,
@@ -535,6 +551,104 @@ fn drain_modules_progress(fetch: &mut ModulesFetchInFlight) -> Option<ModulesFet
     }
 }
 
+/// Single source of truth for "an in-flight async operation owns the
+/// current screen". Pure over `&AppState` so it is callable under a
+/// `&mut self.state` borrow and unit-testable without a runtime (see the
+/// `app-shell` capability spec). The transient volcano render on
+/// `Stage2DamThreshold` is DELIBERATELY excluded — it is a sub-second
+/// in-process render with no orphan hazard and gates no navigation.
+pub(crate) fn is_busy(state: &AppState) -> bool {
+    match state {
+        AppState::Stage2DamRunning { .. } | AppState::Stage3EnrichRunning { .. } => true,
+        AppState::Stage3EnrichSetup {
+            kegg_fetch,
+            modules_fetch,
+            ..
+        } => kegg_fetch.is_some() || modules_fetch.is_some(),
+        AppState::Stage3EnrichResult {
+            refresh_state,
+            rendering,
+            ..
+        } => !matches!(refresh_state, RefreshState::Idle) || *rendering,
+        AppState::Initializing { .. }
+        | AppState::Stage1Input { .. }
+        | AppState::Stage2DamSetup { .. }
+        | AppState::Stage2DamThreshold { .. } => false,
+    }
+}
+
+/// Abort every background task whose `AbortHandle` `state` owns. Idempotent
+/// (abort on an already-finished task is a no-op) and non-mutating — the
+/// caller proceeds to `mem::take` / overwrite as before. Invoked BEFORE
+/// in-flight state is dropped or replaced (re-selection, back-navigation,
+/// `start_run`, `start_new_round`) so the producer stops before its channel
+/// receiver is dropped. DAM cancellation is best-effort (see
+/// `Stage2DamRunning::worker_handles`).
+pub(crate) fn abort_in_flight(state: &AppState) {
+    match state {
+        AppState::Stage3EnrichSetup {
+            kegg_fetch,
+            modules_fetch,
+            ..
+        } => {
+            if let Some(f) = kegg_fetch {
+                f.abort_tasks();
+            }
+            if let Some(m) = modules_fetch {
+                m.abort_tasks();
+            }
+        }
+        AppState::Stage3EnrichRunning { run_handle, .. } => run_handle.abort(),
+        AppState::Stage2DamRunning { worker_handles, .. } => {
+            for h in worker_handles {
+                h.abort();
+            }
+        }
+        AppState::Stage3EnrichResult {
+            refresh_state:
+                RefreshState::RefreshingPubchem { run_handle, .. }
+                | RefreshState::RefreshingKegg { run_handle, .. },
+            ..
+        } => run_handle.abort(),
+        _ => {}
+    }
+}
+
+/// Abort + clear BOTH in-flight fetch slots on a `Stage3EnrichSetup` state
+/// (no-op on any other variant). Used by the mode toggle: the mode being left
+/// must stop fetching so it does not contend with the new mode for the shared
+/// KEGG client / rate limit. Selections and completed caches are untouched —
+/// only an INCOMPLETE fetch is cancelled.
+pub(crate) fn abort_and_clear_setup_fetches(state: &mut AppState) {
+    if let AppState::Stage3EnrichSetup {
+        kegg_fetch,
+        modules_fetch,
+        ..
+    } = state
+    {
+        if let Some(prev) = kegg_fetch.take() {
+            prev.abort_tasks();
+        }
+        if let Some(prev) = modules_fetch.take() {
+            prev.abort_tasks();
+        }
+    }
+}
+
+/// True only when a long module-catalogue fetch (~6–12 min) is in flight, so
+/// back-navigation is gated behind a confirm before cancelling it; every
+/// other in-flight operation is cancelled silently (see the `stage-stepper-ui`
+/// and `app-shell` capability specs).
+pub(crate) fn needs_nav_confirm(state: &AppState) -> bool {
+    matches!(
+        state,
+        AppState::Stage3EnrichSetup {
+            modules_fetch: Some(_),
+            ..
+        }
+    )
+}
+
 /// Inline KEGG species-pathway fetch state held by `Stage3EnrichSetup`
 /// while a fetch is streaming. Replaces the deleted `AppState::KeggFetching`
 /// variant — instead of leaving the setup screen for a dedicated fetching
@@ -546,6 +660,15 @@ pub struct KeggFetchInFlight {
     pub completed: usize,
     pub total: usize,
     pub current_pathway: String,
+    /// Abort handle for the `fetch_species_pathways` task. Aborted when
+    /// the user re-selects (replacing this in-flight slot) or navigates
+    /// back, so the abandoned fetch stops hammering KEGG instead of
+    /// running to completion and discarding its result.
+    pub fetch_handle: AbortHandle,
+    /// Abort handle for the progress-relay task that feeds `progress_rx`.
+    /// It would wind down on its own once the fetch task drops its sender,
+    /// but is aborted explicitly to avoid depending on drop ordering.
+    pub relay_handle: AbortHandle,
 }
 
 /// Inline module-mode bulk fetch state held by `Stage3EnrichSetup` while a
@@ -558,6 +681,29 @@ pub struct ModulesFetchInFlight {
     pub total: usize,
     pub current_id: String,
     pub eta_secs: Option<u64>,
+    /// Abort handle for the `fetch_modules` task. Aborting it drops the
+    /// fetch future, which runs `ModulesFetchGuard::Drop` and releases
+    /// `.modules.lock`. See `KeggFetchInFlight::fetch_handle`.
+    pub fetch_handle: AbortHandle,
+    /// Abort handle for the progress-relay task that feeds `progress_rx`.
+    pub relay_handle: AbortHandle,
+}
+
+impl KeggFetchInFlight {
+    /// Abort both spawned tasks (fetch + progress relay).
+    pub(crate) fn abort_tasks(&self) {
+        self.fetch_handle.abort();
+        self.relay_handle.abort();
+    }
+}
+
+impl ModulesFetchInFlight {
+    /// Abort both spawned tasks (fetch + progress relay). Aborting the fetch
+    /// future runs `ModulesFetchGuard::Drop`, releasing `.modules.lock`.
+    pub(crate) fn abort_tasks(&self) {
+        self.fetch_handle.abort();
+        self.relay_handle.abort();
+    }
 }
 
 /// Event surfaced by the modules-fetch orchestrator. Mirrors the
@@ -588,6 +734,11 @@ pub enum RefreshState {
         result_rx: mpsc::Receiver<Result<Stage3RunOutput, String>>,
         completed: usize,
         total: usize,
+        /// Abort handle for the `run_stage3` rerun orchestrator task.
+        /// Aborted on back-navigation off the result screen. The two
+        /// `std::thread` progress bridges cannot be aborted but wind down
+        /// on their own once the orchestrator drops their senders.
+        run_handle: AbortHandle,
     },
     ConfirmingKegg,
     RefreshingKegg {
@@ -595,6 +746,9 @@ pub enum RefreshState {
         result_rx: mpsc::Receiver<Result<Stage3RunOutput, String>>,
         completed: usize,
         total: usize,
+        /// Abort handle for the `run_stage3` rerun orchestrator task. See
+        /// `RefreshingPubchem::run_handle`.
+        run_handle: AbortHandle,
     },
 }
 
@@ -702,6 +856,11 @@ impl Default for AppState {
 #[derive(Debug, Default)]
 pub struct OrganismsLoad {
     pub state: OrganismsLoadState,
+    /// When a user-triggered roster refresh is in flight, holds the previously
+    /// loaded roster so a failed/offline refresh can be restored (the on-disk
+    /// `organisms.json` is invalidated before the re-fetch). `Some` iff the
+    /// current `Loading` is a refresh (not the eager/ensure initial load).
+    pub refresh_stash: Option<OrganismsCache>,
 }
 
 #[derive(Debug, Default)]
@@ -711,13 +870,16 @@ pub enum OrganismsLoadState {
     Loading {
         rx: mpsc::Receiver<OrganismsLoadResult>,
     },
-    Loaded(Vec<KeggOrganism>),
+    Loaded {
+        organisms: Vec<KeggOrganism>,
+        fetched_at: DateTime<Utc>,
+    },
     Failed(String),
 }
 
 #[derive(Debug)]
 pub enum OrganismsLoadResult {
-    Ok(Vec<KeggOrganism>),
+    Ok(OrganismsCache),
     Err(String),
 }
 
@@ -791,6 +953,16 @@ pub fn default_bundle_filename() -> String {
         .to_string()
 }
 
+/// Window-close safety: there is intentionally NO `eframe::App::on_exit`,
+/// `Drop for App`, or `ViewportCommand::Close` interception. Cache integrity
+/// on close (and on hard kill) rests on three existing layers: atomic cache
+/// writes (`cache_io::atomic_write` = temp + fsync + rename) so a half-written
+/// file never corrupts its target; the `.modules.lock` RAII `Drop` guard
+/// releasing the lock when an in-flight fetch future is dropped (which the
+/// runtime does when it is dropped at close); and the 90 s stale-lock
+/// threshold + startup `clear_stale_locks` recovering any leftover lock.
+/// Adding a graceful shutdown would only add close latency for zero
+/// correctness gain. See the `app-shell` capability spec.
 pub struct App {
     // ── The four sibling fields introduced by the `refactor-session-settings`
     // change. See the `app-shell` capability spec preamble for the
@@ -849,6 +1021,13 @@ pub struct App {
     pub settings_load_modal: SettingsLoadModalState,
     /// Shared error toast for save / load failures.
     pub error_modal: ErrorModalState,
+    /// Deferred stepper back-navigation target while the "cancel the running
+    /// module fetch?" confirm modal is open (`Some(step_index)`), else `None`.
+    /// App-level (the stepper click can fire from any state) and part of the
+    /// App-level modal mutual-exclusion family — see `render_modals` /
+    /// `any_modal_open`. Set by `stepper::show` when `needs_nav_confirm` is
+    /// true; consumed by the confirm modal on Confirm, cleared on Cancel.
+    pub pending_back_nav: Option<usize>,
     /// Stepper step icons, decoded once and uploaded to GPU textures on the
     /// first stepper render (texture upload needs a live `egui::Context`,
     /// unavailable at `App::new`). UI plumbing analogous to the volcano /
@@ -919,15 +1098,8 @@ impl App {
             cache: SessionCache::default(),
             log,
             log_ui: log_pane::LogPaneState {
-                active_tab: log_pane::BottomTab::default(),
                 filter_directive: filter_directive.clone(),
-                bundle_export_requested: false,
-                settings_save_requested: false,
-                settings_load_requested: false,
-                refresh_pubchem_requested: false,
-                refresh_kegg_conv_requested: false,
-                rerun_enrichment_requested: false,
-                refresh_catalogue_requested: false,
+                ..Default::default()
             },
             rt,
             kegg,
@@ -941,6 +1113,7 @@ impl App {
             settings_save_modal: SettingsSaveModalState::Closed,
             settings_load_modal: SettingsLoadModalState::Closed,
             error_modal: ErrorModalState::Closed,
+            pending_back_nav: None,
             stepper_icons: None,
             rat_face_tex: None,
             show_rat_easter_egg: false,
@@ -960,6 +1133,12 @@ impl App {
     /// are session-immutable infrastructure and are left untouched, so the
     /// `Initializing` organism-load splash does NOT re-run.
     pub fn start_new_round(&mut self) {
+        // Cancel any in-flight background task before discarding the state
+        // (reachable mid-refresh from the Stage 3 result screen).
+        if is_busy(&self.state) {
+            tracing::info!("stopping in-flight work: starting a new analysis");
+        }
+        abort_in_flight(&self.state);
         self.settings = SessionSettings::default();
         self.inputs = SessionInputs::default();
         self.cache = SessionCache::default();
@@ -1257,7 +1436,10 @@ impl App {
                 fetched_at = %cache.fetched_at,
                 "accepted stale organisms cache as fallback"
             );
-            self.organisms.state = OrganismsLoadState::Loaded(cache.organisms);
+            self.organisms.state = OrganismsLoadState::Loaded {
+                organisms: cache.organisms,
+                fetched_at: cache.fetched_at,
+            };
             self.state = AppState::default();
         } else {
             // Restore prior state if there was no fallback to accept.
@@ -1269,14 +1451,14 @@ impl App {
     /// already loading or already loaded successfully).
     pub fn ensure_organisms_loading(&mut self) {
         match self.organisms.state {
-            OrganismsLoadState::Loaded(_) | OrganismsLoadState::Loading { .. } => return,
+            OrganismsLoadState::Loaded { .. } | OrganismsLoadState::Loading { .. } => return,
             _ => {}
         }
         let (tx, rx) = mpsc::channel::<OrganismsLoadResult>();
         let client = self.kegg.clone();
         self.rt.spawn(async move {
             let result = match crate::kegg::list_organisms(&client).await {
-                Ok(v) => OrganismsLoadResult::Ok(v),
+                Ok(cache) => OrganismsLoadResult::Ok(cache),
                 Err(e) => {
                     error!(error = %e, "list_organisms failed");
                     OrganismsLoadResult::Err(e.to_string())
@@ -1287,6 +1469,80 @@ impl App {
         });
         self.organisms.state = OrganismsLoadState::Loading { rx };
         info!("organisms load started");
+    }
+
+    /// User-triggered organism-roster refresh (`Refresh KEGG organism list` in
+    /// the Data-tab Cache-data block). The SOLE sanctioned runtime mutation of
+    /// `App::organisms` after startup — see the app-shell capability spec. Stashes
+    /// the current roster for failure recovery, invalidates `organisms.json`, and
+    /// spawns a fresh `list_organisms` directly (deliberately bypassing
+    /// `ensure_organisms_loading`'s already-loaded guard), flipping to `Loading`;
+    /// `drain_organisms_load` completes it. No-op unless currently `Loaded`.
+    pub fn handle_organisms_refresh(&mut self) {
+        let OrganismsLoadState::Loaded {
+            organisms,
+            fetched_at,
+        } = &self.organisms.state
+        else {
+            warn!("organism refresh ignored: roster not loaded");
+            return;
+        };
+        self.organisms.refresh_stash = Some(OrganismsCache {
+            fetched_at: *fetched_at,
+            organisms: organisms.clone(),
+        });
+        if let Err(e) = crate::kegg::invalidate_cache(crate::kegg::KeggCacheScope::Organisms) {
+            error!(error = %e, "failed to invalidate organisms cache for refresh");
+        }
+        let (tx, rx) = mpsc::channel::<OrganismsLoadResult>();
+        let client = self.kegg.clone();
+        self.rt.spawn(async move {
+            let result = match crate::kegg::list_organisms(&client).await {
+                Ok(cache) => OrganismsLoadResult::Ok(cache),
+                Err(e) => {
+                    error!(error = %e, "organism roster refresh failed");
+                    OrganismsLoadResult::Err(e.to_string())
+                }
+            };
+            let _ = tx.send(result);
+        });
+        self.organisms.state = OrganismsLoadState::Loading { rx };
+        info!("organism roster refresh started");
+    }
+
+    /// After a successful roster refresh, clear a previously selected species /
+    /// Group that is no longer present in the refreshed roster (rare — KEGG
+    /// removals). A still-present selection is preserved unchanged.
+    fn revalidate_organism_selection(&mut self) {
+        let OrganismsLoadState::Loaded {
+            organisms,
+            fetched_at,
+        } = &self.organisms.state
+        else {
+            return;
+        };
+        if let Some(code) = self.settings.kegg_species.clone()
+            && !organisms.iter().any(|o| o.code == code)
+        {
+            warn!(code = %code, "selected species absent after roster refresh; clearing");
+            self.settings.kegg_species = None;
+        }
+        if let (Some(level), Some(group)) = (
+            self.settings.organism_group_level,
+            self.settings.organism_group.clone(),
+        ) {
+            let index = crate::kegg::build_organism_group_index(organisms, *fetched_at);
+            let present = index
+                .by_level
+                .get((level as usize).saturating_sub(1))
+                .is_some_and(|m| m.contains_key(&group));
+            if !present {
+                warn!(level, group = %group, "selected Group absent after roster refresh; clearing");
+                self.settings.organism_group = None;
+                self.settings.organism_group_level = None;
+                self.cache.group_org_codes = None;
+            }
+        }
     }
 
     /// Drain the eager-startup organism-load channel while in
@@ -1303,9 +1559,15 @@ impl App {
             return;
         };
         match result {
-            Ok(organisms) => {
-                info!(count = organisms.len(), "eager organisms load completed");
-                self.organisms.state = OrganismsLoadState::Loaded(organisms);
+            Ok(cache) => {
+                info!(
+                    count = cache.organisms.len(),
+                    "eager organisms load completed"
+                );
+                self.organisms.state = OrganismsLoadState::Loaded {
+                    organisms: cache.organisms,
+                    fetched_at: cache.fetched_at,
+                };
                 self.state = AppState::default();
             }
             Err(msg) => {
@@ -1317,23 +1579,53 @@ impl App {
         }
     }
 
-    /// Drain the organism load channel if present.
+    /// Drain the organism load channel if present. Handles both the
+    /// `ensure_organisms_loading` recovery load and the user-triggered refresh:
+    /// `refresh_stash` is `Some` only for a refresh, which on failure restores
+    /// the stashed roster (re-persisting `organisms.json`) so a failed/offline
+    /// refresh never empties a working session, and on success re-validates the
+    /// species / Group selection against the new roster.
     fn drain_organisms_load(&mut self) {
         let received = if let OrganismsLoadState::Loading { rx } = &self.organisms.state {
             rx.try_recv().ok()
         } else {
             None
         };
-        if let Some(result) = received {
-            match result {
-                OrganismsLoadResult::Ok(v) => {
-                    info!(count = v.len(), "organisms load completed");
-                    self.organisms.state = OrganismsLoadState::Loaded(v);
-                }
-                OrganismsLoadResult::Err(msg) => {
-                    self.organisms.state = OrganismsLoadState::Failed(msg);
+        let Some(result) = received else {
+            return;
+        };
+        let stash = self.organisms.refresh_stash.take();
+        match result {
+            OrganismsLoadResult::Ok(cache) => {
+                info!(count = cache.organisms.len(), "organisms load completed");
+                self.organisms.state = OrganismsLoadState::Loaded {
+                    organisms: cache.organisms,
+                    fetched_at: cache.fetched_at,
+                };
+                if stash.is_some() {
+                    self.revalidate_organism_selection();
                 }
             }
+            OrganismsLoadResult::Err(msg) => match stash {
+                // A refresh failed: keep the session usable by restoring the
+                // previously loaded roster and re-persisting the cache file that
+                // `handle_organisms_refresh` invalidated before the re-fetch.
+                Some(prev) => {
+                    error!(error = %msg, "organism roster refresh failed; restoring previous roster");
+                    if let Err(e) = crate::kegg::cache::write_organisms(&prev) {
+                        warn!(error = %e, "failed to re-persist organisms cache after failed refresh");
+                    }
+                    self.organisms.state = OrganismsLoadState::Loaded {
+                        organisms: prev.organisms,
+                        fetched_at: prev.fetched_at,
+                    };
+                }
+                // The eager/ensure load failed: surface via the selector's error
+                // affordance (unchanged behaviour).
+                None => {
+                    self.organisms.state = OrganismsLoadState::Failed(msg);
+                }
+            },
         }
     }
 }
@@ -1524,11 +1816,21 @@ impl App {
     /// mutual-exclusion invariant in the app-shell spec. If any modal is
     /// already non-Closed, drop the new request with a `warn!` line (the
     /// user dismisses the current modal first).
-    fn drain_modal_requests(&mut self) {
-        let any_modal_open = !matches!(self.bundle_modal, BundleModalState::Closed)
+    /// True iff any App-level modal in the mutual-exclusion family is open:
+    /// bundle / settings save / settings load / error / back-navigation
+    /// confirm. New modal requests are dropped (with a `warn!`) while any of
+    /// these is open. The `Stage3EnrichResult`-internal new-round confirm is
+    /// NOT in this family (it is a central-panel flag, not an App-level modal).
+    pub(crate) fn any_modal_open(&self) -> bool {
+        !matches!(self.bundle_modal, BundleModalState::Closed)
             || !matches!(self.settings_save_modal, SettingsSaveModalState::Closed)
             || !matches!(self.settings_load_modal, SettingsLoadModalState::Closed)
-            || !matches!(self.error_modal, ErrorModalState::Closed);
+            || !matches!(self.error_modal, ErrorModalState::Closed)
+            || self.pending_back_nav.is_some()
+    }
+
+    fn drain_modal_requests(&mut self) {
+        let any_modal_open = self.any_modal_open();
 
         if self.log_ui.bundle_export_requested {
             self.log_ui.bundle_export_requested = false;
@@ -1567,7 +1869,52 @@ impl App {
         settings_modals::show_save(self, ctx);
         settings_modals::show_load(self, ctx);
         self.show_error_modal(ctx);
+        self.show_back_nav_confirm_modal(ctx);
         self.show_rat_easter_egg_window(ctx);
+    }
+
+    /// Render the back-navigation confirm modal shown while a long module
+    /// fetch is in flight (`pending_back_nav.is_some()`). "Leave & cancel"
+    /// aborts all in-flight work on the current state (via `navigate_back_to`)
+    /// and jumps to the deferred step; "Keep fetching" clears the pending
+    /// target and stays put.
+    fn show_back_nav_confirm_modal(&mut self, ctx: &Context) {
+        use egui::{Align2, RichText, Window};
+
+        let Some(target) = self.pending_back_nav else {
+            return;
+        };
+
+        let mut confirm = false;
+        let mut cancel = false;
+        Window::new(RichText::new("Module fetch in progress").color(theme::HEADING))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label(
+                    "Leaving this step cancels the in-progress module fetch \
+                     (it can take 6–12 minutes). Continue?",
+                );
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Leave & cancel").clicked() {
+                        confirm = true;
+                    }
+                    if ui.button("Keep fetching").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+
+        if confirm {
+            // Clear the pending target first so `navigate_back_to`'s rebuild
+            // does not see a stale confirm; it performs the abort itself.
+            self.pending_back_nav = None;
+            crate::ui::stepper::navigate_back_to(self, target);
+        } else if cancel {
+            self.pending_back_nav = None;
+        }
     }
 
     /// Handle the terminal `Done` / `Failed` event of an in-flight KEGG fetch.
@@ -1743,20 +2090,23 @@ impl App {
         let (result_tx, result_rx) = mpsc::channel::<Result<Stage3RunOutput, String>>();
         let kegg_client = self.kegg.clone();
         let dam_results_clone = dam_results.clone();
-        self.rt.spawn(async move {
-            let pubchem = crate::pubchem::PubchemClient::new();
-            let r = crate::stage3::run_stage3(
-                &pubchem,
-                &kegg_client,
-                &dam_results_clone,
-                &target,
-                params,
-                pub_tx,
-                kegg_tx,
-            )
-            .await;
-            let _ = result_tx.send(r.map_err(|e| e.to_string()));
-        });
+        let run_handle = self
+            .rt
+            .spawn(async move {
+                let pubchem = crate::pubchem::PubchemClient::new();
+                let r = crate::stage3::run_stage3(
+                    &pubchem,
+                    &kegg_client,
+                    &dam_results_clone,
+                    &target,
+                    params,
+                    pub_tx,
+                    kegg_tx,
+                )
+                .await;
+                let _ = result_tx.send(r.map_err(|e| e.to_string()));
+            })
+            .abort_handle();
         self.state = AppState::Stage3EnrichRunning {
             dam_results,
             phase: Stage3Phase::PubChem,
@@ -1767,6 +2117,7 @@ impl App {
             pubchem_total,
             kegg_conv_completed: 0,
             kegg_conv_total: 0,
+            run_handle,
         };
     }
 
@@ -1824,12 +2175,12 @@ impl App {
 fn spawn_eager_organism_load(
     client: &KeggClient,
     rt: &Runtime,
-) -> mpsc::Receiver<Result<Vec<KeggOrganism>, String>> {
-    let (tx, rx) = mpsc::channel::<Result<Vec<KeggOrganism>, String>>();
+) -> mpsc::Receiver<Result<OrganismsCache, String>> {
+    let (tx, rx) = mpsc::channel::<Result<OrganismsCache, String>>();
     let client = client.clone();
     rt.spawn(async move {
         let result = match crate::kegg::list_organisms(&client).await {
-            Ok(v) => Ok(v),
+            Ok(cache) => Ok(cache),
             Err(e) => {
                 error!(error = %e, "eager list_organisms failed");
                 Err(e.to_string())
@@ -1919,7 +2270,7 @@ mod tests {
             enrichment_fdr_threshold: 0.1,
             min_hit_count: 3,
             min_entry_size: 5,
-            enrichment_fdr_method: FdrMethod::BenjaminiYekutieli,
+            enrichment_fdr_method: FdrMethod::BenjaminiHochberg,
 
             // Stage 3 result
             stage3_export_width_in: 5.0,
@@ -1962,7 +2313,7 @@ mod tests {
         assert_eq!(d.top_n, 20);
         assert_eq!(d.enrichment_fdr_threshold, 0.05);
         assert_eq!(d.min_hit_count, 1);
-        assert_eq!(d.enrichment_fdr_method, FdrMethod::BenjaminiHochberg);
+        assert_eq!(d.enrichment_fdr_method, FdrMethod::BenjaminiYekutieli);
         // Stage 3 result (default height = top_n * 0.3 + 1.0 = 7.0 for top_n = 20)
         assert_eq!(d.stage3_export_width_in, 3.5);
         assert_eq!(d.stage3_export_height_in, 7.0);
@@ -2186,7 +2537,10 @@ mod tests {
     #[test]
     fn start_new_round_leaves_organism_roster_and_skips_initializing() {
         let mut app = test_app();
-        app.organisms.state = OrganismsLoadState::Loaded(vec![]);
+        app.organisms.state = OrganismsLoadState::Loaded {
+            organisms: vec![],
+            fetched_at: Utc::now(),
+        };
         app.state = stage3_result_state();
 
         app.start_new_round();
@@ -2194,7 +2548,10 @@ mod tests {
         // Session-immutable organism roster untouched (still Loaded, not
         // reset to Idle / re-fetched); and we do NOT bounce back through
         // the Initializing splash.
-        assert!(matches!(app.organisms.state, OrganismsLoadState::Loaded(_)));
+        assert!(matches!(
+            app.organisms.state,
+            OrganismsLoadState::Loaded { .. }
+        ));
         assert!(!matches!(app.state, AppState::Initializing { .. }));
         assert!(matches!(app.state, AppState::Stage1Input { .. }));
     }
@@ -2232,5 +2589,415 @@ mod tests {
         // The open/cancel toggle left every session sibling untouched.
         assert_eq!(app.settings, settings_snapshot);
         assert!(matches!(app.state, AppState::Stage3EnrichResult { .. }));
+    }
+
+    // ── In-flight task cancellation (`add-inflight-task-cancellation`) ──
+
+    /// A multi-thread runtime for the cancellation tests: parked tasks must
+    /// actually be schedulable so `abort()` + awaiting the `JoinHandle`
+    /// resolves to a cancelled `JoinError`.
+    fn mt_rt() -> Runtime {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("multi-thread test runtime")
+    }
+
+    /// Spawn a never-completing task; return its abort handle (stored on
+    /// state) and its join handle (kept to assert cancellation).
+    fn parked(rt: &Runtime) -> (AbortHandle, tokio::task::JoinHandle<()>) {
+        let jh = rt.spawn(std::future::pending::<()>());
+        (jh.abort_handle(), jh)
+    }
+
+    /// A disconnected receiver — fine for states the test never drains.
+    fn dummy_rx<T>() -> mpsc::Receiver<T> {
+        let (_tx, rx) = mpsc::channel();
+        rx
+    }
+
+    fn kegg_inflight(fetch_handle: AbortHandle, relay_handle: AbortHandle) -> KeggFetchInFlight {
+        KeggFetchInFlight {
+            progress_rx: dummy_rx(),
+            completed: 0,
+            total: 0,
+            current_pathway: String::new(),
+            fetch_handle,
+            relay_handle,
+        }
+    }
+
+    fn modules_inflight(
+        fetch_handle: AbortHandle,
+        relay_handle: AbortHandle,
+    ) -> ModulesFetchInFlight {
+        ModulesFetchInFlight {
+            progress_rx: dummy_rx(),
+            completed: 0,
+            total: 0,
+            current_id: String::new(),
+            eta_secs: None,
+            fetch_handle,
+            relay_handle,
+        }
+    }
+
+    fn setup_state(
+        kegg_fetch: Option<KeggFetchInFlight>,
+        modules_fetch: Option<ModulesFetchInFlight>,
+    ) -> AppState {
+        AppState::Stage3EnrichSetup {
+            dam_results: vec![],
+            error: None,
+            kegg_fetch,
+            modules_fetch,
+        }
+    }
+
+    fn enrich_running(run_handle: AbortHandle) -> AppState {
+        AppState::Stage3EnrichRunning {
+            dam_results: vec![],
+            phase: Stage3Phase::PubChem,
+            pubchem_progress_rx: dummy_rx(),
+            kegg_conv_progress_rx: dummy_rx(),
+            result_rx: dummy_rx(),
+            pubchem_completed: 0,
+            pubchem_total: 0,
+            kegg_conv_completed: 0,
+            kegg_conv_total: 0,
+            run_handle,
+        }
+    }
+
+    fn dam_running(worker_handles: Vec<AbortHandle>) -> AppState {
+        AppState::Stage2DamRunning {
+            result_rx: dummy_rx(),
+            progress_rxs: vec![],
+            mode_completed: vec![],
+            mode_total: vec![],
+            dam_results_accum: vec![],
+            worker_handles,
+        }
+    }
+
+    #[test]
+    fn is_busy_truth_table() {
+        let rt = mt_rt();
+        let (a, _) = parked(&rt);
+
+        // Busy: a background op owns the screen.
+        assert!(is_busy(&dam_running(vec![])));
+        assert!(is_busy(&enrich_running(a.clone())));
+        assert!(is_busy(&setup_state(
+            Some(kegg_inflight(a.clone(), a.clone())),
+            None
+        )));
+        assert!(is_busy(&setup_state(
+            None,
+            Some(modules_inflight(a.clone(), a.clone()))
+        )));
+
+        // Not busy: idle screens. A volcano render on Stage2DamThreshold is
+        // DELIBERATELY not busy even with `rendering: true`.
+        assert!(!is_busy(&AppState::Stage1Input {
+            slot1_mode: None,
+            slot2_revealed: false,
+            slot2_mode: None,
+            error: None,
+        }));
+        assert!(!is_busy(&AppState::Stage2DamSetup { error: None }));
+        assert!(!is_busy(&AppState::Stage2DamThreshold {
+            dam_results: vec![],
+            active_volcano_tab: IonMode::Positive,
+            volcano_textures: vec![],
+            rendering: true,
+            render_rx: None,
+        }));
+        assert!(!is_busy(&setup_state(None, None)));
+        assert!(!is_busy(&stage3_result_state())); // Idle refresh, no render
+    }
+
+    #[test]
+    fn needs_nav_confirm_only_for_module_fetch() {
+        let rt = mt_rt();
+        let (a, _) = parked(&rt);
+        assert!(needs_nav_confirm(&setup_state(
+            None,
+            Some(modules_inflight(a.clone(), a.clone()))
+        )));
+        // A species fetch, a run, and an idle setup are all silent (no confirm).
+        assert!(!needs_nav_confirm(&setup_state(
+            Some(kegg_inflight(a.clone(), a.clone())),
+            None
+        )));
+        assert!(!needs_nav_confirm(&enrich_running(a.clone())));
+        assert!(!needs_nav_confirm(&setup_state(None, None)));
+    }
+
+    #[test]
+    fn abort_in_flight_cancels_setup_fetch_tasks() {
+        let rt = mt_rt();
+        let (fa, fj) = parked(&rt);
+        let (ra, rj) = parked(&rt);
+        let (mfa, mfj) = parked(&rt);
+        let (mra, mrj) = parked(&rt);
+        let state = setup_state(
+            Some(kegg_inflight(fa, ra)),
+            Some(modules_inflight(mfa, mra)),
+        );
+        abort_in_flight(&state);
+        for jh in [fj, rj, mfj, mrj] {
+            assert!(
+                rt.block_on(jh).unwrap_err().is_cancelled(),
+                "every fetch + relay task should be cancelled"
+            );
+        }
+    }
+
+    #[test]
+    fn abort_in_flight_cancels_running_orchestrator() {
+        let rt = mt_rt();
+        let (a, jh) = parked(&rt);
+        abort_in_flight(&enrich_running(a));
+        assert!(rt.block_on(jh).unwrap_err().is_cancelled());
+    }
+
+    #[test]
+    fn abort_and_clear_setup_fetches_cancels_and_clears_both() {
+        // Mode toggle: the leaving mode's in-flight fetch must be cancelled AND
+        // its slot cleared (so it stops contending on the shared KEGG client
+        // and its progress strip disappears).
+        let rt = mt_rt();
+        let (fa, fj) = parked(&rt);
+        let (ra, rj) = parked(&rt);
+        let (mfa, mfj) = parked(&rt);
+        let (mra, mrj) = parked(&rt);
+        let mut state = setup_state(
+            Some(kegg_inflight(fa, ra)),
+            Some(modules_inflight(mfa, mra)),
+        );
+        abort_and_clear_setup_fetches(&mut state);
+        assert!(matches!(
+            state,
+            AppState::Stage3EnrichSetup {
+                kegg_fetch: None,
+                modules_fetch: None,
+                ..
+            }
+        ));
+        for jh in [fj, rj, mfj, mrj] {
+            assert!(rt.block_on(jh).unwrap_err().is_cancelled());
+        }
+    }
+
+    #[test]
+    fn abort_in_flight_is_noop_when_idle() {
+        // No handles to abort — must not panic.
+        abort_in_flight(&AppState::Stage2DamSetup { error: None });
+        abort_in_flight(&setup_state(None, None));
+    }
+
+    #[test]
+    fn navigate_back_from_running_aborts_and_transitions() {
+        let mut app = test_app();
+        let rt = mt_rt();
+        let (a, jh) = parked(&rt);
+        app.state = enrich_running(a);
+        // Jump back to DAM Setup (step 1).
+        crate::ui::stepper::navigate_back_to(&mut app, 1);
+        assert!(matches!(app.state, AppState::Stage2DamSetup { .. }));
+        assert!(
+            rt.block_on(jh).unwrap_err().is_cancelled(),
+            "back-navigation should abort the orchestrator"
+        );
+    }
+
+    // ── Organism-roster refresh (add-organism-list-refresh) ────────────────
+
+    /// Serialise the cache-touching refresh tests + point `KEGG_CACHE_DIR` at a
+    /// temp dir so `invalidate_cache` / `write_organisms` never touch the real
+    /// user cache. The env is set at the top of each test, before any cache op.
+    static REFRESH_CACHE_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn tmp_kegg_cache() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tempdir for KEGG cache");
+        unsafe {
+            std::env::set_var("KEGG_CACHE_DIR", dir.path());
+        }
+        dir
+    }
+
+    fn one_organism(code: &str, lineage: &str) -> crate::kegg::KeggOrganism {
+        crate::kegg::KeggOrganism {
+            t_number: format!("T_{code}"),
+            code: code.to_string(),
+            name: format!("{code} organism"),
+            lineage: lineage.to_string(),
+        }
+    }
+
+    #[test]
+    fn handle_organisms_refresh_stashes_and_sets_loading() {
+        let _env = REFRESH_CACHE_ENV.lock().unwrap();
+        let _tmp = tmp_kegg_cache();
+        let mut app = test_app();
+        app.organisms.state = OrganismsLoadState::Loaded {
+            organisms: vec![one_organism("hsa", "Eukaryotes;Animals;Mammals;Primates")],
+            fetched_at: Utc::now(),
+        };
+
+        app.handle_organisms_refresh();
+
+        // The previous roster is stashed for failure recovery and the state
+        // flips to Loading. (The spawned `list_organisms` never runs — the
+        // current-thread test runtime is not driven — so no network call.)
+        assert!(app.organisms.refresh_stash.is_some());
+        assert_eq!(
+            app.organisms
+                .refresh_stash
+                .as_ref()
+                .unwrap()
+                .organisms
+                .len(),
+            1
+        );
+        assert!(matches!(
+            app.organisms.state,
+            OrganismsLoadState::Loading { .. }
+        ));
+    }
+
+    #[test]
+    fn handle_organisms_refresh_is_noop_when_not_loaded() {
+        let _env = REFRESH_CACHE_ENV.lock().unwrap();
+        let _tmp = tmp_kegg_cache();
+        let mut app = test_app();
+        app.organisms.state = OrganismsLoadState::Failed("prior error".into());
+
+        app.handle_organisms_refresh();
+
+        assert!(app.organisms.refresh_stash.is_none());
+        assert!(matches!(app.organisms.state, OrganismsLoadState::Failed(_)));
+    }
+
+    #[test]
+    fn failed_refresh_restores_prior_roster() {
+        let _env = REFRESH_CACHE_ENV.lock().unwrap();
+        let _tmp = tmp_kegg_cache();
+        let mut app = test_app();
+        let prev = OrganismsCache {
+            fetched_at: Utc::now(),
+            organisms: vec![
+                one_organism("hsa", "Eukaryotes;Animals;Mammals;Primates"),
+                one_organism("ath", "Eukaryotes;Plants;Eudicots;Brassicales"),
+            ],
+        };
+        app.organisms.refresh_stash = Some(prev.clone());
+        // Simulate a refresh whose fetch failed.
+        let (tx, rx) = std::sync::mpsc::channel::<OrganismsLoadResult>();
+        tx.send(OrganismsLoadResult::Err("offline".into())).unwrap();
+        app.organisms.state = OrganismsLoadState::Loading { rx };
+
+        app.drain_organisms_load();
+
+        // The working roster is restored (NOT Failed) and the cache re-persisted.
+        match &app.organisms.state {
+            OrganismsLoadState::Loaded { organisms, .. } => assert_eq!(organisms.len(), 2),
+            other => panic!("expected restored Loaded, got {other:?}"),
+        }
+        assert!(app.organisms.refresh_stash.is_none());
+        let on_disk = crate::kegg::cache::read_organisms()
+            .expect("read")
+            .expect("re-persisted");
+        assert_eq!(on_disk.organisms.len(), 2);
+    }
+
+    #[test]
+    fn successful_refresh_drain_loads_and_revalidates() {
+        let _env = REFRESH_CACHE_ENV.lock().unwrap();
+        let _tmp = tmp_kegg_cache();
+        let mut app = test_app();
+        // A selection that will NOT be present in the refreshed roster.
+        app.settings.kegg_species = Some("gone".into());
+        app.organisms.refresh_stash = Some(OrganismsCache {
+            fetched_at: Utc::now(),
+            organisms: vec![],
+        });
+        let (tx, rx) = std::sync::mpsc::channel::<OrganismsLoadResult>();
+        tx.send(OrganismsLoadResult::Ok(OrganismsCache {
+            fetched_at: Utc::now(),
+            organisms: vec![one_organism("hsa", "Eukaryotes;Animals;Mammals;Primates")],
+        }))
+        .unwrap();
+        app.organisms.state = OrganismsLoadState::Loading { rx };
+
+        app.drain_organisms_load();
+
+        assert!(matches!(
+            app.organisms.state,
+            OrganismsLoadState::Loaded { .. }
+        ));
+        // Re-validation cleared the now-absent species.
+        assert_eq!(app.settings.kegg_species, None);
+        assert!(app.organisms.refresh_stash.is_none());
+    }
+
+    #[test]
+    fn revalidate_clears_absent_selection_preserves_present() {
+        let mut app = test_app();
+        app.organisms.state = OrganismsLoadState::Loaded {
+            organisms: vec![one_organism("hsa", "Eukaryotes;Animals;Mammals;Primates")],
+            fetched_at: Utc::now(),
+        };
+
+        // Present species preserved.
+        app.settings.kegg_species = Some("hsa".into());
+        app.revalidate_organism_selection();
+        assert_eq!(app.settings.kegg_species.as_deref(), Some("hsa"));
+
+        // Absent species cleared.
+        app.settings.kegg_species = Some("xyz".into());
+        app.revalidate_organism_selection();
+        assert_eq!(app.settings.kegg_species, None);
+
+        // Absent Group cleared (roster has no "Plants" at level 2).
+        app.settings.organism_group_level = Some(2);
+        app.settings.organism_group = Some("Plants".into());
+        app.cache.group_org_codes = Some(std::collections::HashSet::new());
+        app.revalidate_organism_selection();
+        assert_eq!(app.settings.organism_group, None);
+        assert_eq!(app.settings.organism_group_level, None);
+        assert!(app.cache.group_org_codes.is_none());
+
+        // Present Group preserved ("Animals" exists at level 2).
+        app.settings.organism_group_level = Some(2);
+        app.settings.organism_group = Some("Animals".into());
+        app.revalidate_organism_selection();
+        assert_eq!(app.settings.organism_group.as_deref(), Some("Animals"));
+    }
+
+    #[test]
+    fn organisms_refresh_flag_opens_confirm_and_no_click_is_noop() {
+        let mut app = test_app();
+        app.organisms.state = OrganismsLoadState::Loaded {
+            organisms: vec![],
+            fetched_at: Utc::now(),
+        };
+        app.log_ui.organisms_refresh_requested = true;
+
+        let ctx = egui::Context::default();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            crate::ui::stage3_setup::drain_organisms_refresh_confirm(&mut app, ctx);
+        });
+
+        // Flag consumed → confirm open; no button clicked → no refresh fired.
+        assert!(app.log_ui.organisms_refresh_confirm_open);
+        assert!(!app.log_ui.organisms_refresh_requested);
+        assert!(app.organisms.refresh_stash.is_none());
+        assert!(matches!(
+            app.organisms.state,
+            OrganismsLoadState::Loaded { .. }
+        ));
     }
 }

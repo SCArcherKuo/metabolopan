@@ -1,7 +1,7 @@
 //! Integration tests for the enrichment ORA module against R-style
 //! golden vectors.
 
-use metabolopan::dam::fdr::FdrMethod;
+use metabolopan::dam::fdr::{FdrMethod, adjust_pvalues};
 use metabolopan::enrichment::{EnrichmentDirection, run_ora};
 use metabolopan::kegg::KeggCompoundSet;
 use std::collections::HashSet;
@@ -111,6 +111,89 @@ fn by_fdr_matches_r_p_adjust() {
     for r in &result.rows {
         assert!(r.fdr.is_finite() || r.fdr == 1.0);
     }
+}
+
+/// `run_ora` owns no FDR math of its own — it delegates the entire FDR column
+/// to `adjust_pvalues` over ALL rows' p-values. Pin that delegation property for
+/// both BH and BY, plus that BH vs BY leave `p_value`/`hits` identical while at
+/// least one `fdr` differs. The literal R-golden adjustment vector stays tested
+/// at the `adjust_pvalues` layer (`src/dam/fdr.rs`); here we only assert run_ora
+/// plugs the row p-values straight through.
+#[test]
+fn run_ora_delegates_fdr_column_to_adjust_pvalues() {
+    let universe: HashSet<String> = (0..50).map(|i| format!("C{i}")).collect();
+    let dam_cpd: HashSet<String> = (0..10).map(|i| format!("C{i}")).collect();
+    let p1 = pathway("p1", "Strong", &["C0", "C1", "C2", "C3", "C4", "C45"]);
+    let p2 = pathway(
+        "p2",
+        "Weak",
+        &[
+            "C5", "C6", "C40", "C41", "C42", "C43", "C44", "C45", "C46", "C47",
+        ],
+    );
+    let p3 = pathway(
+        "p3",
+        "None",
+        &[
+            "C7", "C20", "C21", "C22", "C23", "C24", "C25", "C26", "C27", "C28",
+        ],
+    );
+    let pathways = vec![p1, p2, p3];
+    let run = |m| {
+        run_ora(
+            &universe,
+            &dam_cpd,
+            &pathways,
+            1,
+            EnrichmentDirection::Both,
+            m,
+            1,
+        )
+    };
+
+    // Delegation: adjust_pvalues is position-preserving, so feeding the rows'
+    // p-values in row order must reproduce each row's fdr exactly.
+    for method in [FdrMethod::BenjaminiHochberg, FdrMethod::BenjaminiYekutieli] {
+        let result = run(method);
+        let p_in_row_order: Vec<f64> = result.rows.iter().map(|r| r.p_value).collect();
+        let expected = adjust_pvalues(&p_in_row_order, method);
+        assert_eq!(result.rows.len(), expected.len());
+        for (row, &q) in result.rows.iter().zip(expected.iter()) {
+            assert!(
+                (row.fdr - q).abs() < 1e-12,
+                "{method:?}: row {} fdr {} != adjust_pvalues delegation {q}",
+                row.entry_id,
+                row.fdr
+            );
+        }
+    }
+
+    // BH vs BY: p_value/hits method-independent, ≥1 fdr differs (matched by
+    // entry_id so the assertion does not couple to FDR sort order).
+    let bh = run(FdrMethod::BenjaminiHochberg);
+    let by = run(FdrMethod::BenjaminiYekutieli);
+    let by_by_id: std::collections::HashMap<String, (f64, usize, f64)> = by
+        .rows
+        .iter()
+        .map(|r| (r.entry_id.clone(), (r.p_value, r.hits, r.fdr)))
+        .collect();
+    let mut any_fdr_differs = false;
+    for a in &bh.rows {
+        let (by_p, by_hits, by_fdr) = by_by_id[&a.entry_id];
+        assert!(
+            (a.p_value - by_p).abs() < 1e-12,
+            "p_value must be method-independent for {}",
+            a.entry_id
+        );
+        assert_eq!(a.hits, by_hits, "hits must be method-independent");
+        if (a.fdr - by_fdr).abs() > 1e-12 {
+            any_fdr_differs = true;
+        }
+    }
+    assert!(
+        any_fdr_differs,
+        "BY's harmonic factor must shift at least one fdr vs BH"
+    );
 }
 
 /// k_p = 0 (and the cousins M_p = 0, K = 0) short-circuit cleanly.

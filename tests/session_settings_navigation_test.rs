@@ -75,7 +75,7 @@ fn populated_settings() -> SessionSettings {
         enrichment_fdr_threshold: 0.1,
         min_hit_count: 3,
         min_entry_size: 5,
-        enrichment_fdr_method: FdrMethod::BenjaminiYekutieli,
+        enrichment_fdr_method: FdrMethod::BenjaminiHochberg,
         stage3_export_width_in: 5.0,
         stage3_export_height_in: 10.0,
         stage3_export_dpi: 600,

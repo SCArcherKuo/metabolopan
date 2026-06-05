@@ -10,13 +10,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::app::SessionSettings;
 
-/// Current schema version. Bumped exactly one when any field of
+/// Current schema version. Bumped by exactly one when any field of
 /// `Snapshot`, `InputFileEntry`, `SessionSettings`, or any enum
 /// transitively referenced by `SessionSettings` changes name, is removed,
 /// or is added. Triple-locked against drift by the
-/// `tests/fixtures/settings_default_v3.json` golden fixture + the
-/// version-rock test in `tests/session_io_test.rs`.
-pub const SCHEMA_VERSION: u32 = 3;
+/// `tests/fixtures/settings_default_v1.json` golden fixture + the
+/// version-rock test in `tests/session_io_test.rs`. (Reset `3 → 1` once,
+/// pre-adoption, collapsing the internal `1→2→3` dev-churn history — a
+/// one-time carve-out documented in the `session-settings-io` "tracked
+/// invariant" spec; the monotonic +1 rule governs every change after it.)
+pub const SCHEMA_VERSION: u32 = 1;
 
 /// Top-level shape of a saved settings JSON file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,7 +108,7 @@ mod tests {
             enrichment_fdr_threshold: 0.1,
             min_hit_count: 3,
             min_entry_size: 5,
-            enrichment_fdr_method: FdrMethod::BenjaminiYekutieli,
+            enrichment_fdr_method: FdrMethod::BenjaminiHochberg,
             stage3_export_width_in: 5.0,
             stage3_export_height_in: 10.0,
             stage3_export_dpi: 600,

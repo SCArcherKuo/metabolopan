@@ -1119,6 +1119,31 @@ fn compute_kegg_conv_time_span(
 mod tests {
     use super::*;
     use crate::dam::types::{DamFeature, FcBasis, Trend};
+    use tracing_test::traced_test;
+
+    // Decision A (logs are contract): the conflict-only-strict exclusion INFO log
+    // is verified directly. `log_k_diagnostics` is private (only reachable from
+    // inside this module — `run_stage3` would need a fully resolved &[DamResult] +
+    // network-derived maps), so the test calls it directly with
+    // `n_excluded_conflict > 0` and a `conflict_sample` naming a known cpd, and
+    // asserts the event fires and its `sample` field names that cpd.
+    #[traced_test]
+    #[test]
+    fn conflict_sample_info_log_fires_and_names_excluded_cpd() {
+        let dam_cpd: std::collections::HashSet<String> =
+            ["C00001".to_string()].into_iter().collect();
+        let conflict_sample = vec!["C00002".to_string()];
+        let entries: Vec<crate::kegg::KeggCompoundSet> = Vec::new();
+        log_k_diagnostics(&dam_cpd, None, 1, &conflict_sample, &entries, &None);
+        assert!(
+            logs_contain("cpds excluded from K by the conflict-only-strict rule"),
+            "conflict-exclusion INFO event must fire when n_excluded_conflict > 0"
+        );
+        assert!(
+            logs_contain("C00002"),
+            "the conflict event's `sample` field must name the excluded cpd"
+        );
+    }
 
     fn synth_feature(
         inchikey: Option<&str>,
