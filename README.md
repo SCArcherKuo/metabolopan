@@ -27,9 +27,13 @@ Upload an MS-DIAL `.txt` (wide-format intensity table) and a group-mapping `.csv
 
 Pick numerator and denominator groups; optionally pick a sample normalization method (`None` / `Sum` / `Median` / `Metadata column` / `Quantile` / `PQN`) that's applied column-wise to the intensity matrix before any per-feature work; choose whether the parametric paths apply the `arcsinh` `Log transformation` (checkbox default ON; force-disabled and auto-cleared on Brunner–Munzel because BM is rank-based); run differential-abundance analysis (Student's t-test by default, with Welch's t-test and the non-parametric Brunner–Munzel + Cliff's δ as alternatives); pick the FDR correction (Benjamini–Hochberg by default — matches R `p.adjust` / MetaboAnalyst — with Benjamini–Yekutieli as the more conservative alternative); set fold-change / FDR thresholds, and view / export a volcano plot plus the DAM result table.
 
-| DAM setup | Volcano plot |
+| DAM setup | DAM result |
 | :-: | :-: |
-| ![DAM setup](docs/screenshots/stage2_dam_setup.png) | ![Volcano plot](docs/screenshots/stage2_dam_result1.png) |
+| ![DAM setup](docs/screenshots/stage2_dam_setup.png) | ![DAM result](docs/screenshots/stage2_dam_result1.png) |
+
+| Volcano plot |
+| :-: |
+| ![Volcano plot](docs/screenshots/stage2_dam_result2.png) |
 
 ### Stage 3 — Enrichment
 
@@ -37,9 +41,13 @@ Pick the **analysis mode** (Pathway or Module) and the corresponding scope (a KE
 
 The orchestrator converts the DAM compounds' InChIKeys to PubChem CIDs (PubChem PUG REST), maps PubChem CIDs to KEGG compound IDs (KEGG REST), and runs a hypergeometric ORA against either the species' pathways or the taxonomy Group's modules. The Enrichment Result screen shows the dot plot preview (with a mode-aware **Top N** input alongside Re-run + Refresh buttons) and a PNG / CSV export. The dot plot selects and orders entries on **two different bases**: it keeps the **Top N most significant** entries (lowest FDR), then arranges them top-to-bottom by **fold enrichment descending** (largest on top, matching the clusterProfiler convention of ordering the Y axis by the X-axis metric) — so significance gates which entries appear and effect size only arranges the ones that got in. The plot height auto-fits the number of rows shown and re-fits on every Draw / Re-draw, unless you hand-set the **Height (in)** field.
 
-| Enrichment setup | Dot plot |
+| Enrichment setup | Enrichment result |
 | :-: | :-: |
-| ![Enrichment setup](docs/screenshots/stage3_enrichment_analysis_setup.png) | ![Dot plot](docs/screenshots/stage3_enrichment_result1.png) |
+| ![Enrichment setup](docs/screenshots/stage3_ea_setup.png) | ![Enrichment result](docs/screenshots/stage3_ea_result1.png) |
+
+| Dot plot |
+| :-: |
+| ![Dot plot](docs/screenshots/stage3_ea_result2.png) |
 
 
 #### Pathway mode vs Module mode

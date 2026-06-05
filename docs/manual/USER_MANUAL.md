@@ -1,6 +1,6 @@
 # User Manual
 
-Software version: metabolopan v1.2.0
+Software version: metabolopan v1.2.1
 
 Update date: 2026-06-05
 
@@ -972,7 +972,7 @@ The example shows the optional fields populated — `null` is their default (see
 ```json
 {
   "schema_version": 1,
-  "app_version": "1.2.0",
+  "app_version": "1.2.1",
   "saved_at": "2026-06-04T09:15:22Z",
   "user_note": "",
   "input_files": [
