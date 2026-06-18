@@ -95,8 +95,9 @@ pub struct ModuleFetchProgress {
     pub eta_secs: Option<u64>,
 }
 
-/// Precomputed index from KEGG taxonomy lineage (the 4th column of
-/// `/list/organism`, semicolon-delimited) to organism codes. Three levels
+/// Precomputed index from KEGG taxonomy lineage (the semicolon-delimited
+/// `KeggOrganism.lineage`, reconstructed from the BRITE `br08601` hierarchy)
+/// to organism codes. Three levels
 /// are exposed in the UI: Level 1 (e.g. Eukaryotes / Prokaryotes), Level 2
 /// (e.g. Animals, Bacteria), Level 3 (e.g. Mammals, Insects).
 ///

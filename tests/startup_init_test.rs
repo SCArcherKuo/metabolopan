@@ -162,11 +162,22 @@ async fn fresh_fetch_writes_both_caches_with_matching_timestamps() {
     reset_caches();
 
     let server = MockServer::start().await;
+    // BRITE `br08601` hierarchy (the `/list/organism` database was removed
+    // upstream). Indentation is significant → literal-newline string.
     Mock::given(method("GET"))
-        .and(path("/list/organism"))
+        .and(path("/get/br:br08601"))
         .respond_with(ResponseTemplate::new(200).set_body_string(
-            "T01001\thsa\tHomo sapiens (human)\tEukaryotes;Animals;Mammals;Primates\n\
-             T00041\tath\tArabidopsis thaliana\tEukaryotes;Plants;Eudicots;Brassicales\n",
+            "\
+AEukaryotes (2)
+B  Animals (1)
+C    Mammals (1)
+D      Primates (1)
+E        hsa  Homo sapiens (human)
+B  Plants (1)
+C    Eudicots (1)
+D      Brassicales (1)
+E        ath  Arabidopsis thaliana
+",
         ))
         .mount(&server)
         .await;
@@ -238,11 +249,22 @@ async fn refresh_invalidates_then_relists_and_rewrites_both_caches() {
 
     // REST now returns a DIFFERENT roster (2 organisms).
     let server = MockServer::start().await;
+    // BRITE `br08601` hierarchy (the `/list/organism` database was removed
+    // upstream). Indentation is significant → literal-newline string.
     Mock::given(method("GET"))
-        .and(path("/list/organism"))
+        .and(path("/get/br:br08601"))
         .respond_with(ResponseTemplate::new(200).set_body_string(
-            "T01001\thsa\tHomo sapiens (human)\tEukaryotes;Animals;Mammals;Primates\n\
-             T00041\tath\tArabidopsis thaliana\tEukaryotes;Plants;Eudicots;Brassicales\n",
+            "\
+AEukaryotes (2)
+B  Animals (1)
+C    Mammals (1)
+D      Primates (1)
+E        hsa  Homo sapiens (human)
+B  Plants (1)
+C    Eudicots (1)
+D      Brassicales (1)
+E        ath  Arabidopsis thaliana
+",
         ))
         .mount(&server)
         .await;

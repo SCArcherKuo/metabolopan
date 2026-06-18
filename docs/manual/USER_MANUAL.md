@@ -1,8 +1,8 @@
 # User Manual
 
-Software version: metabolopan v1.2.2
+Software version: metabolopan v1.2.3
 
-Update date: 2026-06-05
+Update date: 2026-06-19
 
 This manual documents what the software does numerically — algorithms, default thresholds, deviations from common alternatives — so you can defend any number it produces in a paper or report.
 Read this once before publishing results that depend on the software.
@@ -972,7 +972,7 @@ The example shows the optional fields populated — `null` is their default (see
 ```json
 {
   "schema_version": 1,
-  "app_version": "1.2.2",
+  "app_version": "1.2.3",
   "saved_at": "2026-06-04T09:15:22Z",
   "user_note": "",
   "input_files": [

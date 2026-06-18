@@ -84,9 +84,12 @@ impl KeggClient {
     }
 
     pub async fn list_organisms(&self) -> Result<Vec<KeggOrganism>> {
-        let url = self.endpoint("list/organism")?;
+        // The `/list/organism` special database was removed from the official
+        // host (now HTTP 400); the BRITE "KEGG Organism" hierarchy `br08601`
+        // carries the same roster with the taxonomy needed for the Group tree.
+        let url = self.endpoint("get/br:br08601")?;
         let text = self.simple_get(&url).await?;
-        Ok(parse_organism_list(&text))
+        Ok(parse_brite_organism_hierarchy(&text))
     }
 
     pub async fn list_pathways(&self, organism: &str) -> Result<Vec<(String, String)>> {
@@ -511,26 +514,83 @@ fn default_http_client() -> reqwest::Client {
     crate::cache_io::http_client(Duration::from_secs(30))
 }
 
-pub fn parse_organism_list(text: &str) -> Vec<KeggOrganism> {
+/// Parse the KEGG BRITE "KEGG Organism" hierarchy (`GET /get/br:br08601`) into
+/// a flat organism list. The `/list/organism` special database was removed from
+/// the official host (it now returns HTTP 400); `br08601` carries the same
+/// roster as a taxonomy hierarchy whose leading character encodes the level:
+/// `A` (Eukaryotes / Prokaryotes) → `B` (Animals / Bacteria / …) → `C`
+/// (Mammals / …) → `D` (Primates / …) → `E` (leaf organism). `A`/`B`/`C`/`D`
+/// lines name a group with a trailing ` (<count>)` occurrence count (stripped);
+/// `E` leaves are `code  Scientific name (common name)`.
+///
+/// The reconstructed `lineage` is the accumulated `A`/`B`/`C`/`D` group names
+/// joined by `;`, matching the semicolon-delimited form
+/// [`build_organism_group_index`](crate::kegg::build_organism_group_index)
+/// consumes. BRITE carries no KEGG T-numbers, so `t_number` is synthesized as
+/// `T_{code}` (an inert placeholder; nothing downstream reads it as a real
+/// identifier). Non-data lines (`+`, `!`, `#`, blank) are skipped.
+pub fn parse_brite_organism_hierarchy(text: &str) -> Vec<KeggOrganism> {
     let mut out = Vec::new();
+    // Current group name at each of the 4 taxonomy levels (A, B, C, D).
+    let mut levels: [String; 4] = [String::new(), String::new(), String::new(), String::new()];
     for line in text.lines() {
-        if line.trim().is_empty() {
-            continue;
+        let mut chars = line.chars();
+        let Some(prefix) = chars.next() else {
+            continue; // blank line
+        };
+        let body = chars.as_str().trim();
+        match prefix {
+            'A' | 'B' | 'C' | 'D' => {
+                let depth = (prefix as u8 - b'A') as usize;
+                levels[depth] = strip_brite_count_suffix(body).to_string();
+                // Clear deeper levels so a sibling branch can't inherit a stale
+                // descendant name from the previous branch.
+                for deeper in levels.iter_mut().skip(depth + 1) {
+                    deeper.clear();
+                }
+            }
+            'E' => {
+                let mut parts = body.splitn(2, char::is_whitespace);
+                let code = parts.next().unwrap_or("").trim().to_string();
+                if code.is_empty() {
+                    warn!(line = %line, "skipping BRITE organism leaf with empty code");
+                    continue;
+                }
+                let name = parts.next().unwrap_or("").trim().to_string();
+                let lineage = levels
+                    .iter()
+                    .filter(|l| !l.is_empty())
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(";");
+                out.push(KeggOrganism {
+                    t_number: format!("T_{code}"),
+                    code,
+                    name,
+                    lineage,
+                });
+            }
+            // '+' (column header), '!' (section marker), '#' (metadata), and any
+            // other leading marker are non-data lines; skip.
+            _ => continue,
         }
-        let fields: Vec<&str> = line.split('\t').collect();
-        if fields.len() < 4 {
-            warn!(line = %line, "skipping malformed organism line (< 4 fields)");
-            continue;
-        }
-        // KEGG `/list/organism` order is `T-number\tcode\tname\tlineage`.
-        out.push(KeggOrganism {
-            t_number: fields[0].trim().to_string(),
-            code: fields[1].trim().to_string(),
-            name: fields[2].trim().to_string(),
-            lineage: fields[3].trim().to_string(),
-        });
     }
     out
+}
+
+/// Strip a trailing ` (<digits>)` occurrence-count suffix that BRITE appends to
+/// group names (e.g. `Animals (846)` → `Animals`). Only an all-digit
+/// parenthesized suffix is removed, so a group name with other trailing parens
+/// is left intact; leaf common-name parens (e.g. `(human)`) never reach here.
+fn strip_brite_count_suffix(s: &str) -> &str {
+    if let Some(open) = s.rfind(" (")
+        && let Some(inner) = s[open + 2..].strip_suffix(')')
+        && !inner.is_empty()
+        && inner.bytes().all(|b| b.is_ascii_digit())
+    {
+        return s[..open].trim_end();
+    }
+    s
 }
 
 /// Parse `/list/module` response (tab-delimited 2-column: `M00001\tname`).
@@ -741,16 +801,67 @@ REFERENCE   x
         assert_eq!(out[1].0, "gmx00020");
     }
 
+    /// A minimal `br08601` BRITE excerpt with the real wrapper lines, two
+    /// sibling level-4 branches under one level-3, and a second level-2 branch
+    /// to exercise the deeper-level clearing logic.
+    const BRITE_SAMPLE: &str = "\
++E\tKEGG Organism
+!
+AEukaryotes (1307)
+B  Animals (846)
+C    Mammals (184)
+D      Primates (33)
+E        hsa  Homo sapiens (human)
+E        ptr  Pan troglodytes (chimpanzee)
+D      Rodents (29)
+E        mmu  Mus musculus (house mouse)
+B  Plants (200)
+C    Eudicots (100)
+D      Brassicales (10)
+E        ath  Arabidopsis thaliana (thale cress)
+#Last updated: June 18, 2026
+";
+
     #[test]
-    fn parse_organism_list_extracts_all_fields() {
-        // Real KEGG order: T-number\tcode\tname\tlineage.
-        let text = "T01710\tgmx\tGlycine max (soybean)\tEukaryota;Plants;Eudicots;Core eudicots;Rosids;Eurosids I;Fabales\n";
-        let out = parse_organism_list(text);
-        assert_eq!(out.len(), 1);
-        assert_eq!(out[0].t_number, "T01710");
-        assert_eq!(out[0].code, "gmx");
-        assert_eq!(out[0].name, "Glycine max (soybean)");
-        assert!(out[0].lineage.contains("Fabales"));
+    fn parse_brite_reconstructs_lineage_and_synthesizes_t_number() {
+        let out = parse_brite_organism_hierarchy(BRITE_SAMPLE);
+        assert_eq!(out.len(), 4);
+        // First leaf: full 4-level lineage, count suffixes stripped, common-name
+        // parens preserved, synthetic `T_{code}`.
+        assert_eq!(out[0].code, "hsa");
+        assert_eq!(out[0].t_number, "T_hsa");
+        assert_eq!(out[0].name, "Homo sapiens (human)");
+        assert_eq!(out[0].lineage, "Eukaryotes;Animals;Mammals;Primates");
+    }
+
+    #[test]
+    fn parse_brite_clears_deeper_levels_across_sibling_branches() {
+        let out = parse_brite_organism_hierarchy(BRITE_SAMPLE);
+        let by_code = |c: &str| out.iter().find(|o| o.code == c).expect("present").clone();
+        // Sibling D-branch under the same C: lineage swaps Primates → Rodents.
+        assert_eq!(by_code("mmu").lineage, "Eukaryotes;Animals;Mammals;Rodents");
+        // New B-branch (Plants) must not inherit Animals' C/D descendants.
+        assert_eq!(
+            by_code("ath").lineage,
+            "Eukaryotes;Plants;Eudicots;Brassicales"
+        );
+    }
+
+    #[test]
+    fn parse_brite_skips_non_data_lines() {
+        // The `+`, `!`, and `#` wrapper lines in BRITE_SAMPLE produce no records.
+        let out = parse_brite_organism_hierarchy(BRITE_SAMPLE);
+        assert!(out.iter().all(|o| !o.code.is_empty()));
+        assert_eq!(out.len(), 4); // only the four E leaves
+    }
+
+    #[test]
+    fn strip_brite_count_suffix_only_strips_digit_parens() {
+        assert_eq!(strip_brite_count_suffix("Animals (846)"), "Animals");
+        assert_eq!(strip_brite_count_suffix("Eukaryotes (1307)"), "Eukaryotes");
+        // A non-digit parenthetical is left intact (defensive).
+        assert_eq!(strip_brite_count_suffix("Group (TBD)"), "Group (TBD)");
+        assert_eq!(strip_brite_count_suffix("NoParens"), "NoParens");
     }
 
     #[test]

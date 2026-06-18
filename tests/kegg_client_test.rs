@@ -6,10 +6,24 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use metabolopan::kegg::{KeggClient, KeggProgress};
 
 fn organism_body() -> &'static str {
-    // Real KEGG `/list/organism` order: T-number\tcode\tname\tlineage.
-    "T01710\tgmx\tGlycine max (soybean)\tEukaryota;Plants;Eudicots;Core eudicots;Rosids;Eurosids I;Fabales\n\
-     T01791\tsly\tSolanum lycopersicum (tomato)\tEukaryota;Plants;Eudicots;Core eudicots;Asterids;Lamiids;Solanales\n\
-     T00041\tath\tArabidopsis thaliana (thale cress)\tEukaryota;Plants;Eudicots;Core eudicots;Rosids;Malvids;Brassicales\n"
+    // KEGG BRITE "KEGG Organism" hierarchy (`/get/br:br08601`): leading char is
+    // the taxonomy level A→E; indentation is significant, so this uses a
+    // literal-newline string (no `\`-continuation, which would eat leading
+    // whitespace). Group names carry a ` (count)` suffix the parser strips.
+    "\
++E\tKEGG Organism
+!
+AEukaryotes (3)
+B  Plants (3)
+C    Eudicots (3)
+D      Fabales (1)
+E        gmx  Glycine max (soybean)
+D      Solanales (1)
+E        sly  Solanum lycopersicum (tomato)
+D      Brassicales (1)
+E        ath  Arabidopsis thaliana (thale cress)
+#Last updated: June 18, 2026
+"
 }
 
 fn pathway_list_body() -> &'static str {
@@ -47,7 +61,7 @@ fn build_client(server: &MockServer) -> KeggClient {
 async fn list_organisms_parses_three_records() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/list/organism"))
+        .and(path("/get/br:br08601"))
         .respond_with(ResponseTemplate::new(200).set_body_string(organism_body()))
         .mount(&server)
         .await;
@@ -56,7 +70,8 @@ async fn list_organisms_parses_three_records() {
     let organisms = client.list_organisms().await.expect("list organisms");
     assert_eq!(organisms.len(), 3);
     assert_eq!(organisms[0].code, "gmx");
-    assert_eq!(organisms[0].t_number, "T01710");
+    // BRITE carries no T-numbers; the parser synthesizes `T_{code}`.
+    assert_eq!(organisms[0].t_number, "T_gmx");
     assert!(organisms[0].name.contains("Glycine max"));
     assert!(organisms[0].lineage.contains("Fabales"));
 }

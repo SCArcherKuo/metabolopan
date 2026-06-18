@@ -994,7 +994,7 @@ pub struct App {
     pub rt: Runtime,
     pub kegg: KeggClient,
     /// Eager-loaded KEGG organism roster. Session-immutable; loaded once
-    /// at startup from `organisms.json` cache or via `/list/organism`.
+    /// at startup from `organisms.json` cache or via `/get/br:br08601`.
     /// Does NOT belong in `SessionCache` (does not vary per-analysis).
     pub organisms: OrganismsLoad,
     /// Pathway-mode species selector UI state (filter text, scroll,
@@ -1066,7 +1066,7 @@ impl App {
         // Eagerly load the organism list before the user interacts with
         // any UI (Track C / kegg-fetching spec). Initial state is
         // `Initializing` showing a splash; a cache hit is sub-frame,
-        // a cold network fetch shows the spinner during `/list/organism`.
+        // a cold network fetch shows the spinner during `/get/br:br08601`.
         // Read any existing cache (even stale) to provide a "Use cached"
         // fallback on failure.
         let fallback_cache = match crate::kegg::cache::read_organisms() {
@@ -2170,7 +2170,7 @@ impl App {
 /// Spawn the eager organism-list load on the tokio runtime and return a
 /// receiver the UI thread will drain each frame while in
 /// `AppState::Initializing`. Reads from cache when present (sub-frame);
-/// otherwise issues `GET /list/organism`. Either path also rewrites the
+/// otherwise issues `GET /get/br:br08601`. Either path also rewrites the
 /// derived `organism_groups.json` precompute (see `kegg::list_organisms`).
 fn spawn_eager_organism_load(
     client: &KeggClient,

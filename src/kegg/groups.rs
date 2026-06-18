@@ -1,8 +1,9 @@
 //! Build the `OrganismGroupIndex` from a loaded organism list.
 //!
-//! KEGG `/list/organism` returns one row per organism with a 4-level
-//! semicolon-delimited taxonomy in column 4 (e.g.
-//! `Eukaryotes;Animals;Mammals;Primates`). Module mode lets the user pick
+//! Each `KeggOrganism` carries a 4-level semicolon-delimited taxonomy in its
+//! `lineage` (e.g. `Eukaryotes;Animals;Mammals;Primates`), reconstructed from
+//! the KEGG BRITE `br08601` hierarchy's `A`/`B`/`C`/`D` nesting at fetch time.
+//! Module mode lets the user pick
 //! one of the first three levels and a Group within that level; this
 //! function precomputes the (level, group) → set-of-codes map so the UI
 //! can populate the Group dropdown without re-walking the organism list.

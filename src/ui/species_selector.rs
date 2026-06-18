@@ -162,15 +162,22 @@ fn picker_body(
     ui.separator();
 
     // The ScrollArea fills the remaining vertical space inside the resizable
-    // Window — drag the window's bottom-right corner to see more rows.
+    // Window — drag the window's bottom-right corner to see more rows. Rows are
+    // virtualized (`show_rows` builds only the visible viewport), so the FULL
+    // roster (~11.8k organisms) scrolls without a fixed cap and without
+    // materializing one widget per organism each frame.
+    let row_height = ui.text_style_height(&egui::TextStyle::Body);
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
-        .show(ui, |ui| {
+        .show_rows(ui, row_height, filtered.len(), |ui, row_range| {
             // Selected row renders as a §3.3 Primary item: opaque PRIMARY fill
             // + white label (vs the translucent default text-selection halo).
             ui.style_mut().visuals.selection.bg_fill = theme::PRIMARY;
-            const MAX_ROWS: usize = 1000;
-            for org in filtered.iter().take(MAX_ROWS) {
+            // `show_rows` assumes a uniform row height; truncate long
+            // `code — name` rows to a single line so they never wrap to two
+            // (which would desync the scroll math). Full text is in the hover.
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+            for org in filtered[row_range].iter() {
                 let is_current = Some(org.code.as_str()) == current;
                 let label_text = format!("{} — {}", org.code, org.name);
                 let label = if is_current {
@@ -185,16 +192,6 @@ fn picker_body(
                 {
                     event = SpeciesSelectorEvent::Selected(org.code.clone());
                 }
-            }
-            if filtered.len() > MAX_ROWS {
-                ui.label(
-                    RichText::new(format!(
-                        "… {} more — refine your search",
-                        filtered.len() - MAX_ROWS
-                    ))
-                    .small()
-                    .color(theme::TEXT),
-                );
             }
         });
 
