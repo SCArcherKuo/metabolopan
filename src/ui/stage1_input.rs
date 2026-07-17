@@ -303,7 +303,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                 if !unmatched.is_empty() {
                     ui.add_space(8.0);
                     egui::Frame::group(ui.style())
-                        .stroke(egui::Stroke::new(1.0, theme::ERROR))
+                        .stroke(egui::Stroke::new(1.0_f32,theme::ERROR))
                         .show(ui, |ui| {
                             ui.colored_label(
                                 theme::ERROR,

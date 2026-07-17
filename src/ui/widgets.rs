@@ -261,7 +261,7 @@ pub fn primary_dropdown<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) ->
     ui.scope(|ui| {
         let v = &mut ui.style_mut().visuals;
         v.widgets.inactive.weak_bg_fill = theme::ON_PRIMARY;
-        v.widgets.inactive.bg_stroke = Stroke::new(1.0, theme::SURFACE);
+        v.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, theme::SURFACE);
         v.widgets.open.weak_bg_fill = theme::ON_PRIMARY;
         v.selection.bg_fill = theme::PRIMARY;
         add(ui)

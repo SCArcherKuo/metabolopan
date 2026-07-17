@@ -200,18 +200,18 @@ fn build_palette_visuals() -> Visuals {
     // "ACCENT line vocabulary", design D4), kept distinct from interactive
     // borders. The interactive `bg_stroke`s realize the §2/§3 Secondary 1px
     // border: 晨霧水藍 idle, brightening to 晴空藍 on hover / press.
-    v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, ACCENT);
-    v.widgets.inactive.bg_stroke = Stroke::new(1.0, SURFACE);
-    v.widgets.hovered.bg_stroke = Stroke::new(1.0, PRIMARY);
-    v.widgets.active.bg_stroke = Stroke::new(1.0, PRIMARY);
-    v.widgets.noninteractive.fg_stroke = Stroke::new(1.0, TEXT);
-    v.widgets.inactive.fg_stroke = Stroke::new(1.0, TEXT);
-    v.widgets.hovered.fg_stroke = Stroke::new(1.0, TEXT);
+    v.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, ACCENT);
+    v.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, SURFACE);
+    v.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, PRIMARY);
+    v.widgets.active.bg_stroke = Stroke::new(1.0_f32, PRIMARY);
+    v.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, TEXT);
+    v.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, TEXT);
+    v.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, TEXT);
     // `active.fg_stroke = TEXT` (dark mark/label) so pressed Secondary buttons
     // and checked checkboxes/radios read with the §2/§3 Secondary dark `#2D2C2A`
     // mark. Primary widgets get their white label from the helper's
     // `RichText::color(ON_PRIMARY)`, NOT from this field.
-    v.widgets.active.fg_stroke = Stroke::new(1.0, TEXT);
+    v.widgets.active.fg_stroke = Stroke::new(1.0_f32, TEXT);
 
     // ── Selection / focus ──
     //
@@ -228,7 +228,7 @@ fn build_palette_visuals() -> Visuals {
         PRIMARY.b(),
         96, // ~37.6% opacity
     );
-    v.selection.stroke = Stroke::new(1.0, PRIMARY);
+    v.selection.stroke = Stroke::new(1.0_f32, PRIMARY);
 
     // ── Semantic / global text ──
     v.hyperlink_color = LINK;
@@ -237,7 +237,7 @@ fn build_palette_visuals() -> Visuals {
     v.error_fg_color = ERROR;
 
     // ── Window chrome (modals reuse this — no new modal tokens) ──
-    v.window_stroke = Stroke::new(1.0, ACCENT);
+    v.window_stroke = Stroke::new(1.0_f32, ACCENT);
 
     v
 }
@@ -274,25 +274,25 @@ mod tests {
         v.widgets.active.weak_bg_fill = SURFACE;
         v.widgets.open.weak_bg_fill = FILL_SECONDARY_HOVER;
         // Strokes
-        v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, ACCENT);
-        v.widgets.inactive.bg_stroke = Stroke::new(1.0, SURFACE);
-        v.widgets.hovered.bg_stroke = Stroke::new(1.0, PRIMARY);
-        v.widgets.active.bg_stroke = Stroke::new(1.0, PRIMARY);
-        v.widgets.noninteractive.fg_stroke = Stroke::new(1.0, TEXT);
-        v.widgets.inactive.fg_stroke = Stroke::new(1.0, TEXT);
-        v.widgets.hovered.fg_stroke = Stroke::new(1.0, TEXT);
-        v.widgets.active.fg_stroke = Stroke::new(1.0, TEXT);
+        v.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, ACCENT);
+        v.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, SURFACE);
+        v.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, PRIMARY);
+        v.widgets.active.bg_stroke = Stroke::new(1.0_f32, PRIMARY);
+        v.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, TEXT);
+        v.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, TEXT);
+        v.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, TEXT);
+        v.widgets.active.fg_stroke = Stroke::new(1.0_f32, TEXT);
         // Selection / focus
         v.selection.bg_fill =
             Color32::from_rgba_unmultiplied(PRIMARY.r(), PRIMARY.g(), PRIMARY.b(), 96);
-        v.selection.stroke = Stroke::new(1.0, PRIMARY);
+        v.selection.stroke = Stroke::new(1.0_f32, PRIMARY);
         // Semantic / global text
         v.hyperlink_color = LINK;
         v.override_text_color = Some(TEXT);
         v.warn_fg_color = WARNING;
         v.error_fg_color = ERROR;
         // Window chrome
-        v.window_stroke = Stroke::new(1.0, ACCENT);
+        v.window_stroke = Stroke::new(1.0_f32, ACCENT);
         v
     }
 
