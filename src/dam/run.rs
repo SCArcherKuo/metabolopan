@@ -18,8 +18,8 @@ use crate::dedup::{DedupReport, run_dedup};
 use crate::normalize::NormalizationConfig;
 
 /// Configuration for a single [`run_dam`] invocation: the statistical method,
-/// the column-wise normalization, the three pre-test filters / transforms, and
-/// the FDR correction. Bundled into one struct so the three adjacent `bool`
+/// the column-wise normalization, the pre-test filters / transforms, and
+/// the FDR correction. Bundled into one struct so the `bool`
 /// flags (`drop_unknown` / `dedup_enabled` / `log_transform`) cannot be
 /// transposed at the call site — the footgun the prior 11-positional-arg
 /// signature carried under `#[allow(clippy::too_many_arguments)]`.
@@ -37,8 +37,14 @@ pub struct DamConfig {
     pub normalization: NormalizationConfig,
     /// Drop features whose `inchikey.is_none()` before pre-filter / stats / FDR.
     pub drop_unknown: bool,
-    /// Apply the cascade-only InChIKey deduplication mask in the per-feature loop.
+    /// Apply the InChIKey + retention-time deduplication mask in the per-feature loop.
     pub dedup_enabled: bool,
+    /// ± retention-time window (minutes) for dedup clustering: each retention-time
+    /// cluster's RT span is bounded by this (complete-linkage), so same-InChIKey
+    /// features more than this far apart in retention time compete in separate
+    /// cascades and are each kept. Forwarded to `run_dedup`; ignored when
+    /// `dedup_enabled == false`. Kept finite and `> 0` (floored at 0.001 min).
+    pub dedup_rt_tolerance_min: f64,
     /// Apply the `arcsinh` generalised-log variance-stabilisation step on the
     /// Welch / Student paths (BM ignores it — arcsinh is monotone, so ranks are
     /// invariant under it).
@@ -82,15 +88,14 @@ pub async fn run_dam(
     config: &DamConfig,
     progress_tx: Option<mpsc::Sender<DamProgress>>,
 ) -> Result<DamResult> {
-    // Destructure the config into locals so the body below reads exactly as it
-    // did under the prior positional signature — this change is pure
-    // re-packaging of the same six values in the same order, so the output is
-    // bit-identical. `normalization` stays a borrow (`NormalizationConfig` is
-    // `Clone`, not `Copy`); the two enums and three bools are `Copy`.
+    // Destructure the config into locals so the body below reads cleanly.
+    // `normalization` stays a borrow (`NormalizationConfig` is `Clone`, not
+    // `Copy`); the two enums, three bools, and the `f64` tolerance are `Copy`.
     let method = config.method;
     let normalization = &config.normalization;
     let drop_unknown = config.drop_unknown;
     let dedup_enabled = config.dedup_enabled;
+    let dedup_rt_tolerance_min = config.dedup_rt_tolerance_min;
     let log_transform = config.log_transform;
     let fdr_method = config.fdr_method;
 
@@ -133,7 +138,7 @@ pub async fn run_dam(
     // singletons and null-InChIKey features are always kept.
     let (kept_indices_opt, dedup_report_opt): (Option<HashSet<usize>>, Option<DedupReport>) =
         if dedup_enabled {
-            let (kept, report) = run_dedup(&table.features);
+            let (kept, report) = run_dedup(&table.features, dedup_rt_tolerance_min);
             (Some(kept), Some(report))
         } else {
             (None, None)

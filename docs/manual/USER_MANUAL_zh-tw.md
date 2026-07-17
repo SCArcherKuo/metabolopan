@@ -1,8 +1,8 @@
 # 使用手冊
 
-軟體版本：metabolopan v1.2.3
+軟體版本：metabolopan v1.3.0
 
-更新日期：2026-06-19
+更新日期：2026-07-17
 
 本手冊記錄本軟體在數值上的運作方式——演算法、預設門檻值、以及與常見替代做法的差異——讓你能在論文或報告中為它產生的每一個數字辯護。
 在發表任何依賴本軟體的結果之前，請先閱讀一次本手冊。
@@ -113,6 +113,7 @@
       - [7. 將圖匯出為 PNG](#7-exporting-the-figure-as-png)
       - [DAM 值得注意的事項](#dam-caveats-worth-knowing)
     - [以 InChIKey 去除重複](#deduplication-by-inchikey)
+      - [滯留時間群集](#retention-time-clustering)
       - [級聯決策表](#cascade-decision-table)
       - [稽核 CSV](#audit-csv)
       - [停用](#opt-out)
@@ -382,10 +383,34 @@ MS-DIAL 經常為解析到同一個化合物的多個 Alignment ID 各自輸出�
 
 **去除重複以「預設啟用、可關閉」的切換開關呈現於第二階段設定畫面（預設開啟）。** 此級聯*純粹*是去除重複作業，並非通用的品質過濾器——`inchikey = None` 的特徵會原封不動地通過，而單一條目（一個 InChIKey 只對應一個 Alignment ID）即使鑑定品質不佳也會被保留。
 
+<a id="retention-time-clustering"></a>
+#### 滯留時間群集（Retention-time clustering）
+
+共用同一個 InChIKey 是「兩列為同一個層析峰」的必要條件，但不總是充分。
+位置異構物或立體異構物可能共用同一個 InChIKey 骨架、卻在不同的滯留時間沖提；而被重新註記到母體的 in-source 碎片，也可能出現在離真正峰很遠的位置。
+把這些塌縮成單一特徵，會捨棄掉真實、且已被層析解析開來的訊號。
+
+因此 metabolopan 同時以 InChIKey 與滯留時間分群：在每個 InChIKey 群組內，先把特徵切分成數個滯留時間群集，底下的級聯再於每個群集內各自獨立執行。
+任兩個相同 InChIKey 的特徵，只要其滯留時間相差超過 **RT 容差**，就會落入不同群集而兩者皆保留——每個群集的整體滯留時間跨度都被限制在容差之內，因此任何超過一個容差寬度的範圍，絕不會被塌縮成單一特徵。
+
+- **RT tolerance (min)**（RT 容差，分鐘）是第二階段設定畫面上的數值欄位，就位於去除重複核取方塊的正下方（僅在去除重複開啟時可用）。預設為 **0.1 分鐘**，最小值為 **0.001 分鐘**（容差必須為嚴格正值）。
+- 分群會讓每個群集的滯留時間**跨度**（最晚成員減最早成員）維持在容差之內——等價地說，群集內任兩個特徵彼此都在容差之內（complete-linkage，完整連結）。具體作法：先依滯留時間排序，每個群集以其第一個（最早）成員為錨點；後續特徵只要與該錨點的距離在容差內就併入，否則另起新群集（跨度恰等於容差時仍算同群）。
+- **左偏（left bias）**。當某個中間特徵同時落在下方鄰居與上方鄰居的容差之內，但這兩個鄰居彼此相差超過容差時，它無法同時併入兩邊。metabolopan 會以決定性方式把它留在 **較低（較早沖提）的群集**。這是固定、可預期的慣例，而非品質判斷；若你需要它併到另一邊，請調整容差。
+- `Average Rt(min)` 為空白的特徵，無法與已知滯留時間相比對，因此每個 InChIKey 的所有這類特徵會自成一個獨立的「無滯留時間」群集，僅在彼此之間競爭。
+- 把容差設得非常大，即可對「所有列都帶有（或都缺少）滯留時間」的化合物，還原成舊有的「僅以 InChIKey」行為。
+
+滯留時間決定「哪些特徵相互競爭」，絕不決定「哪一個勝出」——底下的級聯決策表維持不變，且從不讀取滯留時間。
+
+**範例（簡單）。** 三列共用 InChIKey `AAA`：兩列的 `Average Rt(min)` 分別為 2.10 與 2.13，另一列為 8.55。
+在預設 0.1 分鐘容差下，前兩列落在同一群集（跨度 2.13 − 2.10 = 0.03 ≤ 0.1）並塌縮為單一級聯勝者，而 8.55 那列自成一個群集並被保留——因此該化合物會保留成 **兩個特徵**，而非一個。
+
+**範例（鏈 + 左偏）。** 三列共用 InChIKey `BBB`，`Average Rt(min)` 分別為 0.00、0.08、0.16 分鐘。
+相鄰間距都是 0.08 分鐘（≤ 0.1），但 0.00 到 0.16 的跨度是 0.16 分鐘（> 0.1）。由於群集的整體跨度必須維持在容差內，這三列不會全部塌縮成一個：0.00 與 0.08 那兩列形成一個群集（跨度 0.08 ≤ 0.1），而 0.16 那列被單獨保留。中間的 0.08 那列被歸入 **較低的群集**（左偏），而非與 0.16 配對。
+
 <a id="cascade-decision-table"></a>
 #### 級聯決策表（Cascade decision table）
 
-在每個相同 InChIKey 的群組內，存活的特徵由此級聯中第一個能區分兩者的層級決定：
+在每個相同 InChIKey 的滯留時間群集內，存活的特徵由此級聯中第一個能區分兩者的層級決定：
 
 | Level | Field                              | Rule                                                                                                  |
 |-------|------------------------------------|-------------------------------------------------------------------------------------------------------|
@@ -991,7 +1016,7 @@ Data 分頁中的兩個按鈕——**[Save settings…]** 與 **[Load settings�
 
 一份美化排版（pretty-printed）的 JSON，包含：
 
-- `schema_version`（目前為 `1`——磁碟上的 schema 基準）、`app_version`、`saved_at`（UTC）、一個初始為 `""` 的 `user_note` 欄——你可以用任何文字編輯器打開檔案並填入它。
+- `schema_version`（目前為 `2`——磁碟上的 schema 基準）、`app_version`、`saved_at`（UTC）、一個初始為 `""` 的 `user_note` 欄——你可以用任何文字編輯器打開檔案並填入它。
 - `input_files` — 對於你在儲存時已載入的每個 MS-DIAL `.txt` 與中繼資料 `.csv`：該檔的 basename + 其 SHA-256。
   **僅雜湊——絕不包含你的原始資料。** 這讓未來的 Load 能偵測到你的輸入是否已偏離當初製作快照所依據的版本。
 - `settings` — 從第一階段到第三階段的每一項參數（分析模式、物種 / 生物群組、比較群組、DAM 方法、正規化、FDR 方法、門檻、匯出尺寸、富集方向 / FDR / top-N）。
@@ -1005,7 +1030,7 @@ Data 分頁中的兩個按鈕——**[Save settings…]** 與 **[Load settings�
 ```json
 {
   "schema_version": 1,
-  "app_version": "1.2.3",
+  "app_version": "1.3.0",
   "saved_at": "2026-06-04T09:15:22Z",
   "user_note": "",
   "input_files": [
@@ -1048,7 +1073,7 @@ Data 分頁中的兩個按鈕——**[Save settings…]** 與 **[Load settings�
 }
 ```
 
-外層：`schema_version` 必須為 `1`（其他值在 Load 時會被拒絕）；`app_version` / `saved_at` 為提示性資訊；`user_note` 是你可手動編輯的自由文字；每個 `input_files` 條目是 `role`（`positive` / `negative` / `metadata`）+ 檔案 basename + SHA-256（僅雜湊——絕不含原始資料）。
+外層：`schema_version` 必須為 `2`（其他值在 Load 時會被拒絕）；`app_version` / `saved_at` 為提示性資訊；`user_note` 是你可手動編輯的自由文字；每個 `input_files` 條目是 `role`（`positive` / `negative` / `metadata`）+ 檔案 basename + SHA-256（僅雜湊——絕不含原始資料）。
 
 > **注意：** 少數鍵使用*物件變體*（object-variant）語法——值不是裸字串，而是一個攜帶資料的小物件，例如中繼資料正規化的 `{"Metadata":{"column":"<name>"}}`、或逐群組 PQN 參考的 `{"Group":"<name>"}`。外層鍵（`Metadata`、`Group`）為變體命名；內層物件持有其參數。
 
@@ -1066,6 +1091,7 @@ Data 分頁中的兩個按鈕——**[Save settings…]** 與 **[Load settings�
 | `dam_method` | `"Student"` \| `"Welch"` \| `"BrunnerMunzel"` | `"Student"` | **DAM method** 單選按鈕（第二階段設定） | DAM 統計檢定。 |
 | `drop_unknown` | `true` \| `false` | `true` | **Drop Unknown** 切換（第二階段設定） | 在檢定前捨棄 InChIKey 為 null 的特徵。 |
 | `dedup_enabled` | `true` \| `false` | `true` | **Dedup** 切換（第二階段設定） | 以 InChIKey 去除重複特徵（級聯）。 |
+| `dedup_rt_tolerance_min` | 數值 `> 0` | `0.1` | **RT tolerance (min)** 欄位（第二階段設定，位於 Dedup 切換下方） | ± 滯留時間窗；相同 InChIKey 但相差超過此值的特徵會被視為不同峰而各自保留。最小值 `0.001`。 |
 | `normalization` | `"None"` \| `"Sum"` \| `"Median"` \| `"Quantile"` \| `{"Metadata":{"column":"<name>"}}` \| `{"Pqn":{"reference":<pqn_reference>}}` | `"None"` | Normalization 單選按鈕（第二階段設定） | 樣本軸正規化。`Metadata` 與 `Pqn` 是攜帶資料的物件變體。 |
 | `metadata_column` | string \| `null` | `null` | Metadata-column ComboBox（第二階段設定，Metadata 正規化） | `Metadata` 正規化所用的欄。若在目前資料中不是數值中繼資料欄，Load 時重設為 `null`。 |
 | `pqn_reference` | `"AllSamples"` \| `{"Group":"<name>"}` | `"AllSamples"` | PQN reference 單選按鈕（第二階段設定，PQN 正規化） | PQN 參考光譜（只在 `normalization` 為 `Pqn` 時有意義）。 |

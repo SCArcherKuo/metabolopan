@@ -14,12 +14,14 @@ use crate::app::SessionSettings;
 /// `Snapshot`, `InputFileEntry`, `SessionSettings`, or any enum
 /// transitively referenced by `SessionSettings` changes name, is removed,
 /// or is added. Triple-locked against drift by the
-/// `tests/fixtures/settings_default_v1.json` golden fixture + the
+/// `tests/fixtures/settings_default_v2.json` golden fixture + the
 /// version-rock test in `tests/session_io_test.rs`. (Reset `3 → 1` once,
 /// pre-adoption, collapsing the internal `1→2→3` dev-churn history — a
 /// one-time carve-out documented in the `session-settings-io` "tracked
-/// invariant" spec; the monotonic +1 rule governs every change after it.)
-pub const SCHEMA_VERSION: u32 = 1;
+/// invariant" spec; the monotonic +1 rule governs every change after it,
+/// e.g. the `1 → 2` bump by `add-rt-aware-dedup` that added
+/// `SessionSettings.dedup_rt_tolerance_min`.)
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Top-level shape of a saved settings JSON file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,6 +91,7 @@ mod tests {
             dam_method: DamMethod::Welch,
             drop_unknown: false,
             dedup_enabled: false,
+            dedup_rt_tolerance_min: 0.25,
             normalization: NormalizationMethod::Pqn {
                 reference: PqnReference::Group("control".to_string()),
             },

@@ -66,6 +66,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
             dam_method,
             drop_unknown,
             dedup_enabled,
+            dedup_rt_tolerance_min,
             normalization,
             metadata_column,
             pqn_reference,
@@ -274,6 +275,35 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
             "Deduplicate features by InChIKey (keep best per compound)",
         );
 
+        // ②a Retention-time tolerance — a sub-control of the dedup checkbox,
+        // enabled only when dedup is on. Each retention-time cluster's RT span is
+        // bounded by this (complete-linkage), so same-InChIKey features more than
+        // this far apart (± minutes) are kept as separate peaks rather than
+        // deduplicated. The value is kept strictly positive by the DragValue
+        // floor plus the `SessionSettings::apply_snapshot` clamp (both at
+        // `crate::app::MIN_DEDUP_RT_TOLERANCE_MIN`), so it is NOT re-clamped
+        // here every frame. See the `msdial-deduplication` capability.
+        ui.horizontal(|ui| {
+            ui.label("RT tolerance (min)");
+            let resp = ui.add_enabled(
+                *dedup_enabled,
+                egui::DragValue::new(dedup_rt_tolerance_min)
+                    .speed(0.01)
+                    .range(crate::app::MIN_DEDUP_RT_TOLERANCE_MIN..=f64::MAX),
+            );
+            if *dedup_enabled {
+                resp.on_hover_text(
+                    "Same-InChIKey features more than this far apart in retention \
+                     time (± minutes) are kept as separate peaks instead of \
+                     deduplicated.",
+                );
+            } else {
+                resp.on_disabled_hover_text(
+                    "Retention-time tolerance applies only when deduplication is enabled.",
+                );
+            }
+        });
+
         // ③ Drop unknown checkbox.
         ui.checkbox(drop_unknown, "Drop unknown features (no InChIKey)");
 
@@ -468,6 +498,7 @@ fn start_dam(app: &mut App) {
     let method = app.settings.dam_method;
     let drop_unknown = app.settings.drop_unknown;
     let dedup_enabled = app.settings.dedup_enabled;
+    let dedup_rt_tolerance_min = app.settings.dedup_rt_tolerance_min;
     let log_transform = app.settings.log_transform;
     let fdr_method = app.settings.dam_fdr_method;
     let normalization = app.settings.normalization.clone();
@@ -604,16 +635,17 @@ fn start_dam(app: &mut App) {
     let mut progress_rxs: Vec<mpsc::Receiver<dam::DamProgress>> = Vec::with_capacity(n_modes);
     let mut worker_handles: Vec<tokio::task::AbortHandle> = Vec::with_capacity(n_modes);
 
-    // Bundle the six DAM configuration values into one `DamConfig` before the
+    // Bundle the DAM configuration values into one `DamConfig` before the
     // fan-out. Each mode's spawned worker gets a clone — the config is identical
     // across modes; only the per-call I/O (table / mapping / num / den) differs.
-    // Replaces the six per-task copies the prior positional signature needed
+    // Replaces the per-task copies the prior positional signature needed
     // (`introduce-dam-config-struct` D3).
     let dam_config = dam::DamConfig {
         method,
         normalization: norm_config,
         drop_unknown,
         dedup_enabled,
+        dedup_rt_tolerance_min,
         log_transform,
         fdr_method,
     };
@@ -807,6 +839,36 @@ pub fn apply_group_pick(
 #[cfg(test)]
 mod tests {
     use super::*;
+    // `clamp_rt_tolerance` + its floor live with the `SessionSettings` field in
+    // `crate::app` (applied at the persistence boundary AND this UI).
+    use crate::app::{MIN_DEDUP_RT_TOLERANCE_MIN, clamp_rt_tolerance};
+
+    #[test]
+    fn clamp_rt_tolerance_rejects_nonpositive_and_nonfinite() {
+        assert_eq!(clamp_rt_tolerance(0.0), MIN_DEDUP_RT_TOLERANCE_MIN);
+        assert_eq!(clamp_rt_tolerance(-1.0), MIN_DEDUP_RT_TOLERANCE_MIN);
+        assert_eq!(clamp_rt_tolerance(f64::NAN), MIN_DEDUP_RT_TOLERANCE_MIN);
+        assert_eq!(
+            clamp_rt_tolerance(f64::INFINITY),
+            MIN_DEDUP_RT_TOLERANCE_MIN
+        );
+        assert_eq!(clamp_rt_tolerance(0.0005), MIN_DEDUP_RT_TOLERANCE_MIN);
+    }
+
+    #[test]
+    fn clamp_rt_tolerance_passes_valid_values() {
+        assert_eq!(clamp_rt_tolerance(0.1), 0.1);
+        assert_eq!(
+            clamp_rt_tolerance(MIN_DEDUP_RT_TOLERANCE_MIN),
+            MIN_DEDUP_RT_TOLERANCE_MIN
+        );
+        assert_eq!(clamp_rt_tolerance(5.0), 5.0);
+    }
+
+    #[test]
+    fn default_dedup_rt_tolerance_is_point_one() {
+        assert_eq!(SessionSettings::default().dedup_rt_tolerance_min, 0.1);
+    }
 
     #[test]
     fn both_groups_present_pass() {

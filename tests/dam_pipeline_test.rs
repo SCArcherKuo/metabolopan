@@ -25,6 +25,7 @@ fn base_cfg() -> DamConfig {
         normalization: NormalizationConfig::default(),
         drop_unknown: true,
         dedup_enabled: false,
+        dedup_rt_tolerance_min: 0.1,
         log_transform: true,
         fdr_method: TEST_FDR,
     }
@@ -634,6 +635,7 @@ async fn dam_config_signature_is_bit_identical() {
         normalization: NormalizationConfig::default(),
         drop_unknown: true,
         dedup_enabled: true,
+        dedup_rt_tolerance_min: 0.1,
         log_transform: false,
         fdr_method: FdrMethod::BenjaminiHochberg,
     };

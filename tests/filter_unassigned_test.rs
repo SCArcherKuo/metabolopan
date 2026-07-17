@@ -39,6 +39,7 @@ fn base_cfg() -> DamConfig {
         normalization: NormalizationConfig::default(),
         drop_unknown: true,
         dedup_enabled: false,
+        dedup_rt_tolerance_min: 0.1,
         log_transform: true,
         fdr_method: FdrMethod::BenjaminiHochberg,
     }

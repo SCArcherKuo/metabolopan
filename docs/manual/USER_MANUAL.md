@@ -1,8 +1,8 @@
 # User Manual
 
-Software version: metabolopan v1.2.3
+Software version: metabolopan v1.3.0
 
-Update date: 2026-06-19
+Update date: 2026-07-17
 
 This manual documents what the software does numerically — algorithms, default thresholds, deviations from common alternatives — so you can defend any number it produces in a paper or report.
 Read this once before publishing results that depend on the software.
@@ -111,6 +111,7 @@ The pipeline operates in three stages. Each stage takes an input, performs one k
       - [7. Exporting the figure as PNG](#7-exporting-the-figure-as-png)
       - [DAM caveats worth knowing](#dam-caveats-worth-knowing)
     - [Deduplication by InChIKey](#deduplication-by-inchikey)
+      - [Retention-time clustering](#retention-time-clustering)
       - [Cascade decision table](#cascade-decision-table)
       - [Audit CSV](#audit-csv)
       - [Opt-out](#opt-out)
@@ -370,9 +371,32 @@ Dedup still matters for Stage 3, but the risk runs the *other* way: a single low
 
 **Deduplication runs as an opt-out toggle on the Stage 2 setup screen (default ON).** The cascade is *purely* a deduplication operation, NOT a generic quality filter — features with `inchikey = None` pass through untouched, and singletons (one Alignment ID per InChIKey) are kept even if their annotation quality is poor.
 
+#### Retention-time clustering
+
+Sharing an InChIKey is necessary but not always sufficient for two rows to be the same chromatographic peak.
+Positional or stereo-isomers can share an InChIKey skeleton yet elute at different retention times, and an in-source fragment re-annotated to its parent can appear far from the real peak.
+Collapsing those into one feature would discard real, chromatographically resolved signal.
+
+metabolopan therefore groups by InChIKey **and** retention time: within each InChIKey group, features are partitioned into retention-time clusters, and the cascade below runs independently within each cluster.
+Any two same-InChIKey features more than the **RT tolerance** apart in retention time land in different clusters and are **both kept** — every cluster's whole retention-time span stays within the tolerance, so nothing more than one tolerance wide is ever collapsed into a single feature.
+
+- The **RT tolerance (min)** is a numeric field on the Stage 2 setup screen, directly under the deduplication checkbox (active only when deduplication is on). The default is **0.1 min**, and the minimum is **0.001 min** (the tolerance must be strictly positive).
+- Clustering keeps each cluster's retention-time **span** (its latest member minus its earliest) within the tolerance — equivalently, every pair of features inside a cluster is within the tolerance of each other (complete-linkage). Concretely, features are sorted by retention time and each cluster is anchored at its first (earliest) member; a feature joins while it is within the tolerance of that anchor, otherwise it starts a new cluster (a span exactly equal to the tolerance still counts as together).
+- **Left bias.** When a middle feature sits within the tolerance of *both* a lower and an upper neighbour, but those two neighbours are more than the tolerance apart, it cannot join both. metabolopan deterministically keeps it with the **lower** (earlier-eluting) cluster. This is a fixed, predictable convention — not a quality judgement; if you need such a feature grouped the other way, adjust the tolerance.
+- A feature with a blank `Average Rt(min)` cannot be placed against a known retention time, so all such features form one separate "no-retention-time" cluster per InChIKey and compete only among themselves.
+- Setting the tolerance very large recovers the older InChIKey-only behavior for any compound whose rows all carry (or all lack) a retention time.
+
+Retention time decides *which* features compete, never *which one wins* — the cascade decision table below is unchanged and never reads the retention time.
+
+**Example (simple).** Three rows share InChIKey `AAA`: two at `Average Rt(min)` 2.10 and 2.13, and one at 8.55.
+With the default 0.1 min tolerance the first two fall in one cluster (span 2.13 − 2.10 = 0.03 ≤ 0.1) and collapse to a single cascade winner, while the 8.55 row is a cluster of its own and is kept — so the compound survives as **two** features, not one.
+
+**Example (chain + left bias).** Three rows share InChIKey `BBB` at `Average Rt(min)` 0.00, 0.08, and 0.16 min.
+The consecutive gaps are each 0.08 min (≤ 0.1), but the 0.00-to-0.16 span is 0.16 min (> 0.1). Because a cluster's whole span must stay within the tolerance, these do **not** all collapse into one: the 0.00 and 0.08 rows form one cluster (span 0.08 ≤ 0.1) and the 0.16 row is kept separately. The middle 0.08 row is packed into the **lower** cluster (the left bias) rather than pairing with 0.16.
+
 #### Cascade decision table
 
-Within each same-InChIKey group, the surviving feature is chosen by the first level of this cascade that distinguishes the two:
+Within each same-InChIKey retention-time cluster, the surviving feature is chosen by the first level of this cascade that distinguishes the two:
 
 | Level | Field                              | Rule                                                                                                  |
 |-------|------------------------------------|-------------------------------------------------------------------------------------------------------|
@@ -959,7 +983,7 @@ The intent is reproducibility: if you (or a collaborator) re-run with the same s
 
 A pretty-printed JSON containing:
 
-- `schema_version` (currently `1` — the on-disk schema baseline), `app_version`, `saved_at` (UTC), a `user_note` field initially `""` — you can open the file in any text editor and fill it in.
+- `schema_version` (currently `2` — the on-disk schema baseline), `app_version`, `saved_at` (UTC), a `user_note` field initially `""` — you can open the file in any text editor and fill it in.
 - `input_files` — for each MS-DIAL `.txt` and the metadata `.csv` you had loaded at save time: the file's basename + its SHA-256.
   **Hashes only — your raw data is never included.** This lets a future Load detect when your inputs have drifted from what the snapshot was made against.
 - `settings` — every parameter from Stage 1 through Stage 3 (analysis mode, species / organism group, comparison groups, DAM method, normalization, FDR method, thresholds, export sizes, enrichment direction / FDR / Top N).
@@ -972,7 +996,7 @@ The example shows the optional fields populated — `null` is their default (see
 ```json
 {
   "schema_version": 1,
-  "app_version": "1.2.3",
+  "app_version": "1.3.0",
   "saved_at": "2026-06-04T09:15:22Z",
   "user_note": "",
   "input_files": [
@@ -1015,7 +1039,7 @@ The example shows the optional fields populated — `null` is their default (see
 }
 ```
 
-Envelope: `schema_version` must be `1` (other values are rejected on Load); `app_version` / `saved_at` are informational; `user_note` is free text you may hand-edit; each `input_files` entry is `role` (`positive` / `negative` / `metadata`) + file basename + SHA-256 (hashes only — never raw data).
+Envelope: `schema_version` must be `2` (other values are rejected on Load); `app_version` / `saved_at` are informational; `user_note` is free text you may hand-edit; each `input_files` entry is `role` (`positive` / `negative` / `metadata`) + file basename + SHA-256 (hashes only — never raw data).
 
 > **Note:** A few keys use an *object-variant* syntax — instead of a bare string, the value is a small object carrying data, e.g. `{"Metadata":{"column":"<name>"}}` for metadata normalization or `{"Group":"<name>"}` for a per-group PQN reference. The outer key (`Metadata`, `Group`) names the variant; the inner object holds its parameter.
 
@@ -1033,6 +1057,7 @@ Every key under `settings`. The **UI control** column maps each key to the scree
 | `dam_method` | `"Student"` \| `"Welch"` \| `"BrunnerMunzel"` | `"Student"` | **DAM method** radio (Stage 2 setup) | DAM statistical test. |
 | `drop_unknown` | `true` \| `false` | `true` | **Drop unknown features (no InChIKey)** checkbox (Stage 2 setup) | Drop features with null InChIKey before testing. |
 | `dedup_enabled` | `true` \| `false` | `true` | **Dedup** toggle (Stage 2 setup) | Deduplicate features by InChIKey (cascade). |
+| `dedup_rt_tolerance_min` | number `> 0` | `0.1` | **RT tolerance (min)** field (Stage 2 setup, under the Dedup toggle) | ± retention-time window; same-InChIKey features farther apart than this are kept as separate peaks. Minimum `0.001`. |
 | `normalization` | `"None"` \| `"Sum"` \| `"Median"` \| `"Quantile"` \| `{"Metadata":{"column":"<name>"}}` \| `{"Pqn":{"reference":<pqn_reference>}}` | `"None"` | Normalization radio (Stage 2 setup) | Sample-axis normalization. `Metadata` and `Pqn` are object variants carrying data. |
 | `metadata_column` | string \| `null` | `null` | Metadata-column ComboBox (Stage 2 setup, Metadata normalization) | Column used by `Metadata` normalization. Reset to `null` on Load if not a numeric metadata column in current data. |
 | `pqn_reference` | `"AllSamples"` \| `{"Group":"<name>"}` | `"AllSamples"` | PQN reference radio (Stage 2 setup, PQN normalization) | PQN reference spectrum (only meaningful when `normalization` is `Pqn`). |

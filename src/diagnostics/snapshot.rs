@@ -55,6 +55,12 @@ pub fn render_app_state(
     writeln!(s, "dam_method: {:?}", settings.dam_method).ok();
     writeln!(s, "drop_unknown: {}", settings.drop_unknown).ok();
     writeln!(s, "dedup_enabled: {}", settings.dedup_enabled).ok();
+    writeln!(
+        s,
+        "dedup_rt_tolerance_min: {}",
+        settings.dedup_rt_tolerance_min
+    )
+    .ok();
     writeln!(s, "log_transform: {}", settings.log_transform).ok();
     writeln!(s, "normalization: {:?}", settings.normalization).ok();
     writeln!(

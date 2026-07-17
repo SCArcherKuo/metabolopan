@@ -26,6 +26,7 @@ fn base_cfg() -> DamConfig {
         normalization: NormalizationConfig::default(),
         drop_unknown: false,
         dedup_enabled: true,
+        dedup_rt_tolerance_min: 0.1,
         log_transform: true,
         fdr_method: TEST_FDR,
     }
@@ -266,6 +267,42 @@ async fn dedup_disabled_leaves_features_untouched_and_report_is_none() {
     // one too; the synthetic input is designed to pass pre-filter).
     assert_eq!(baseline.features.len(), 10);
     assert_eq!(baseline.skipped, 0);
+}
+
+#[tokio::test]
+async fn dedup_beyond_rt_tolerance_keeps_both_via_run_dam() {
+    // Group X's two features (X_A, X_B) share InChIKey "XXX". Push them far
+    // apart in retention time so they land in different RT clusters; with the
+    // default 0.1 min tolerance threaded through `DamConfig`, run_dam's dedup
+    // must keep BOTH (neither dropped). Y and Z (still at RT 1.0) dedup normally.
+    let (mut table, mapping) = synth_inputs();
+    for f in &mut table.features {
+        match f.alignment_id.as_str() {
+            "X_A" => f.average_rt_min = Some(1.0),
+            "X_B" => f.average_rt_min = Some(9.0),
+            _ => {}
+        }
+    }
+    let result = run_dam(
+        &mut table,
+        &mapping,
+        "T",
+        "C",
+        &DamConfig {
+            dedup_rt_tolerance_min: 0.1,
+            ..base_cfg()
+        },
+        None,
+    )
+    .await
+    .expect("DAM run");
+    let report = result.dedup_report.expect("dedup_report Some");
+    assert!(
+        !report.dropped.iter().any(|d| d.inchikey == "XXX"),
+        "X_A/X_B are beyond the RT tolerance -> both kept, neither dropped"
+    );
+    // Only Y and Z still collapse (one dropped each); X contributes none.
+    assert_eq!(report.dropped.len(), 2);
 }
 
 #[tokio::test]

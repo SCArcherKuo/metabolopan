@@ -120,6 +120,14 @@ pub struct SessionSettings {
     pub dam_method: DamMethod,
     pub drop_unknown: bool,
     pub dedup_enabled: bool,
+    /// ± retention-time window (minutes) for InChIKey + RT deduplication:
+    /// within each InChIKey group, each retention-time cluster's RT span is
+    /// bounded by this (complete-linkage), so same-InChIKey features more than
+    /// this far apart in retention time are kept as separate peaks. Strictly
+    /// positive — clamped to a `0.001`-minute floor by [`clamp_rt_tolerance`].
+    /// Added by `add-rt-aware-dedup` (schema v2).
+    #[serde(default = "default_dedup_rt_tolerance_min")]
+    pub dedup_rt_tolerance_min: f64,
     pub normalization: NormalizationMethod,
     pub metadata_column: Option<String>,
     pub pqn_reference: PqnReference,
@@ -176,6 +184,34 @@ fn default_min_entry_size() -> usize {
     1
 }
 
+/// Serde-default helper for the `dedup_rt_tolerance_min` field. Returning `0.1`
+/// to match `SessionSettings::default()`. Defensive against a snapshot missing
+/// this field that bypasses the strict version gate (the gate normally rejects
+/// any non-current `schema_version` outright).
+fn default_dedup_rt_tolerance_min() -> f64 {
+    0.1
+}
+
+/// Smallest retention-time tolerance (minutes) the app will pass to
+/// `crate::dedup::run_dedup`. Strictly positive so the dedup clustering never
+/// sees `0.0`, a negative, or `NaN` (see the `msdial-deduplication` capability);
+/// below this a tolerance would cluster only byte-identical retention times.
+pub(crate) const MIN_DEDUP_RT_TOLERANCE_MIN: f64 = 0.001;
+
+/// Clamp a retention-time tolerance to the strictly-positive minimum. `NaN`,
+/// non-finite, and values below [`MIN_DEDUP_RT_TOLERANCE_MIN`] collapse to the
+/// minimum; finite values at or above it pass through unchanged. Applied at
+/// both the persistence boundary (`SessionSettings::apply_snapshot`) and the
+/// Stage 2 UI so a hand-edited / foreign snapshot cannot push an invalid
+/// tolerance into `run_dedup`.
+pub(crate) fn clamp_rt_tolerance(v: f64) -> f64 {
+    if v.is_finite() && v >= MIN_DEDUP_RT_TOLERANCE_MIN {
+        v
+    } else {
+        MIN_DEDUP_RT_TOLERANCE_MIN
+    }
+}
+
 /// Initial Stage 3 dot-plot export height (inches), sized to the rows the
 /// plot will actually show: `min(top_n, displayed_rows)` (at least 1) at the
 /// per-row `0.3 in` rhythm plus a `1.0 in` base, clamped to `[2.0, 40.0]`.
@@ -214,6 +250,7 @@ impl Default for SessionSettings {
             dam_method: DamMethod::Student,
             drop_unknown: true,
             dedup_enabled: true,
+            dedup_rt_tolerance_min: default_dedup_rt_tolerance_min(),
             normalization: NormalizationMethod::None,
             metadata_column: None,
             pqn_reference: PqnReference::AllSamples,
@@ -2249,6 +2286,7 @@ mod tests {
             dam_method: DamMethod::Welch,
             drop_unknown: false,
             dedup_enabled: false,
+            dedup_rt_tolerance_min: 0.25,
             normalization: NormalizationMethod::Sum,
             metadata_column: Some("dry_weight".to_string()),
             pqn_reference: PqnReference::Group("control".to_string()),

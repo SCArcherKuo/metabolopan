@@ -306,6 +306,22 @@ impl SessionSettings {
             );
             incoming.dam_fdr_method = crate::dam::fdr::FdrMethod::BenjaminiHochberg;
         }
+        // Defensive coercion: keep the dedup RT tolerance strictly positive so
+        // `run_dedup` never receives `0.0` / negative / `NaN` from a hand-edited
+        // or foreign snapshot. The Stage 2 UI floors user input, but the
+        // persisted value is validated here at the load boundary rather than
+        // relying on the UI having rendered first.
+        let clamped = crate::app::clamp_rt_tolerance(incoming.dedup_rt_tolerance_min);
+        if !(incoming.dedup_rt_tolerance_min.is_finite()
+            && incoming.dedup_rt_tolerance_min >= crate::app::MIN_DEDUP_RT_TOLERANCE_MIN)
+        {
+            tracing::warn!(
+                previous = incoming.dedup_rt_tolerance_min,
+                clamped,
+                "snapshot dedup_rt_tolerance_min out of range; clamped to the minimum"
+            );
+        }
+        incoming.dedup_rt_tolerance_min = clamped;
         *self = incoming;
     }
 }
@@ -427,7 +443,7 @@ mod tests {
         match err {
             SnapshotError::UnsupportedSchemaVersion { found, expected } => {
                 assert_eq!(found, 4);
-                assert_eq!(expected, 1);
+                assert_eq!(expected, 2);
             }
             other => panic!("expected UnsupportedSchemaVersion, got {other:?}"),
         }
@@ -604,5 +620,31 @@ mod tests {
             current.enrichment_fdr_method,
             crate::dam::fdr::FdrMethod::NoCorrection
         );
+    }
+
+    #[test]
+    fn apply_snapshot_clamps_out_of_range_dedup_rt_tolerance() {
+        // A hand-edited / foreign snapshot carrying a non-positive or NaN
+        // dedup RT tolerance must be coerced to the minimum at the load
+        // boundary so run_dedup never sees it; a valid value is preserved.
+        for bad in [0.0, -1.0, f64::NAN] {
+            let mut current = SessionSettings::default();
+            let incoming = SessionSettings {
+                dedup_rt_tolerance_min: bad,
+                ..SessionSettings::default()
+            };
+            current.apply_snapshot(incoming, &ValidationResets::default());
+            assert_eq!(
+                current.dedup_rt_tolerance_min,
+                crate::app::MIN_DEDUP_RT_TOLERANCE_MIN
+            );
+        }
+        let mut current = SessionSettings::default();
+        let incoming = SessionSettings {
+            dedup_rt_tolerance_min: 0.25,
+            ..SessionSettings::default()
+        };
+        current.apply_snapshot(incoming, &ValidationResets::default());
+        assert_eq!(current.dedup_rt_tolerance_min, 0.25);
     }
 }
