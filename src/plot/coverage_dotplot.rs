@@ -632,11 +632,17 @@ mod tests {
         }
     }
 
-    /// The buffer is exactly `w * h * 4` bytes, and the same call twice is
-    /// pixel-identical — which is what makes "preview and export are the same
-    /// image" true rather than asserted.
+    /// The buffer is exactly `w * h * 4` bytes, and something was actually drawn.
+    ///
+    /// This deliberately does NOT compare two renders byte-for-byte. "Preview and
+    /// export are the same image" holds because `export_coverage_dotplot_png` calls
+    /// `render_coverage_dotplot` — one code path, true by construction — not because
+    /// the rasterizer is reproducible. Glyph rasterization runs through plotters →
+    /// font-kit → the platform font stack, which is not guaranteed to return
+    /// identical bytes for repeated calls; two consecutive renders were observed to
+    /// differ on Windows. See the `coverage-dot-plot` capability spec.
     #[test]
-    fn buffer_size_matches_dimensions_and_is_deterministic() {
+    fn buffer_size_matches_requested_dimensions() {
         let result = result_of(vec![row("a", 42, 18), row("b", 10, 3)], 318);
         let o = CoverageDotplotOpts {
             width_px: 1200,
@@ -645,7 +651,36 @@ mod tests {
         };
         let buf = render_coverage_dotplot(&result, &o).expect("renders");
         assert_eq!(buf.len(), 1200 * 900 * 4);
-        assert_eq!(buf, render_coverage_dotplot(&result, &o).expect("renders"));
+        // Smoke check: not all zeros, so the renderer drew something rather than
+        // silently handing back the blank destination buffer.
+        assert!(
+            buf.iter().any(|&b| b != 0),
+            "buffer is all zeros — nothing rendered"
+        );
+    }
+
+    /// Preview size and export size go through the one renderer: the same
+    /// `CoverageResult` renders at both, each to its own exact byte count, without
+    /// panicking. Mirrors the volcano renderer's equivalent test.
+    #[test]
+    fn preview_and_export_sizes_share_one_code_path() {
+        let result = result_of(vec![row("a", 42, 18), row("b", 10, 3)], 318);
+        let preview = CoverageDotplotOpts {
+            width_px: 800,
+            height_px: 600,
+            ..opts()
+        };
+        let export = CoverageDotplotOpts {
+            width_px: 2400,
+            height_px: 1800,
+            ..opts()
+        };
+        let p = render_coverage_dotplot(&result, &preview).expect("preview renders");
+        let e = render_coverage_dotplot(&result, &export).expect("export renders");
+        assert_eq!(p.len(), 800 * 600 * 4);
+        assert_eq!(e.len(), 2400 * 1800 * 4);
+        assert!(p.iter().any(|&b| b != 0), "preview buffer is all zeros");
+        assert!(e.iter().any(|&b| b != 0), "export buffer is all zeros");
     }
 
     /// Zero surviving rows is a valid image with a message, never an error and
