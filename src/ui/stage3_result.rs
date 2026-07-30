@@ -715,7 +715,14 @@ fn rerun(app: &mut App) {
         };
         return;
     };
-    app.spawn_stage3_run(dam_results, target, params, pubchem_total);
+    app.spawn_stage3_run(crate::app::RunSpawn {
+        payload: crate::app::RunPayloadSpec::Enrichment {
+            dam_results,
+            params,
+        },
+        target,
+        pubchem_total,
+    });
 }
 
 /// Drain the Data-tab Cache-block request flags (set by `data_tab::show`, which

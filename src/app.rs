@@ -24,8 +24,9 @@ use crate::theme;
 use crate::ui::organism_group_selector::OrganismGroupSelectorState;
 use crate::ui::species_selector::SpeciesSelectorState;
 use crate::ui::{
-    bottom_panel, initializing, log_pane, settings_modals, stage1_input, stage2_running,
-    stage2_setup, stage2_threshold, stage3_result, stage3_running, stage3_setup, stepper,
+    bottom_panel, initializing, log_pane, settings_modals, stage0_choose, stage1_input,
+    stage2_coverage_setup, stage2_running, stage2_setup, stage2_threshold, stage3_coverage_result,
+    stage3_result, stage3_running, stage3_setup, stepper,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -38,6 +39,32 @@ use std::collections::HashSet;
 /// Carrying the dims with the buffer lets the UI thread upload a texture of the
 /// correct size even if the user changed the export inputs mid-flight.
 pub type VolcanoRender = (Vec<u8>, u32, u32);
+
+/// Which of the two analysis routes the session is on, picked on the
+/// route-chooser screen before any input file is loaded. See the
+/// `analysis-route-selection` capability spec.
+///
+/// The route decides which screens exist, how many steps the stepper shows,
+/// and which of two very different analyses the session performs. Exactly
+/// three paths may write it: the route chooser, the Stage 1
+/// `Change analysis type` escape (enabled only while no input is loaded), and
+/// applying a saved snapshot.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AnalysisRoute {
+    /// Differential abundance, then enrichment over the significant subset —
+    /// the historical pipeline, unchanged.
+    #[default]
+    DamEnrichment,
+    /// Descriptive KEGG coverage survey over the detected metabolome. Runs no
+    /// statistical test.
+    KeggCoverage,
+}
+
+/// Sort key for the coverage results table. Defined in `crate::coverage::types`
+/// alongside the rows it orders and re-exported here, because it is reachable
+/// from [`SessionSettings`] and every settings-facing enum is nameable from this
+/// module. See the `kegg-coverage` capability.
+pub use crate::coverage::CoverageSortKey;
 
 /// Top-level analysis mode picked at Stage 1. Pathway is the historical
 /// default; Module enables the new KEGG-module ORA flow.
@@ -165,6 +192,37 @@ pub struct SessionSettings {
     pub stage3_export_width_in: f64,
     pub stage3_export_height_in: f64,
     pub stage3_export_dpi: u32,
+
+    // ── Analysis route + KEGG coverage route ──
+    /// Which route the session is on. Written only by the route chooser, the
+    /// Stage 1 escape, and a snapshot apply (see [`AnalysisRoute`]).
+    #[serde(default = "default_analysis_route")]
+    pub analysis_route: AnalysisRoute,
+    /// Coverage-route minimum entry size. Deliberately NOT a reuse of
+    /// `min_entry_size`: ORA's hypergeometric test already penalises small
+    /// entries, whereas a raw coverage percentage does not, so the two carry
+    /// different defaults. Hard minimum 1 — see [`clamp_coverage_min_entry_size`].
+    #[serde(default = "default_coverage_min_entry_size")]
+    pub coverage_min_entry_size: usize,
+    /// Sort key for the coverage results table.
+    #[serde(default = "default_coverage_sort_key")]
+    pub coverage_sort_key: CoverageSortKey,
+    /// Which sample groups count as "detected" on the coverage route.
+    ///
+    /// The two states are DISTINCT and must never be collapsed to a bare
+    /// `Vec`: `None` means "not yet chosen", which the setup screen replaces
+    /// with every offered group; `Some(vec![])` means "the user deliberately
+    /// chose none", which fires the Run gate. Collapsing them makes the gate
+    /// unreachable, because unchecking the last box would be undone by the
+    /// initialise-on-`None` rule on the next frame.
+    #[serde(default = "default_coverage_selected_groups")]
+    pub coverage_selected_groups: Option<Vec<String>>,
+    /// Fraction of a group's samples in which a feature must have a finite,
+    /// non-zero raw intensity to count as detected in that group. Clamped to
+    /// `[0.0, 1.0]` with non-finite coerced to the default — see
+    /// [`clamp_coverage_presence_threshold`].
+    #[serde(default = "default_coverage_presence_threshold")]
+    pub coverage_presence_threshold: f64,
 }
 
 /// Serde-default helper for the `log_transform` field. Returning `true` (the
@@ -190,6 +248,65 @@ fn default_min_entry_size() -> usize {
 /// any non-current `schema_version` outright).
 fn default_dedup_rt_tolerance_min() -> f64 {
     0.1
+}
+
+// The five helpers below follow the same two-consumer pattern as the ones
+// above: each is read by `#[serde(default = "…")]` on its field AND by
+// `impl Default for SessionSettings`, so the two can never drift. The serde
+// path is normally unreachable (the strict version gate rejects non-current
+// snapshots before field-level deserialisation), but is kept as defence in
+// depth for any path that bypasses the gate. Do NOT remove the annotations as
+// "dead code" — see the `session-settings-io` capability spec.
+
+/// Serde-default helper for `analysis_route`.
+fn default_analysis_route() -> AnalysisRoute {
+    AnalysisRoute::DamEnrichment
+}
+
+/// Serde-default helper for `coverage_min_entry_size`.
+fn default_coverage_min_entry_size() -> usize {
+    3
+}
+
+/// Serde-default helper for `coverage_sort_key`.
+fn default_coverage_sort_key() -> CoverageSortKey {
+    CoverageSortKey::Coverage
+}
+
+/// Serde-default helper for `coverage_selected_groups`. `None` is the
+/// "not yet chosen" sentinel, NOT an empty selection — see the field doc.
+fn default_coverage_selected_groups() -> Option<Vec<String>> {
+    None
+}
+
+/// Serde-default helper for `coverage_presence_threshold`.
+fn default_coverage_presence_threshold() -> f64 {
+    0.5
+}
+
+/// Smallest entry size the coverage route will display. Enforced at both the
+/// UI input and the persistence boundary so a zero-compound entry can never
+/// reach the table — every KEGG global/overview map is such an entry, and the
+/// floor is what removes them (see the `kegg-coverage` capability).
+pub(crate) const MIN_COVERAGE_ENTRY_SIZE: usize = 1;
+
+/// Clamp a coverage minimum-entry-size to [`MIN_COVERAGE_ENTRY_SIZE`]. Applied
+/// at the persistence boundary so a hand-edited snapshot carrying `0` cannot
+/// re-admit zero-compound entries.
+pub(crate) fn clamp_coverage_min_entry_size(v: usize) -> usize {
+    v.max(MIN_COVERAGE_ENTRY_SIZE)
+}
+
+/// Clamp a coverage presence threshold to `[0.0, 1.0]`, coercing non-finite
+/// values to the `0.5` default. `NaN` is the dangerous input: every
+/// `count / len >= NaN` comparison is `false`, so a `NaN` threshold would
+/// silently yield an empty detected set and a coverage screen of zeros.
+pub(crate) fn clamp_coverage_presence_threshold(v: f64) -> f64 {
+    if v.is_finite() {
+        v.clamp(0.0, 1.0)
+    } else {
+        default_coverage_presence_threshold()
+    }
 }
 
 /// Smallest retention-time tolerance (minutes) the app will pass to
@@ -278,6 +395,15 @@ impl Default for SessionSettings {
             stage3_export_width_in: 3.5,
             stage3_export_height_in: 7.0,
             stage3_export_dpi: 300,
+
+            // Analysis route + KEGG coverage route. Each value comes from the
+            // same helper the field's `#[serde(default = "…")]` names, so the
+            // two consumers cannot drift.
+            analysis_route: default_analysis_route(),
+            coverage_min_entry_size: default_coverage_min_entry_size(),
+            coverage_sort_key: default_coverage_sort_key(),
+            coverage_selected_groups: default_coverage_selected_groups(),
+            coverage_presence_threshold: default_coverage_presence_threshold(),
         }
     }
 }
@@ -344,6 +470,23 @@ pub struct SessionInputs {
     pub csv_path: Option<PathBuf>,
 }
 
+impl SessionInputs {
+    /// `true` when nothing has been loaded — equivalent to
+    /// `*self == SessionInputs::default()`, spelled as a field check because
+    /// `IonModeTable` / `GroupMapping` carry no `PartialEq`.
+    ///
+    /// This is the condition that enables the Stage 1 `Change analysis type`
+    /// escape: while it holds there is by definition nothing to discard, so the
+    /// route may still be changed with no confirmation and no loss warning.
+    /// Once it stops holding, only `Start a new analysis` can change the route.
+    /// Every field is named here on purpose — a new input field added without
+    /// being considered would silently widen the window in which the route can
+    /// still change.
+    pub fn is_pristine(&self) -> bool {
+        self.ion_tables.is_empty() && self.mapping.is_none() && self.csv_path.is_none()
+    }
+}
+
 /// Per-analysis fetched KEGG data, held in memory after the fetch
 /// completes. Both pathway-mode (`species_kegg`) and module-mode
 /// (`modules_pack` + `group_org_codes`) caches can coexist; today's
@@ -400,6 +543,16 @@ pub enum AppState {
         /// Latest error from a previous load attempt, if any.
         last_error: Option<String>,
     },
+    /// The pre-stepper `Choose your analysis` screen — the new first stop after
+    /// `Initializing` succeeds. Carries no runtime at all: picking a card writes
+    /// `settings.analysis_route` and transitions straight to `Stage1Input`.
+    ///
+    /// **Pre-route**, like `Initializing`: it belongs to neither analysis route,
+    /// and the stepper is not rendered on it (there is nothing to navigate yet).
+    /// It is not a numbered stage — the heading carries no `Stage 0 —` prefix;
+    /// the variant name is positional only. See the `analysis-route-selection`
+    /// capability spec.
+    Stage0ChooseAnalysis,
     /// Stage 1 — file pickers + mode toggle + species/group selector.
     /// The variant carries only Stage-1-screen-local UI state for the
     /// file-pick radios; everything else (analysis mode, selected
@@ -490,15 +643,22 @@ pub enum AppState {
         /// to `None` on terminal event.
         modules_fetch: Option<ModulesFetchInFlight>,
     },
-    /// Transient: Stage 3 orchestrator running (PubChem → KEGG conv →
-    /// ORA). Carries `dam_results` (still needed for downstream display
-    /// and for back-to-threshold) plus the 3-phase progress runtime.
+    /// Transient: the Stage 3 orchestrator running (PubChem → KEGG conv →
+    /// ORA *or* coverage). **Shared by both routes** — the two runs have an
+    /// identical progress shape (the same two resolver phases feeding the same
+    /// three channels), so they share one screen and one variant, discriminated
+    /// by `payload`.
     Stage3EnrichRunning {
-        dam_results: Vec<DamResult>,
+        /// Which route is running, and — on the DAM route only — the
+        /// `dam_results` threaded forward into the run and restored on
+        /// back-navigation to the threshold screen.
+        payload: RunningPayload,
         phase: Stage3Phase,
         pubchem_progress_rx: mpsc::Receiver<PubchemProgress>,
         kegg_conv_progress_rx: mpsc::Receiver<ConvProgress>,
-        result_rx: mpsc::Receiver<Result<Stage3RunOutput, String>>,
+        /// One channel carrying the two-variant [`RunOutput`], not two
+        /// channels: the drain stays a single `try_recv`.
+        result_rx: mpsc::Receiver<Result<RunOutput, String>>,
         pubchem_completed: usize,
         pubchem_total: usize,
         kegg_conv_completed: usize,
@@ -551,6 +711,83 @@ pub enum AppState {
         /// UI state — not persisted, not in the bug-report snapshot.
         height_user_overridden: bool,
     },
+    /// Stage 2 (coverage route) — the coverage setup screen. Hosts the sample
+    /// group selection, the two feature filters, and the SAME shared
+    /// analysis-target block `Stage3EnrichSetup` renders (mode toggle +
+    /// mode-aware selector + inline fetch progress), so it carries the same two
+    /// fetch-in-flight slots for the same reason. See the `coverage-ui`
+    /// capability spec.
+    Stage2CoverageSetup {
+        error: Option<String>,
+        /// Set by the stale-group-selection guard when it repairs a selection
+        /// naming groups absent from the current mapping; cleared on the next
+        /// selection change.
+        ///
+        /// Held on the variant rather than recomputed each frame because the
+        /// guard repairs its own trigger condition on the frame it fires — a
+        /// derived notice would flash for one frame and vanish.
+        stale_groups_notice: Option<String>,
+        /// `Some(_)` while a per-species pathway fetch is streaming; same
+        /// semantics as `Stage3EnrichSetup::kegg_fetch`.
+        kegg_fetch: Option<KeggFetchInFlight>,
+        /// `Some(_)` while a module-mode bulk fetch is streaming; same
+        /// semantics as `Stage3EnrichSetup::modules_fetch`.
+        modules_fetch: Option<ModulesFetchInFlight>,
+    },
+    /// Stage 3 (coverage route) — the coverage result screen. Runtime artifacts
+    /// only, mirroring `Stage3EnrichResult`'s shape so the two result screens'
+    /// shared behaviours (busy predicate, export-disable, new-analysis confirm,
+    /// height autosize) read identically.
+    ///
+    /// Note there is deliberately no `refresh_state`: the coverage route offers
+    /// no PubChem/KEGG refresh action, so `is_busy` on this variant turns on
+    /// `rendering` alone.
+    Stage3CoverageResult {
+        /// The computed rows plus their provenance counts. Every display
+        /// filter is re-applied live over these rows — no re-run, no request.
+        coverage_result: crate::coverage::CoverageResult,
+        funnel: CoverageFunnel,
+        /// cpd ID → the user's MS-DIAL metabolite names. Consumed ONLY by the
+        /// CSV exporter; the on-screen table renders bare cpd IDs.
+        cpd_to_names: std::collections::HashMap<String, Vec<String>>,
+        /// Module mode only; drives the Data tab's Module target line.
+        module_retention: Option<crate::stage3::ModuleRetention>,
+        /// `None` in single-mode runs. The Data tab is its sole surface.
+        mode_partition: Option<crate::stage3::CoverageModePartition>,
+        /// One per ion-mode table, in `ion_tables` order; empty when dedup was
+        /// off. Drives the Data tab's `Dedupe:` line and audit download — on
+        /// this route the only surface on which deduplication's effect is
+        /// observable at all.
+        dedup_reports: Vec<crate::dedup::DedupReport>,
+        pubchem_time_span: Option<(DateTime<Utc>, DateTime<Utc>, usize)>,
+        kegg_conv_time_span: Option<(DateTime<Utc>, DateTime<Utc>, usize)>,
+        dotplot_tex: Option<egui::TextureHandle>,
+        rendering: bool,
+        render_rx: Option<mpsc::Receiver<Result<DotplotRender, String>>>,
+        /// Variant-internal `Start a new analysis?` confirmation flag; NOT part
+        /// of the App-level modal mutual-exclusion family, exactly as on the
+        /// enrichment result screen.
+        confirming_new_round: bool,
+        /// `true` once the user has hand-edited the export height; while
+        /// `false`, each re-draw re-fits it to the live displayed-row count.
+        height_user_overridden: bool,
+    },
+}
+
+/// What a `Stage3EnrichRunning` state is running, and the route-specific
+/// payload that run needs.
+///
+/// The two routes share the running screen because their progress shape is
+/// identical, so the variant needs a discriminant. A coverage run MUST NOT be
+/// represented as `Enrichment(vec![])`: an empty `Vec<DamResult>` is
+/// indistinguishable from a bug, and the enrichment orchestrator already
+/// rejects it. See the `app-shell` capability spec.
+pub enum RunningPayload {
+    /// DAM route: the results threaded forward into the enrichment run and
+    /// restored on back-navigation to the threshold screen.
+    Enrichment(Vec<DamResult>),
+    /// Coverage route: no DAM output exists.
+    Coverage,
 }
 
 /// Drain available KEGG progress events into the in-flight struct;
@@ -597,7 +834,14 @@ fn drain_modules_progress(fetch: &mut ModulesFetchInFlight) -> Option<ModulesFet
 pub(crate) fn is_busy(state: &AppState) -> bool {
     match state {
         AppState::Stage2DamRunning { .. } | AppState::Stage3EnrichRunning { .. } => true,
+        // Both setup screens host the same two fetches, so both are busy on the
+        // same condition.
         AppState::Stage3EnrichSetup {
+            kegg_fetch,
+            modules_fetch,
+            ..
+        }
+        | AppState::Stage2CoverageSetup {
             kegg_fetch,
             modules_fetch,
             ..
@@ -607,7 +851,11 @@ pub(crate) fn is_busy(state: &AppState) -> bool {
             rendering,
             ..
         } => !matches!(refresh_state, RefreshState::Idle) || *rendering,
+        // The coverage result screen has no refresh action, so `rendering`
+        // alone decides — there is no `refresh_state` field to consult.
+        AppState::Stage3CoverageResult { rendering, .. } => *rendering,
         AppState::Initializing { .. }
+        | AppState::Stage0ChooseAnalysis
         | AppState::Stage1Input { .. }
         | AppState::Stage2DamSetup { .. }
         | AppState::Stage2DamThreshold { .. } => false,
@@ -621,9 +869,19 @@ pub(crate) fn is_busy(state: &AppState) -> bool {
 /// `start_run`, `start_new_round`) so the producer stops before its channel
 /// receiver is dropped. DAM cancellation is best-effort (see
 /// `Stage2DamRunning::worker_handles`).
+///
+/// Deliberately EXHAUSTIVE rather than wildcard-terminated: a wildcard would let
+/// a future in-flight variant be added with no abort arm and no compile error,
+/// leaving its task orphaned — the exact failure this function exists to
+/// prevent.
 pub(crate) fn abort_in_flight(state: &AppState) {
     match state {
         AppState::Stage3EnrichSetup {
+            kegg_fetch,
+            modules_fetch,
+            ..
+        }
+        | AppState::Stage2CoverageSetup {
             kegg_fetch,
             modules_fetch,
             ..
@@ -647,28 +905,111 @@ pub(crate) fn abort_in_flight(state: &AppState) {
                 | RefreshState::RefreshingKegg { run_handle, .. },
             ..
         } => run_handle.abort(),
-        _ => {}
+        // An idle result screen owns no task. The in-process dot-plot render on
+        // either result screen is deliberately not abortable — it is a
+        // sub-second CPU render with no orphan hazard (same reasoning as
+        // `is_busy`'s exclusion of the volcano render).
+        AppState::Stage3EnrichResult { .. }
+        | AppState::Stage3CoverageResult { .. }
+        | AppState::Initializing { .. }
+        | AppState::Stage0ChooseAnalysis
+        | AppState::Stage1Input { .. }
+        | AppState::Stage2DamSetup { .. }
+        | AppState::Stage2DamThreshold { .. } => {}
     }
 }
 
-/// Abort + clear BOTH in-flight fetch slots on a `Stage3EnrichSetup` state
+/// True on any screen that renders the shared analysis-target block (the
+/// Analysis Mode toggle, the mode-aware selector, and the inline KEGG fetch
+/// progress strip).
+///
+/// This and the two slot accessors below are the SINGLE place that enumerates
+/// which variants own that block. Every consumer goes through them, so when a
+/// second setup screen is added it gains the behaviour by adding one arm here
+/// rather than by finding ten scattered `if let AppState::Stage3EnrichSetup`
+/// sites — which is exactly how the shared block would otherwise drift between
+/// the two routes. See the `stage3-ui` capability spec.
+pub(crate) fn is_target_setup(state: &AppState) -> bool {
+    setup_fetch_slots(state).is_some()
+}
+
+/// The active setup screen's in-flight fetch slots, or `None` on any variant
+/// that does not render the shared analysis-target block.
+///
+/// Exhaustive on purpose (here and in the three functions below): a wildcard
+/// would let a future setup screen silently answer `None` and lose the shared
+/// block's fetch behaviour with no compile error.
+pub(crate) fn setup_fetch_slots(
+    state: &AppState,
+) -> Option<(&Option<KeggFetchInFlight>, &Option<ModulesFetchInFlight>)> {
+    match state {
+        AppState::Stage3EnrichSetup {
+            kegg_fetch,
+            modules_fetch,
+            ..
+        }
+        | AppState::Stage2CoverageSetup {
+            kegg_fetch,
+            modules_fetch,
+            ..
+        } => Some((kegg_fetch, modules_fetch)),
+        AppState::Initializing { .. }
+        | AppState::Stage0ChooseAnalysis
+        | AppState::Stage1Input { .. }
+        | AppState::Stage2DamSetup { .. }
+        | AppState::Stage2DamRunning { .. }
+        | AppState::Stage2DamThreshold { .. }
+        | AppState::Stage3EnrichRunning { .. }
+        | AppState::Stage3EnrichResult { .. }
+        | AppState::Stage3CoverageResult { .. } => None,
+    }
+}
+
+/// Mutable counterpart of [`setup_fetch_slots`], for the spawn sites that
+/// install a fresh in-flight struct.
+pub(crate) fn setup_fetch_slots_mut(
+    state: &mut AppState,
+) -> Option<(
+    &mut Option<KeggFetchInFlight>,
+    &mut Option<ModulesFetchInFlight>,
+)> {
+    match state {
+        AppState::Stage3EnrichSetup {
+            kegg_fetch,
+            modules_fetch,
+            ..
+        }
+        | AppState::Stage2CoverageSetup {
+            kegg_fetch,
+            modules_fetch,
+            ..
+        } => Some((kegg_fetch, modules_fetch)),
+        AppState::Initializing { .. }
+        | AppState::Stage0ChooseAnalysis
+        | AppState::Stage1Input { .. }
+        | AppState::Stage2DamSetup { .. }
+        | AppState::Stage2DamRunning { .. }
+        | AppState::Stage2DamThreshold { .. }
+        | AppState::Stage3EnrichRunning { .. }
+        | AppState::Stage3EnrichResult { .. }
+        | AppState::Stage3CoverageResult { .. } => None,
+    }
+}
+
+/// Abort + clear BOTH in-flight fetch slots on whichever setup screen owns them
 /// (no-op on any other variant). Used by the mode toggle: the mode being left
 /// must stop fetching so it does not contend with the new mode for the shared
 /// KEGG client / rate limit. Selections and completed caches are untouched —
 /// only an INCOMPLETE fetch is cancelled.
 pub(crate) fn abort_and_clear_setup_fetches(state: &mut AppState) {
-    if let AppState::Stage3EnrichSetup {
-        kegg_fetch,
-        modules_fetch,
-        ..
-    } = state
-    {
-        if let Some(prev) = kegg_fetch.take() {
-            prev.abort_tasks();
-        }
-        if let Some(prev) = modules_fetch.take() {
-            prev.abort_tasks();
-        }
+    let Some((kegg_fetch, modules_fetch)) = setup_fetch_slots_mut(state) else {
+        return;
+    };
+    if let Some(prev) = kegg_fetch.take() {
+        prev.abort_tasks();
+    }
+    if let Some(prev) = modules_fetch.take() {
+        prev.abort_tasks();
     }
 }
 
@@ -676,14 +1017,13 @@ pub(crate) fn abort_and_clear_setup_fetches(state: &mut AppState) {
 /// back-navigation is gated behind a confirm before cancelling it; every
 /// other in-flight operation is cancelled silently (see the `stage-stepper-ui`
 /// and `app-shell` capability specs).
+///
+/// The gate is on the ~6–12-minute FETCH, not on which route requested it, so
+/// it fires on either setup screen that can host one. Routed through
+/// [`setup_fetch_slots`] rather than a `matches!` over one variant precisely so
+/// a coverage-route module fetch cannot become silently uncancellable.
 pub(crate) fn needs_nav_confirm(state: &AppState) -> bool {
-    matches!(
-        state,
-        AppState::Stage3EnrichSetup {
-            modules_fetch: Some(_),
-            ..
-        }
-    )
+    setup_fetch_slots(state).is_some_and(|(_, modules_fetch)| modules_fetch.is_some())
 }
 
 /// Inline KEGG species-pathway fetch state held by `Stage3EnrichSetup`
@@ -848,6 +1188,63 @@ impl Stage3RunOutput {
     }
 }
 
+/// The window-title suffix for the current screen.
+///
+/// Route-dependent, because the two routes produce different things and a title
+/// bar that still says "Enrichment Analysis" during a coverage survey is simply
+/// wrong — the one place a screenshot or a screen recording carries the app's
+/// self-description.
+///
+/// The two pre-route screens get a neutral suffix: no route has been chosen
+/// yet, so naming either one would be a guess.
+pub(crate) fn window_title_suffix(state: &AppState, route: AnalysisRoute) -> &'static str {
+    match state {
+        AppState::Initializing { .. } | AppState::Stage0ChooseAnalysis => "Metabolomics Analysis",
+        _ => match route {
+            AnalysisRoute::DamEnrichment => "Metabolomic Enrichment Analysis",
+            AnalysisRoute::KeggCoverage => "KEGG Coverage Survey",
+        },
+    }
+}
+
+/// The full window title for the current screen.
+pub(crate) fn window_title(state: &AppState, route: AnalysisRoute) -> String {
+    format!(
+        "Metabolopan (v{}) — {}",
+        env!("CARGO_PKG_VERSION"),
+        window_title_suffix(state, route)
+    )
+}
+
+/// The title the window opens with, before any route is chosen.
+///
+/// `main.rs` passes this to `eframe::run_native` and `App::new` seeds
+/// `window_title` with it, so the first frame sends no viewport command.
+pub fn pre_route_window_title() -> String {
+    window_title(
+        &AppState::Stage0ChooseAnalysis,
+        AnalysisRoute::DamEnrichment,
+    )
+}
+
+impl SessionSettings {
+    /// The coverage result screen's live display filters, assembled from the
+    /// four settings fields that drive them.
+    ///
+    /// The `max(1)` on `min_entry_size` is the load-boundary clamp restated at
+    /// the point of USE: `apply_snapshot` already clamps a stored value, but a
+    /// future writer of the field would otherwise be one missed clamp away from
+    /// letting a zero-compound entry onto the screen.
+    pub fn coverage_display_filters(&self) -> crate::coverage::DisplayFilters {
+        crate::coverage::DisplayFilters {
+            min_entry_size: self.coverage_min_entry_size.max(MIN_COVERAGE_ENTRY_SIZE),
+            min_hit_count: self.min_hit_count,
+            sort_key: self.coverage_sort_key,
+            top_n: self.top_n,
+        }
+    }
+}
+
 /// Read-only provenance funnel counts surfaced on `Stage3RunOutput.funnel`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Stage3Funnel {
@@ -862,6 +1259,88 @@ pub struct Stage3Funnel {
     pub foreground_cids: usize,
     /// Foreground (`K`) cpds appearing in ≥ 1 tested entry's compound set.
     pub detected_in_entries: usize,
+}
+
+/// What the shared running screen's result channel carries.
+///
+/// ONE channel of a two-variant enum, not two channels on the variant: the
+/// drain stays a single `try_recv` and the ordered per-frame drain list keeps
+/// its length. The received variant and the state's `RunningPayload`
+/// discriminant must agree.
+///
+/// Both payloads are boxed: `Stage3RunOutput` carries a `HashSet` universe and a
+/// per-feature map, so an unboxed enum would size every send to the larger
+/// variant.
+pub enum RunOutput {
+    Enrichment(Box<Stage3RunOutput>),
+    Coverage(Box<crate::stage3::CoverageRunOutput>),
+}
+
+/// The route-specific half of a [`App::spawn_stage3_run`] request: which
+/// orchestrator to spawn and what it needs.
+///
+/// `target` and `pubchem_total` are shared and live on [`RunSpawn`]; only these
+/// differ. The enrichment arm carries the COMPLETE `dam_results` — collapsing
+/// it to one element is the `fix-stage3-ui-dual-mode-spawn` regression, and the
+/// only way to reach the orchestrator is through here.
+pub enum RunPayloadSpec {
+    Enrichment {
+        dam_results: Vec<DamResult>,
+        params: crate::stage3::Stage3Params,
+    },
+    Coverage(Box<CoverageSpawn>),
+}
+
+/// The coverage arm's payload, boxed on [`RunPayloadSpec`] so the enum is not
+/// sized to `GroupMapping`'s several `Vec`s on every spawn.
+///
+/// Carries [`PreparedFeatures`](crate::stage3::PreparedFeatures) — already
+/// filtered on the UI thread — rather than the loaded tables, so the spawned
+/// future never holds an intensity matrix.
+pub struct CoverageSpawn {
+    pub prepared: crate::stage3::PreparedFeatures,
+    pub force_refresh_pubchem: bool,
+    pub force_refresh_kegg_conv: bool,
+}
+
+/// One spawn request for the shared running screen.
+///
+/// Bundled into a struct because the alternative is a four-parameter method
+/// whose first argument's meaning changes with its variant — and because the
+/// bundle is what makes "there is exactly one spawn helper" enforceable at a
+/// glance.
+pub struct RunSpawn {
+    pub payload: RunPayloadSpec,
+    pub target: AnalysisPayload,
+    pub pubchem_total: usize,
+}
+
+/// Read-only provenance funnel counts for a coverage run.
+///
+/// [`Stage3Funnel`] is deliberately NOT reused: it lacks the two feature-level
+/// counts the coverage funnel line opens with (`raw_features`, `after_dedup`)
+/// and it carries `foreground_inchikeys` / `foreground_cids`, which the coverage
+/// route is forbidden to render — reusing it would mean two permanently-dead
+/// fields on every coverage run and two missing ones. See the `coverage-ui`
+/// capability spec.
+///
+/// The line's last two terms come from `CoverageResult` (`detected_total` and
+/// `detected_in_entries`), so it is assembled from exactly two carriers.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CoverageFunnel {
+    /// Rows across every loaded `IonModeTable`.
+    pub raw_features: usize,
+    /// Survivors of the group-presence filter. `None` — not
+    /// `Some(raw_features)` — when no metadata `.csv` was supplied, so the
+    /// renderer omits the term rather than printing a tautology.
+    pub in_selected_groups: Option<usize>,
+    /// Survivors of deduplication. The ONLY funnel term the dedup controls can
+    /// move: `D` itself is invariant under them (see `kegg-coverage`).
+    pub after_dedup: usize,
+    /// Distinct InChIKeys resolved.
+    pub detected_inchikeys: usize,
+    /// Distinct PubChem CIDs collected.
+    pub detected_cids: usize,
 }
 
 /// Dot plot render channel payload: RGBA buffer plus its dimensions.
@@ -1074,6 +1553,13 @@ pub struct App {
     /// `rat_face.png` texture, lazily uploaded on the first render of the
     /// bug-report confirm modal title bar.
     pub rat_face_tex: Option<egui::TextureHandle>,
+    /// The window title currently set on the viewport.
+    ///
+    /// Held so `update` can send `ViewportCommand::Title` only on a change,
+    /// rather than once per frame for a value that moves at most twice in a
+    /// session. Seeded to the same string `main.rs` passes to
+    /// `eframe::run_native`, so the first frame sends nothing.
+    pub window_title: String,
     /// Whether the easter egg image popup window is currently open.
     pub show_rat_easter_egg: bool,
 }
@@ -1153,6 +1639,7 @@ impl App {
             pending_back_nav: None,
             stepper_icons: None,
             rat_face_tex: None,
+            window_title: pre_route_window_title(),
             show_rat_easter_egg: false,
         }
     }
@@ -1181,12 +1668,13 @@ impl App {
         self.cache = SessionCache::default();
         self.species_selector = SpeciesSelectorState::default();
         self.organism_group_selector = OrganismGroupSelectorState::default();
-        self.state = AppState::Stage1Input {
-            slot1_mode: None,
-            slot2_revealed: false,
-            slot2_mode: None,
-            error: None,
-        };
+        // Back to the route chooser, not to Stage 1: `settings` was just reset
+        // to default, so `analysis_route` is back to `DamEnrichment` regardless
+        // of which route just finished. Landing on Stage 1 would silently put a
+        // coverage user on the DAM route. The chooser is also the ONLY way to
+        // change route once files are loaded, which is exactly what the
+        // loss-warning modal promised.
+        self.state = AppState::Stage0ChooseAnalysis;
         // Count-only log line (no input/sample names) so bug-report bundles
         // record the reset while staying privacy-safe.
         tracing::info!("new analysis round started — session reset");
@@ -1460,7 +1948,8 @@ impl App {
     }
 
     /// Accept a stale cache (user clicked "Use cached organisms") and
-    /// transition into Stage1Input.
+    /// transition into the route chooser — the same destination the successful
+    /// load takes, since this is the other way `Initializing` completes.
     pub fn accept_fallback_cache(&mut self) {
         let prev = std::mem::take(&mut self.state);
         if let AppState::Initializing {
@@ -1477,7 +1966,7 @@ impl App {
                 organisms: cache.organisms,
                 fetched_at: cache.fetched_at,
             };
-            self.state = AppState::default();
+            self.state = AppState::Stage0ChooseAnalysis;
         } else {
             // Restore prior state if there was no fallback to accept.
             self.state = prev;
@@ -1584,8 +2073,10 @@ impl App {
 
     /// Drain the eager-startup organism-load channel while in
     /// `AppState::Initializing`. On Ok: store the list on `app.organisms`
-    /// and transition to `Stage1Input`. On Err: set `last_error` and stay
-    /// in `Initializing` for the user to Retry.
+    /// and transition to `Stage0ChooseAnalysis`, the route chooser, which is
+    /// now the first stop on the way to Stage 1. On Err: set `last_error` and
+    /// stay in `Initializing` for the user to Retry — the failure path never
+    /// leaves the variant, so it needs no change.
     fn drain_initializing(&mut self) {
         let received = if let AppState::Initializing { load_rx, .. } = &self.state {
             load_rx.try_recv().ok()
@@ -1605,7 +2096,7 @@ impl App {
                     organisms: cache.organisms,
                     fetched_at: cache.fetched_at,
                 };
-                self.state = AppState::default();
+                self.state = AppState::Stage0ChooseAnalysis;
             }
             Err(msg) => {
                 error!(error = %msg, "eager organisms load failed");
@@ -1676,6 +2167,16 @@ impl EframeApp for App {
         self.drain_stage2_running();
         self.drain_stage3_running();
 
+        // Keep the window title in step with the active route. Sent only when
+        // the string actually changes: `ViewportCommand::Title` on every frame
+        // would be a per-frame round trip to the window manager for a value
+        // that changes at most twice a session.
+        let title = window_title(&self.state, self.settings.analysis_route);
+        if self.window_title != title {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.window_title = title;
+        }
+
         // Bottom panel — a two-tab container (Data | Log) per
         // `add-bottom-panel-data-tab`. The tab strip + per-tab visibility rules
         // live in `bottom_panel::show`; the Log tab preserves the prior pane
@@ -1716,6 +2217,9 @@ impl EframeApp for App {
                 AppState::Initializing { .. } => {
                     initializing::show(ui, self);
                 }
+                AppState::Stage0ChooseAnalysis => {
+                    stage0_choose::show(ui, self);
+                }
                 AppState::Stage1Input { .. } => {
                     stage1_input::show(ui, self);
                 }
@@ -1737,6 +2241,12 @@ impl EframeApp for App {
                 AppState::Stage3EnrichResult { .. } => {
                     stage3_result::show(ui, self);
                 }
+                AppState::Stage2CoverageSetup { .. } => {
+                    stage2_coverage_setup::show(ui, self);
+                }
+                AppState::Stage3CoverageResult { .. } => {
+                    stage3_coverage_result::show(ui, self);
+                }
             }
         });
 
@@ -1753,20 +2263,22 @@ impl App {
     /// that toggling mode mid-fetch does not interrupt either stream
     /// (per `reorder-gui-and-move-mode-to-stage3` D6).
     fn drain_stage3_setup_fetch(&mut self) {
-        if let AppState::Stage3EnrichSetup {
-            kegg_fetch,
-            modules_fetch,
-            ..
-        } = &mut self.state
-        {
-            let kegg_terminal = kegg_fetch.as_mut().and_then(drain_kegg_progress);
-            let modules_terminal = modules_fetch.as_mut().and_then(drain_modules_progress);
-            if let Some(event) = kegg_terminal {
-                self.handle_kegg_terminal_event(event);
-            }
-            if let Some(event) = modules_terminal {
-                self.handle_modules_fetch_terminal_event(event);
-            }
+        // Via the shared accessor, so the coverage setup screen's fetches are
+        // drained too — an undrained fetch never reaches its terminal event, so
+        // its progress strip would freeze and its cache would never be written.
+        let (kegg_terminal, modules_terminal) =
+            match crate::app::setup_fetch_slots_mut(&mut self.state) {
+                Some((kegg_fetch, modules_fetch)) => (
+                    kegg_fetch.as_mut().and_then(drain_kegg_progress),
+                    modules_fetch.as_mut().and_then(drain_modules_progress),
+                ),
+                None => return,
+            };
+        if let Some(event) = kegg_terminal {
+            self.handle_kegg_terminal_event(event);
+        }
+        if let Some(event) = modules_terminal {
+            self.handle_modules_fetch_terminal_event(event);
         }
     }
 
@@ -1843,7 +2355,7 @@ impl App {
             }
             let terminal = result_rx.try_recv().ok();
             if let Some(msg) = terminal {
-                self.handle_stage3_terminal(msg);
+                self.handle_run_terminal(msg);
             }
         }
     }
@@ -2115,37 +2627,86 @@ impl App {
     /// `start_run`'s `n_modes` `info!`, which stays at the `start_run` call site
     /// (emitted before this call). The orchestrator's terminal error is logged
     /// once by `handle_stage3_terminal`.
-    pub(crate) fn spawn_stage3_run(
-        &mut self,
-        dam_results: Vec<DamResult>,
-        target: AnalysisPayload,
-        params: crate::stage3::Stage3Params,
-        pubchem_total: usize,
-    ) {
+    ///
+    /// Still takes `dam_results` directly rather than the [`RunningPayload`] the
+    /// `stage3-ui` spec calls for: widening it is what makes `run_coverage` a
+    /// third CALL SITE instead of a second implementation, and `run_coverage`
+    /// does not exist yet. Widening here first would only buy a `Coverage` arm
+    /// with nothing to spawn.
+    pub(crate) fn spawn_stage3_run(&mut self, spawn: RunSpawn) {
+        let RunSpawn {
+            payload,
+            target,
+            pubchem_total,
+        } = spawn;
         let (pub_tx, pub_rx) = mpsc::channel();
         let (kegg_tx, kegg_rx) = mpsc::channel();
-        let (result_tx, result_rx) = mpsc::channel::<Result<Stage3RunOutput, String>>();
+        let (result_tx, result_rx) = mpsc::channel::<Result<RunOutput, String>>();
         let kegg_client = self.kegg.clone();
-        let dam_results_clone = dam_results.clone();
-        let run_handle = self
-            .rt
-            .spawn(async move {
-                let pubchem = crate::pubchem::PubchemClient::new();
-                let r = crate::stage3::run_stage3(
-                    &pubchem,
-                    &kegg_client,
-                    &dam_results_clone,
-                    &target,
-                    params,
-                    pub_tx,
-                    kegg_tx,
-                )
-                .await;
-                let _ = result_tx.send(r.map_err(|e| e.to_string()));
-            })
-            .abort_handle();
+        // One `spawn` per route, but the SAME channel trio and the same
+        // `AbortHandle` capture: the per-call-site duplication of exactly this
+        // plumbing is what caused the `fix-stage3-ui-dual-mode-spawn`
+        // regression, so the coverage route is a third CALL SITE of this
+        // method rather than a second implementation of it.
+        let (run_handle, payload) = match payload {
+            RunPayloadSpec::Enrichment {
+                dam_results,
+                params,
+            } => {
+                let dam_results_clone = dam_results.clone();
+                let handle = self
+                    .rt
+                    .spawn(async move {
+                        let pubchem = crate::pubchem::PubchemClient::new();
+                        let r = crate::stage3::run_stage3(
+                            &pubchem,
+                            &kegg_client,
+                            &dam_results_clone,
+                            &target,
+                            params,
+                            pub_tx,
+                            kegg_tx,
+                        )
+                        .await;
+                        let _ = result_tx.send(
+                            r.map(|o| RunOutput::Enrichment(Box::new(o)))
+                                .map_err(|e| e.to_string()),
+                        );
+                    })
+                    .abort_handle();
+                (handle, RunningPayload::Enrichment(dam_results))
+            }
+            RunPayloadSpec::Coverage(spawn) => {
+                let CoverageSpawn {
+                    prepared,
+                    force_refresh_pubchem,
+                    force_refresh_kegg_conv,
+                } = *spawn;
+                let handle = self
+                    .rt
+                    .spawn(async move {
+                        let pubchem = crate::pubchem::PubchemClient::new();
+                        let r = crate::stage3::run_coverage(
+                            &pubchem,
+                            &kegg_client,
+                            prepared,
+                            &target,
+                            (force_refresh_pubchem, force_refresh_kegg_conv),
+                            pub_tx,
+                            kegg_tx,
+                        )
+                        .await;
+                        let _ = result_tx.send(
+                            r.map(|o| RunOutput::Coverage(Box::new(o)))
+                                .map_err(|e| e.to_string()),
+                        );
+                    })
+                    .abort_handle();
+                (handle, RunningPayload::Coverage)
+            }
+        };
         self.state = AppState::Stage3EnrichRunning {
-            dam_results,
+            payload,
             phase: Stage3Phase::PubChem,
             pubchem_progress_rx: pub_rx,
             kegg_conv_progress_rx: kegg_rx,
@@ -2158,12 +2719,97 @@ impl App {
         };
     }
 
+    /// Route the shared running screen's terminal event to the handler for the
+    /// run that produced it.
+    ///
+    /// The channel carries one two-variant enum rather than two channels, so
+    /// the drain stays a single `try_recv` and the per-frame drain list keeps
+    /// its length. The received variant and the state's `RunningPayload`
+    /// discriminant must agree; a mismatch is a programming error, not a
+    /// recoverable condition, so it is asserted in debug and dropped in release
+    /// rather than silently transitioning to the wrong screen.
+    fn handle_run_terminal(&mut self, msg: Result<RunOutput, String>) {
+        let is_coverage = matches!(
+            &self.state,
+            AppState::Stage3EnrichRunning {
+                payload: RunningPayload::Coverage,
+                ..
+            }
+        );
+        match msg {
+            Ok(RunOutput::Enrichment(out)) => {
+                debug_assert!(!is_coverage, "enrichment output on a coverage run");
+                self.handle_stage3_terminal(Ok(*out));
+            }
+            Ok(RunOutput::Coverage(out)) => {
+                debug_assert!(is_coverage, "coverage output on an enrichment run");
+                self.handle_coverage_terminal(Ok(*out));
+            }
+            // An error carries no discriminant of its own, so the state's does
+            // the routing.
+            Err(e) if is_coverage => self.handle_coverage_terminal(Err(e)),
+            Err(e) => self.handle_stage3_terminal(Err(e)),
+        }
+    }
+
+    /// Handle the coverage orchestrator's terminal result. On Ok, move into
+    /// `Stage3CoverageResult`; on Err, return to `Stage2CoverageSetup` with the
+    /// error preserved and every settings field intact.
+    fn handle_coverage_terminal(&mut self, msg: Result<crate::stage3::CoverageRunOutput, String>) {
+        let prev = std::mem::take(&mut self.state);
+        let AppState::Stage3EnrichRunning {
+            payload: RunningPayload::Coverage,
+            ..
+        } = prev
+        else {
+            return;
+        };
+        match msg {
+            Ok(out) => {
+                let displayed = crate::coverage::displayed_rows(
+                    &out.coverage_result,
+                    self.settings.coverage_display_filters(),
+                )
+                .len();
+                info!(
+                    entries_total = out.coverage_result.entries_total,
+                    detected_total = out.coverage_result.detected_total,
+                    detected_in_entries = out.coverage_result.detected_in_entries,
+                    displayed_rows = displayed,
+                    "Coverage run complete"
+                );
+                // Same run-entry autosize the enrichment route performs, for the
+                // same reason: a sparse result should not render in a tall band
+                // of whitespace. The Height field remains a user override.
+                self.settings.stage3_export_height_in =
+                    stage3_autosize_height_in(self.settings.top_n, displayed);
+                self.state = out.into_result_state();
+            }
+            Err(e) => {
+                error!(error = %e, "Coverage run failed");
+                self.state = AppState::Stage2CoverageSetup {
+                    error: Some(e),
+                    stale_groups_notice: None,
+                    kegg_fetch: None,
+                    modules_fetch: None,
+                };
+            }
+        }
+    }
+
     /// Handle the orchestrator's terminal result for Stage 3. On Ok,
     /// move into `Stage3EnrichResult` with the payload populated; on
     /// Err, return to `Stage3EnrichSetup` with the error preserved.
     fn handle_stage3_terminal(&mut self, msg: Result<Stage3RunOutput, String>) {
         let prev = std::mem::take(&mut self.state);
-        let AppState::Stage3EnrichRunning { dam_results, .. } = prev else {
+        // Guards on the payload discriminant too: an enrichment terminal event
+        // arriving while a COVERAGE run owns the shared running screen is a bug,
+        // and taking the state on it would strand the coverage run.
+        let AppState::Stage3EnrichRunning {
+            payload: RunningPayload::Enrichment(dam_results),
+            ..
+        } = prev
+        else {
             return;
         };
         match msg {
@@ -2314,6 +2960,13 @@ mod tests {
             stage3_export_width_in: 5.0,
             stage3_export_height_in: 10.0,
             stage3_export_dpi: 600,
+
+            // Analysis route + KEGG coverage route (every value non-default)
+            analysis_route: AnalysisRoute::KeggCoverage,
+            coverage_min_entry_size: 7,
+            coverage_sort_key: CoverageSortKey::Hits,
+            coverage_selected_groups: Some(vec!["QC".to_string()]),
+            coverage_presence_threshold: 0.75,
         }
     }
 
@@ -2525,7 +3178,7 @@ mod tests {
     }
 
     #[test]
-    fn start_new_round_resets_session_and_returns_to_stage1() {
+    fn start_new_round_resets_session_and_returns_to_the_route_chooser() {
         let mut app = test_app();
         // Dirty every resettable surface, mid-analysis.
         app.settings = non_default_settings();
@@ -2560,16 +3213,16 @@ mod tests {
         assert!(app.species_selector.filter.is_empty());
         assert!(!app.species_selector.picker_open);
         assert_eq!(app.organism_group_selector.level, 2);
-        // Landed on a fresh Stage 1 input screen.
-        assert!(matches!(
-            app.state,
-            AppState::Stage1Input {
-                slot1_mode: None,
-                slot2_revealed: false,
-                slot2_mode: None,
-                error: None,
-            }
-        ));
+        // Landed on the route chooser, NOT on Stage 1. `settings` was just
+        // reset, so `analysis_route` is back to its `DamEnrichment` default;
+        // going straight to Stage 1 would silently put a user who just
+        // finished a coverage survey onto the DAM route.
+        assert!(matches!(app.state, AppState::Stage0ChooseAnalysis));
+        assert_eq!(
+            app.settings.analysis_route,
+            AnalysisRoute::DamEnrichment,
+            "the route is part of the reset, which is why the chooser is the destination"
+        );
     }
 
     #[test]
@@ -2591,7 +3244,7 @@ mod tests {
             OrganismsLoadState::Loaded { .. }
         ));
         assert!(!matches!(app.state, AppState::Initializing { .. }));
-        assert!(matches!(app.state, AppState::Stage1Input { .. }));
+        assert!(matches!(app.state, AppState::Stage0ChooseAnalysis));
     }
 
     #[test]
@@ -2693,9 +3346,56 @@ mod tests {
         }
     }
 
+    /// The coverage route's setup screen, which owns the same two slots. Every
+    /// slot-driven predicate is asserted against BOTH constructors: six of the
+    /// eight dispatching sites are not compiler-enforced for a missing arm.
+    fn coverage_setup_state(
+        kegg_fetch: Option<KeggFetchInFlight>,
+        modules_fetch: Option<ModulesFetchInFlight>,
+    ) -> AppState {
+        AppState::Stage2CoverageSetup {
+            error: None,
+            stale_groups_notice: None,
+            kegg_fetch,
+            modules_fetch,
+        }
+    }
+
+    fn coverage_result_state(rendering: bool) -> AppState {
+        AppState::Stage3CoverageResult {
+            coverage_result: crate::coverage::CoverageResult {
+                rows: vec![],
+                detected_total: 0,
+                entries_total: 0,
+                entries_without_compounds: 0,
+                detected_in_entries: 0,
+            },
+            funnel: CoverageFunnel::default(),
+            cpd_to_names: std::collections::HashMap::new(),
+            module_retention: None,
+            mode_partition: None,
+            dedup_reports: vec![],
+            pubchem_time_span: None,
+            kegg_conv_time_span: None,
+            dotplot_tex: None,
+            rendering,
+            render_rx: None,
+            confirming_new_round: false,
+            height_user_overridden: false,
+        }
+    }
+
     fn enrich_running(run_handle: AbortHandle) -> AppState {
+        running_state(RunningPayload::Enrichment(vec![]), run_handle)
+    }
+
+    fn coverage_running(run_handle: AbortHandle) -> AppState {
+        running_state(RunningPayload::Coverage, run_handle)
+    }
+
+    fn running_state(payload: RunningPayload, run_handle: AbortHandle) -> AppState {
         AppState::Stage3EnrichRunning {
-            dam_results: vec![],
+            payload,
             phase: Stage3Phase::PubChem,
             pubchem_progress_rx: dummy_rx(),
             kegg_conv_progress_rx: dummy_rx(),
@@ -2754,6 +3454,31 @@ mod tests {
         }));
         assert!(!is_busy(&setup_state(None, None)));
         assert!(!is_busy(&stage3_result_state())); // Idle refresh, no render
+        assert!(!is_busy(&AppState::Stage0ChooseAnalysis));
+    }
+
+    /// The coverage route's half of the truth table. `Stage2CoverageSetup` hosts
+    /// the same two fetches as `Stage3EnrichSetup` and must answer identically;
+    /// `Stage3CoverageResult` has no `refresh_state`, so `rendering` alone
+    /// decides.
+    #[test]
+    fn is_busy_truth_table_coverage_route() {
+        let rt = mt_rt();
+        let (a, _) = parked(&rt);
+
+        assert!(is_busy(&coverage_running(a.clone())));
+        assert!(is_busy(&coverage_setup_state(
+            Some(kegg_inflight(a.clone(), a.clone())),
+            None
+        )));
+        assert!(is_busy(&coverage_setup_state(
+            None,
+            Some(modules_inflight(a.clone(), a.clone()))
+        )));
+        assert!(is_busy(&coverage_result_state(true)));
+
+        assert!(!is_busy(&coverage_setup_state(None, None)));
+        assert!(!is_busy(&coverage_result_state(false)));
     }
 
     #[test]
@@ -2771,6 +3496,248 @@ mod tests {
         )));
         assert!(!needs_nav_confirm(&enrich_running(a.clone())));
         assert!(!needs_nav_confirm(&setup_state(None, None)));
+    }
+
+    /// The gate is on the ~6–12-minute FETCH, not on which route requested it.
+    ///
+    /// Mandatory, not illustrative: a `Stage2CoverageSetup` arm missing here
+    /// compiles fine and makes a coverage-route module fetch **uncancellable
+    /// without warning** — the stepper would abort it silently, discarding
+    /// several minutes of KEGG traffic with no confirm.
+    #[test]
+    fn needs_nav_confirm_fires_on_a_coverage_route_module_fetch() {
+        let rt = mt_rt();
+        let (a, _) = parked(&rt);
+        assert!(needs_nav_confirm(&coverage_setup_state(
+            None,
+            Some(modules_inflight(a.clone(), a.clone()))
+        )));
+        assert!(!needs_nav_confirm(&coverage_setup_state(
+            Some(kegg_inflight(a.clone(), a.clone())),
+            None
+        )));
+        assert!(!needs_nav_confirm(&coverage_setup_state(None, None)));
+        assert!(!needs_nav_confirm(&coverage_running(a.clone())));
+        assert!(!needs_nav_confirm(&coverage_result_state(true)));
+        assert!(!needs_nav_confirm(&AppState::Stage0ChooseAnalysis));
+    }
+
+    /// The shared-block accessors answer for BOTH setup screens and for neither
+    /// of anything else. They are the single enumeration point, so this is the
+    /// test that keeps the coverage setup screen from silently losing the mode
+    /// toggle, the selector, and the inline fetch progress.
+    #[test]
+    fn setup_fetch_slots_answers_for_both_setup_screens() {
+        let rt = mt_rt();
+        let (a, _) = parked(&rt);
+
+        for state in [setup_state(None, None), coverage_setup_state(None, None)] {
+            assert!(is_target_setup(&state));
+            assert!(setup_fetch_slots(&state).is_some());
+        }
+
+        for mut state in [
+            AppState::Stage0ChooseAnalysis,
+            AppState::Stage2DamSetup { error: None },
+            enrich_running(a.clone()),
+            coverage_running(a.clone()),
+            stage3_result_state(),
+            coverage_result_state(false),
+        ] {
+            assert!(
+                !is_target_setup(&state),
+                "non-setup variant claimed the block"
+            );
+            assert!(setup_fetch_slots(&state).is_none());
+            assert!(setup_fetch_slots_mut(&mut state).is_none());
+        }
+    }
+
+    /// `abort_and_clear_setup_fetches` must cancel and clear on the coverage
+    /// setup screen too — otherwise toggling the mode there leaves the previous
+    /// mode's fetch contending for the shared KEGG rate limit.
+    #[test]
+    fn abort_and_clear_setup_fetches_covers_the_coverage_setup_screen() {
+        let rt = mt_rt();
+        let (fa, fj) = parked(&rt);
+        let (ra, rj) = parked(&rt);
+        let (mfa, mfj) = parked(&rt);
+        let (mra, mrj) = parked(&rt);
+        let mut state = coverage_setup_state(
+            Some(kegg_inflight(fa, ra)),
+            Some(modules_inflight(mfa, mra)),
+        );
+
+        abort_and_clear_setup_fetches(&mut state);
+
+        let (kegg_fetch, modules_fetch) = setup_fetch_slots(&state).expect("still a setup variant");
+        assert!(kegg_fetch.is_none());
+        assert!(modules_fetch.is_none());
+        for jh in [fj, rj, mfj, mrj] {
+            assert!(rt.block_on(jh).unwrap_err().is_cancelled());
+        }
+    }
+
+    /// The title bar names the ACTIVE route. A coverage session that still
+    /// says "Enrichment Analysis" is wrong in the one place a screenshot or a
+    /// screen recording carries the app's self-description.
+    #[test]
+    fn the_window_title_follows_the_route() {
+        let coverage_screen = AppState::Stage2CoverageSetup {
+            error: None,
+            stale_groups_notice: None,
+            kegg_fetch: None,
+            modules_fetch: None,
+        };
+        assert!(
+            window_title(&coverage_screen, AnalysisRoute::KeggCoverage)
+                .ends_with("KEGG Coverage Survey")
+        );
+        assert!(
+            window_title(
+                &AppState::Stage2DamSetup { error: None },
+                AnalysisRoute::DamEnrichment
+            )
+            .ends_with("Metabolomic Enrichment Analysis")
+        );
+    }
+
+    /// Both pre-route screens get a NEUTRAL suffix: no route has been chosen,
+    /// so naming either one would be a guess — and the chooser naming a route
+    /// would preempt the choice it is asking the user to make.
+    #[test]
+    fn the_pre_route_title_names_no_route() {
+        let (_tx, load_rx) = std::sync::mpsc::channel();
+        let initializing = AppState::Initializing {
+            load_rx,
+            fallback_cache: None,
+            last_error: None,
+        };
+        for state in [&initializing, &AppState::Stage0ChooseAnalysis] {
+            for route in [AnalysisRoute::DamEnrichment, AnalysisRoute::KeggCoverage] {
+                let t = window_title(state, route);
+                assert!(t.ends_with("Metabolomics Analysis"), "{t}");
+                assert!(!t.contains("Enrichment"), "{t}");
+                assert!(!t.contains("Coverage"), "{t}");
+            }
+        }
+        // `main.rs` and `App::new` must agree, or the first frame would send a
+        // redundant viewport command and the title would visibly flicker.
+        assert_eq!(
+            pre_route_window_title(),
+            window_title(
+                &AppState::Stage0ChooseAnalysis,
+                AnalysisRoute::DamEnrichment
+            )
+        );
+    }
+
+    /// The result screen's filter chain comes from ONE place, so the table,
+    /// the plot, and the CSV cannot drift. The clamp is restated at the point
+    /// of use: a `coverage_min_entry_size` of 0 reaching `displayed_rows` would
+    /// re-admit zero-compound entries, which is the precise outcome the floor
+    /// exists to make impossible.
+    #[test]
+    fn coverage_display_filters_clamp_the_entry_size_floor() {
+        let mut s = SessionSettings {
+            coverage_min_entry_size: 0,
+            min_hit_count: 2,
+            top_n: 7,
+            coverage_sort_key: CoverageSortKey::Hits,
+            ..SessionSettings::default()
+        };
+
+        let f = s.coverage_display_filters();
+        assert_eq!(f.min_entry_size, MIN_COVERAGE_ENTRY_SIZE);
+        assert_eq!(f.min_hit_count, 2);
+        assert_eq!(f.top_n, 7);
+        assert_eq!(f.sort_key, CoverageSortKey::Hits);
+
+        // A legitimate value passes through untouched.
+        s.coverage_min_entry_size = 12;
+        assert_eq!(s.coverage_display_filters().min_entry_size, 12);
+    }
+
+    /// `top_n` and `min_hit_count` are SHARED with the enrichment route rather
+    /// than duplicated — they are pure display caps with the same meaning on
+    /// both, and a second pair would drift.
+    #[test]
+    fn coverage_display_filters_read_the_shared_caps() {
+        let s = SessionSettings {
+            top_n: 33,
+            min_hit_count: 4,
+            ..SessionSettings::default()
+        };
+        let f = s.coverage_display_filters();
+        assert_eq!((f.top_n, f.min_hit_count), (s.top_n, s.min_hit_count));
+    }
+
+    /// **Mandatory, not illustrative.** `navigate_back_to`'s step-1 arm was
+    /// route-blind — a single `1 => Stage2DamSetup` table — and a step index
+    /// means nothing without the route: step 1 is `DAM Setup` on one track and
+    /// `Setup` on the other. Without the split, a coverage user clicking
+    /// `Setup` lands on the DAM setup screen: a plausible-looking screen for an
+    /// analysis they are not running, with no error anywhere.
+    #[test]
+    fn coverage_route_back_navigation_lands_on_the_coverage_setup_screen() {
+        let mut app = test_app();
+        app.settings.analysis_route = AnalysisRoute::KeggCoverage;
+        app.state = coverage_result_state(false);
+
+        crate::ui::stepper::navigate_back_to(&mut app, 1);
+
+        assert!(
+            matches!(app.state, AppState::Stage2CoverageSetup { .. }),
+            "step 1 on the coverage track is `Setup`, not `DAM Setup`"
+        );
+        assert!(!matches!(app.state, AppState::Stage2DamSetup { .. }));
+    }
+
+    /// The same index on the other route still means `DAM Setup` — the split is
+    /// a widening, not a redirect.
+    #[test]
+    fn dam_route_back_navigation_is_unchanged() {
+        let mut app = test_app();
+        app.settings.analysis_route = AnalysisRoute::DamEnrichment;
+        app.state = stage3_result_state();
+
+        crate::ui::stepper::navigate_back_to(&mut app, 1);
+
+        assert!(matches!(app.state, AppState::Stage2DamSetup { .. }));
+    }
+
+    /// Step 0 is `Input` on both tracks, and every settings field — the five
+    /// coverage ones included — survives the jump, because all three named
+    /// reset APIs are no-ops.
+    #[test]
+    fn coverage_route_back_to_input_preserves_every_setting() {
+        let mut app = test_app();
+        app.settings = non_default_settings();
+        app.settings.analysis_route = AnalysisRoute::KeggCoverage;
+        let before = app.settings.clone();
+        app.state = coverage_result_state(false);
+
+        crate::ui::stepper::navigate_back_to(&mut app, 0);
+
+        assert!(matches!(app.state, AppState::Stage1Input { .. }));
+        assert_eq!(app.settings, before);
+    }
+
+    /// `abort_in_flight` reaches the coverage route's in-flight work: a fetch on
+    /// its setup screen and a running coverage orchestrator.
+    #[test]
+    fn abort_in_flight_covers_the_coverage_route() {
+        let rt = mt_rt();
+        let (fa, fj) = parked(&rt);
+        let (ra, rj) = parked(&rt);
+        abort_in_flight(&coverage_setup_state(Some(kegg_inflight(fa, ra)), None));
+        for jh in [fj, rj] {
+            assert!(rt.block_on(jh).unwrap_err().is_cancelled());
+        }
+
+        let (run_a, run_j) = parked(&rt);
+        abort_in_flight(&coverage_running(run_a));
+        assert!(rt.block_on(run_j).unwrap_err().is_cancelled());
     }
 
     #[test]

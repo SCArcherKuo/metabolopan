@@ -105,6 +105,121 @@ pub(crate) fn encode_png(
     Ok(())
 }
 
+// ── Shared chart vocabulary (dot plots) ────────────────────────────────────
+
+/// ColorBrewer YlOrRd 9-step sequential palette. Used as a piecewise-
+/// linear lookup so the continuous gradient stays close to ColorBrewer's
+/// designed perceptual curve — a 2-anchor sRGB lerp between the
+/// extremes (which is what this code used to do) produced a muddy
+/// brownish mid-tone (~`#dd6d4e`) the curated palette specifically
+/// avoids; the curated mid-bin is `#fd8d3c` (a vivid orange).
+///
+/// Index 0 = palest yellow `#ffffcc` (t=0, FDR at threshold; least
+/// significant in the displayed band). Index 8 = deepest red `#800026`
+/// (t=1, FDR at the displayed maximum `-log10`; most significant).
+///
+/// Source: <https://colorbrewer2.org/#type=sequential&scheme=YlOrRd&n=9>
+pub(crate) const YLORRD_9: [(u8, u8, u8); 9] = [
+    (255, 255, 204), // #ffffcc  palest yellow (t=0)
+    (255, 237, 160), // #ffeda0
+    (254, 217, 118), // #fed976
+    (254, 178, 76),  // #feb24c
+    (253, 141, 60),  // #fd8d3c  curated mid-bin
+    (252, 78, 42),   // #fc4e2a
+    (227, 26, 28),   // #e31a1c
+    (189, 0, 38),    // #bd0026
+    (128, 0, 38),    // #800026  deepest red (t=1)
+];
+
+/// Pure gradient lookup over the ColorBrewer YlOrRd 9-step palette
+/// using piecewise-linear interpolation between adjacent anchors.
+/// `t=0` returns palest yellow (`YLORRD_9[0]`), `t=1` returns deepest
+/// red (`YLORRD_9[8]`), and any `t` in between lerps within whichever
+/// of the 8 adjacent-anchor segments it falls into. Out-of-range `t`
+/// values are clamped.
+pub(crate) fn t_to_color(t: f64) -> RGBColor {
+    let t = t.clamp(0.0, 1.0);
+    let last = YLORRD_9.len() - 1;
+    let pos = t * last as f64;
+    let lo = (pos.floor() as usize).min(last);
+    let hi = (lo + 1).min(last);
+    let frac = pos - lo as f64;
+    let a = YLORRD_9[lo];
+    let b = YLORRD_9[hi];
+    RGBColor(
+        lerp(a.0, b.0, frac),
+        lerp(a.1, b.1, frac),
+        lerp(a.2, b.2, frac),
+    )
+}
+
+/// Greedy word-wrap a label into up to `max_lines` lines, each at most
+/// `chars_per_line` chars. The last kept line is suffixed with `…` only
+/// when the original would have produced more than `max_lines` lines.
+/// Words longer than `chars_per_line` are hard-truncated with `…` so
+/// the layout never overflows the label area.
+///
+/// Returns at least one line (an empty string for empty input) so the
+/// caller can unconditionally iterate.
+pub(crate) fn wrap_label(name: &str, chars_per_line: usize, max_lines: usize) -> Vec<String> {
+    if max_lines == 0 {
+        return Vec::new();
+    }
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return vec![String::new()];
+    }
+
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for w in trimmed.split_whitespace() {
+        let needs_space = !current.is_empty();
+        let candidate_len = current.chars().count() + usize::from(needs_space) + w.chars().count();
+        if candidate_len <= chars_per_line {
+            if needs_space {
+                current.push(' ');
+            }
+            current.push_str(w);
+        } else {
+            if !current.is_empty() {
+                lines.push(std::mem::take(&mut current));
+            }
+            if w.chars().count() > chars_per_line {
+                // Single word exceeds the per-line budget; hard-truncate.
+                let kept: String = w.chars().take(chars_per_line.saturating_sub(1)).collect();
+                current = kept;
+                current.push('…');
+            } else {
+                current = w.to_string();
+            }
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+
+    if lines.len() > max_lines {
+        lines.truncate(max_lines);
+        let last = lines.last_mut().unwrap();
+        // Append "…" without exceeding the per-line budget.
+        if last.chars().count() + 1 > chars_per_line {
+            let kept: String = last
+                .chars()
+                .take(chars_per_line.saturating_sub(1))
+                .collect();
+            *last = kept;
+        }
+        last.push('…');
+    }
+
+    lines
+}
+
+fn lerp(a: u8, b: u8, t: f64) -> u8 {
+    let t = t.clamp(0.0, 1.0);
+    (a as f64 + (b as f64 - a as f64) * t).round() as u8
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,5 +311,128 @@ mod tests {
         assert_eq!(xppu, expected, "xppu encodes 300 DPI");
         assert_eq!(yppu, expected, "yppu encodes 300 DPI");
         assert_eq!(unit, 1, "unit byte is Meter (1)");
+    }
+
+    #[test]
+    fn wrap_label_short_name_returns_single_line_unchanged() {
+        assert_eq!(wrap_label("Glycolysis", 28, 2), vec!["Glycolysis"]);
+    }
+
+    #[test]
+    fn wrap_label_long_name_breaks_at_word_boundary_into_two_lines() {
+        let lines = wrap_label("Pentose and glucuronate interconversions", 28, 2);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], "Pentose and glucuronate");
+        assert_eq!(lines[1], "interconversions");
+        // No line exceeds the budget.
+        assert!(lines.iter().all(|l| l.chars().count() <= 28));
+    }
+
+    #[test]
+    fn wrap_label_exceeding_max_lines_ellipsis_truncates_last_line() {
+        let lines = wrap_label("Amino sugar and nucleotide sugar metabolism extras", 18, 2);
+        assert_eq!(lines.len(), 2);
+        assert!(lines.last().unwrap().ends_with('…'));
+        assert!(lines.iter().all(|l| l.chars().count() <= 18));
+    }
+
+    #[test]
+    fn wrap_label_single_word_longer_than_budget_hard_truncates() {
+        // "Supercalifragilisticexpialidocious" is 34 chars; budget 20.
+        let lines = wrap_label("Supercalifragilisticexpialidocious", 20, 2);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].ends_with('…'));
+        assert_eq!(lines[0].chars().count(), 20);
+    }
+
+    #[test]
+    fn wrap_label_max_lines_one_forces_single_line_with_ellipsis() {
+        let lines = wrap_label("Pentose and glucuronate interconversions", 28, 1);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].ends_with('…'));
+        assert!(lines[0].chars().count() <= 28);
+    }
+
+    #[test]
+    fn wrap_label_empty_input_returns_single_empty_line() {
+        assert_eq!(wrap_label("", 28, 2), vec![String::new()]);
+        assert_eq!(wrap_label("   ", 28, 2), vec![String::new()]);
+    }
+
+    #[test]
+    fn wrap_label_three_lines_for_very_long_name() {
+        // A name needing three lines wraps fully at the 26-char budget with
+        // no ellipsis (previously truncated at the old 2-line cap).
+        let lines = wrap_label(
+            "Glycosaminoglycan biosynthesis heparan sulfate keratan route",
+            26,
+            3,
+        );
+        assert_eq!(lines.len(), 3, "got: {lines:?}");
+        assert!(lines.iter().all(|l| l.chars().count() <= 26));
+        assert!(
+            !lines.last().unwrap().ends_with('…'),
+            "fits in 3 lines, no ellipsis: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn wrap_label_four_lines_for_very_long_name() {
+        // MAX_LABEL_LINES is now 4: a name needing four lines wraps fully at
+        // the budget with no ellipsis (previously capped at 3).
+        let lines = wrap_label(
+            "Amino sugar and nucleotide sugar metabolism related glycan degradation",
+            20,
+            4,
+        );
+        assert_eq!(lines.len(), 4, "got: {lines:?}");
+        assert!(lines.iter().all(|l| l.chars().count() <= 20));
+        assert!(
+            !lines.last().unwrap().ends_with('…'),
+            "fits in 4 lines, no ellipsis: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn ylorrd_9_endpoints_match_colorbrewer() {
+        // Locks the palette in place: a future copy-paste mistake on the
+        // ColorBrewer hex values would silently shift the whole gradient.
+        assert_eq!(YLORRD_9.len(), 9);
+        assert_eq!(YLORRD_9[0], (255, 255, 204)); // #ffffcc
+        assert_eq!(YLORRD_9[4], (253, 141, 60)); // #fd8d3c (curated mid-bin)
+        assert_eq!(YLORRD_9[8], (128, 0, 38)); // #800026
+    }
+
+    #[test]
+    fn t_to_color_hits_each_colorbrewer_anchor_exactly() {
+        // The 9 anchors must land at t = i/8 with zero interpolation
+        // error — confirms the piecewise-linear lookup is anchored on
+        // the curated bins, not on an off-by-one neighbour.
+        for (i, &(r, g, b)) in YLORRD_9.iter().enumerate() {
+            let t = i as f64 / 8.0;
+            assert_eq!(
+                t_to_color(t),
+                RGBColor(r, g, b),
+                "anchor {i} (t={t}) drifted"
+            );
+        }
+    }
+
+    #[test]
+    fn t_to_color_midpoint_close_to_colorbrewer_mid_bin() {
+        // The whole point of the LUT: t=0.5 should land near ColorBrewer's
+        // curated mid-bin `#fd8d3c` (vivid orange) — NOT the muddy
+        // brownish-orange (~`#dd6d4e`) a 2-anchor sRGB lerp between the
+        // extremes would have produced. With 9 anchors, t=0.5 lands exactly
+        // on the curated mid-bin.
+        let mid = t_to_color(0.5);
+        let (r, g, b) = YLORRD_9[4];
+        assert_eq!(mid, RGBColor(r, g, b));
+        // sRGB lerp G channel of #800026 (G=0) ↔ #ffffcc (G=255): (0 + 255) / 2.
+        let two_anchor_mid_green = 255 / 2;
+        assert!(
+            (mid.1 as i32 - two_anchor_mid_green).abs() > 10,
+            "ColorBrewer mid-bin should diverge from a naive 2-anchor lerp"
+        );
     }
 }

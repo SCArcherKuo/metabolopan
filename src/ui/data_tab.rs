@@ -14,7 +14,8 @@ use chrono::{DateTime, Utc};
 use egui::{RichText, ScrollArea};
 
 use crate::app::{
-    AnalysisMode, App, AppState, RefreshState, SessionCache, SessionSettings, Stage3Funnel,
+    AnalysisMode, App, AppState, RefreshState, RunningPayload, SessionCache, SessionSettings,
+    Stage3Funnel,
 };
 use crate::dam::{DamMethod, DamResult, Trend, classify_trend};
 use crate::data::{GroupMapping, IonMode, IonModeTable, UNASSIGNED};
@@ -139,18 +140,19 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                 settings.fdr_threshold,
                 settings.delta_threshold,
             );
-            // Only `Stage3EnrichSetup` carries `modules_fetch`; `Running` does not.
-            let module_fetch_in_flight = matches!(
-                &app.state,
-                AppState::Stage3EnrichSetup {
-                    modules_fetch: Some(_),
-                    ..
-                }
-            );
+            // Only a setup screen carries `modules_fetch`; `Running` does not.
+            let module_fetch_in_flight = crate::app::setup_fetch_slots(&app.state)
+                .is_some_and(|(_, modules_fetch)| modules_fetch.is_some());
             match &app.state {
                 AppState::Initializing { .. } => {
                     ui.label("Loading…");
                 }
+                // Nothing is loaded on the route chooser and nothing is loading
+                // either, so the panel renders EMPTY. It previously borrowed
+                // `Initializing`'s "Loading…" stub, which said something untrue:
+                // the roster load has already finished by the time this screen
+                // appears, and a reader waiting for it would wait forever.
+                AppState::Stage0ChooseAnalysis => {}
                 AppState::Stage1Input { .. } => {
                     render_stage1(ui, &inputs.ion_tables, mapping);
                 }
@@ -172,7 +174,10 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                     render_metadata(ui, &inputs.ion_tables, mapping, false);
                 }
                 AppState::Stage3EnrichSetup { dam_results, .. }
-                | AppState::Stage3EnrichRunning { dam_results, .. } => {
+                | AppState::Stage3EnrichRunning {
+                    payload: RunningPayload::Enrichment(dam_results),
+                    ..
+                } => {
                     // Cache data → Enrichment data → DAM data → slots → metadata.
                     render_cache_block_setup(
                         ui,
@@ -250,6 +255,71 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                     );
                     render_metadata(ui, &inputs.ion_tables, mapping, false);
                 }
+                // ── Coverage route ──
+                //
+                // No `DAM data` block on any of these: that block reports a
+                // numerator/denominator comparison, a statistical method, and an
+                // up/down/ns tally, none of which exist on a route that runs no
+                // differential analysis. Rendering it with zeros would
+                // misrepresent the run.
+                AppState::Stage2CoverageSetup { .. }
+                | AppState::Stage3EnrichRunning {
+                    payload: RunningPayload::Coverage,
+                    ..
+                } => {
+                    render_cache_block_setup(
+                        ui,
+                        settings,
+                        cache,
+                        module_fetch_in_flight,
+                        organisms_fetched_at,
+                        organisms_loading,
+                        &mut setup_module_refresh,
+                        &mut setup_pathway_refresh,
+                        &mut organisms_refresh,
+                    );
+                    render_coverage_target_block(ui, settings, cache);
+                    ui.add_space(8.0);
+                    render_stage2_setup(ui, &inputs.ion_tables, mapping);
+                }
+                AppState::Stage3CoverageResult {
+                    coverage_result,
+                    funnel,
+                    module_retention,
+                    mode_partition,
+                    dedup_reports,
+                    pubchem_time_span,
+                    kegg_conv_time_span,
+                    ..
+                } => {
+                    render_coverage_cache_block(
+                        ui,
+                        settings.analysis_mode,
+                        cache.species_kegg.as_ref(),
+                        module_retention.as_ref(),
+                        *pubchem_time_span,
+                        *kegg_conv_time_span,
+                        organisms_fetched_at,
+                        organisms_loading,
+                        &mut organisms_refresh,
+                    );
+                    render_coverage_result_block(
+                        ui,
+                        settings,
+                        cache,
+                        coverage_result,
+                        funnel,
+                        mode_partition.as_ref(),
+                    );
+                    ui.add_space(8.0);
+                    render_coverage_slots(
+                        ui,
+                        &inputs.ion_tables,
+                        dedup_reports,
+                        &mut dedup_download,
+                    );
+                    render_metadata(ui, &inputs.ion_tables, mapping, false);
+                }
             }
         });
 
@@ -284,7 +354,17 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
         app.log_ui.organisms_refresh_requested = true;
     }
     if dedup_download {
-        crate::ui::stage2_threshold::download_dedup_audit_csv(app);
+        // Same writer on both routes; only the source of the reports differs.
+        match &app.state {
+            AppState::Stage3CoverageResult { dedup_reports, .. } => {
+                let reports: Vec<&crate::dedup::DedupReport> = dedup_reports.iter().collect();
+                crate::ui::stage2_threshold::write_dedup_audit(
+                    &reports,
+                    app.inputs.ion_tables.as_slice(),
+                );
+            }
+            _ => crate::ui::stage2_threshold::download_dedup_audit_csv(app),
+        }
     }
 }
 
@@ -366,6 +446,227 @@ fn render_dam_slots(
         *dedup_download = true;
     }
     ui.add_space(6.0);
+}
+
+// ── Coverage-route blocks ──────────────────────────────────────────────────
+
+/// `Coverage data` on the coverage SETUP screens: the analysis target, and the
+/// group selection when a `.csv` was supplied.
+///
+/// Named `Coverage data`, not `Enrichment data`: this route computes no
+/// enrichment, and a header naming one would be the first thing a reader of a
+/// bug report saw.
+fn render_coverage_target_block(
+    ui: &mut egui::Ui,
+    settings: &SessionSettings,
+    cache: &SessionCache,
+) {
+    section_header(ui, "Coverage data");
+    kv_line(
+        ui,
+        &format!("Analysis mode: {}", mode_name(settings.analysis_mode)),
+    );
+    match settings.analysis_mode {
+        AnalysisMode::Pathway => {
+            kv_line(
+                ui,
+                &format!(
+                    "Species: {}",
+                    settings.kegg_species.as_deref().unwrap_or("—")
+                ),
+            );
+            if let Some(sk) = &cache.species_kegg {
+                kv_line(ui, &format!("Pathways in catalogue: {}", sk.pathways.len()));
+            }
+        }
+        AnalysisMode::Module => {
+            kv_line(
+                ui,
+                &format!(
+                    "Group: {} (level {})",
+                    settings.organism_group.as_deref().unwrap_or("—"),
+                    settings
+                        .organism_group_level
+                        .map(|l| l.to_string())
+                        .unwrap_or_else(|| "—".into())
+                ),
+            );
+        }
+    }
+    // Group selection: the one input on this route that can silently REMOVE
+    // features, so a bug report has to record it. Group names are the user's
+    // own and already on screen, so they are safe in the bundle.
+    match settings.coverage_selected_groups.as_ref() {
+        Some(groups) if groups.is_empty() => {
+            kv_line_colored(ui, "Sample groups: none selected", theme::WARNING);
+        }
+        Some(groups) => {
+            kv_line(ui, &format!("Sample groups: {}", groups.join(", ")));
+            kv_line(
+                ui,
+                &format!(
+                    "Detected in >= {:.0}% of a group's samples",
+                    settings.coverage_presence_threshold * 100.0
+                ),
+            );
+        }
+        None => {}
+    }
+    ui.add_space(6.0);
+}
+
+/// `Coverage data` on the RESULT screen: the target, the provenance funnel, and
+/// — in dual mode — the per-mode partition.
+///
+/// The funnel has **no foreground branch**: there is no foreground on this
+/// route, so no `foreground_*` value is rendered and no label uses the words
+/// "foreground", "significant", or "universe".
+fn render_coverage_result_block(
+    ui: &mut egui::Ui,
+    settings: &SessionSettings,
+    cache: &SessionCache,
+    result: &crate::coverage::CoverageResult,
+    funnel: &crate::app::CoverageFunnel,
+    partition: Option<&crate::stage3::CoverageModePartition>,
+) {
+    render_coverage_target_block(ui, settings, cache);
+
+    section_header(ui, "Coverage funnel");
+    kv_line(ui, &format!("Raw features: {}", funnel.raw_features));
+    if let Some(n) = funnel.in_selected_groups {
+        kv_line(ui, &format!("In selected groups: {n}"));
+    }
+    kv_line(ui, &format!("After deduplication: {}", funnel.after_dedup));
+    kv_line(
+        ui,
+        &format!("Distinct InChIKeys: {}", funnel.detected_inchikeys),
+    );
+    kv_line(ui, &format!("Distinct CIDs: {}", funnel.detected_cids));
+    kv_line(ui, &format!("KEGG compounds: {}", result.detected_total));
+    kv_line(
+        ui,
+        &format!("In at least one entry: {}", result.detected_in_entries),
+    );
+    kv_line(
+        ui,
+        &format!(
+            "Entries: {} ({} with no KEGG compounds)",
+            result.entries_total, result.entries_without_compounds
+        ),
+    );
+
+    // The Data tab is the SOLE surface for this partition — the results table
+    // deliberately renders no per-mode columns.
+    if let Some(p) = partition {
+        section_header(ui, "Ionization modes");
+        kv_line(ui, &format!("POS only: {}", p.pos_only));
+        kv_line(ui, &format!("NEG only: {}", p.neg_only));
+        kv_line(ui, &format!("In both: {}", p.in_both));
+    }
+    ui.add_space(6.0);
+}
+
+/// Per-slot MS-DIAL blocks for the coverage result, with the `Dedupe:` line and
+/// the relocated audit download.
+///
+/// On this route that line carries extra weight: deduplication provably cannot
+/// change any reported coverage number, so it and the audit are the ONLY
+/// surfaces on which its effect is observable at all. Without them,
+/// "the deduplication controls are inspectable" would mean "save a file and
+/// open it in a spreadsheet".
+fn render_coverage_slots(
+    ui: &mut egui::Ui,
+    ion_tables: &[IonModeTable],
+    dedup_reports: &[crate::dedup::DedupReport],
+    dedup_download: &mut bool,
+) {
+    for (i, it) in ion_tables.iter().enumerate() {
+        slot_header(ui, i, it.mode);
+        raw_input_with_split(ui, &it.table);
+        if let Some(report) = dedup_reports.get(i) {
+            kv_line(
+                ui,
+                &format!(
+                    "Dedupe: {} dup-losers dropped, {} null-InChIKey passed through",
+                    report.dropped.len(),
+                    report.null_inchikey_passthrough
+                ),
+            );
+        }
+        ui.add_space(6.0);
+    }
+    // Absent when the run was performed with `dedup_enabled = false` — there is
+    // no report to export.
+    if !dedup_reports.is_empty() && ui.button("Download dedup audit (CSV)").clicked() {
+        *dedup_download = true;
+    }
+    ui.add_space(6.0);
+}
+
+/// `Cache data` on the coverage result screen.
+///
+/// Same fetched-date lines as the enrichment result's block, WITHOUT any
+/// refresh or re-run button: this route offers no PubChem/KEGG refresh action,
+/// which is also why its state carries no `refresh_state`. Rendering the
+/// buttons anyway would advertise an action the route cannot perform.
+#[allow(clippy::too_many_arguments)]
+fn render_coverage_cache_block(
+    ui: &mut egui::Ui,
+    mode: AnalysisMode,
+    species: Option<&SpeciesKegg>,
+    module_retention: Option<&ModuleRetention>,
+    pubchem_time_span: Option<(DateTime<Utc>, DateTime<Utc>, usize)>,
+    kegg_conv_time_span: Option<(DateTime<Utc>, DateTime<Utc>, usize)>,
+    organisms_fetched_at: Option<DateTime<Utc>>,
+    organisms_loading: bool,
+    out_organisms_refresh: &mut bool,
+) {
+    section_header(ui, "Cache data");
+    render_organism_cache_row(
+        ui,
+        organisms_fetched_at,
+        organisms_loading,
+        out_organisms_refresh,
+    );
+    match mode {
+        AnalysisMode::Pathway => {
+            if let Some(sk) = species {
+                kv_line_colored(
+                    ui,
+                    &format!(
+                        "KEGG pathways ({}): {}",
+                        sk.code,
+                        sk.fetched_at.format("%Y-%m-%d %H:%M UTC")
+                    ),
+                    theme::TEXT_SECONDARY,
+                );
+            }
+        }
+        AnalysisMode::Module => {
+            if let Some(r) = module_retention {
+                kv_line_colored(
+                    ui,
+                    &format!(
+                        "KEGG modules fetched date: {} -> {}",
+                        r.oldest_fetched_at.format("%Y-%m-%d"),
+                        r.newest_fetched_at.format("%Y-%m-%d"),
+                    ),
+                    theme::TEXT_SECONDARY,
+                );
+            }
+        }
+    }
+    kv_line_colored(
+        ui,
+        &pubchem_span_str(pubchem_time_span),
+        theme::TEXT_SECONDARY,
+    );
+    kv_line_colored(
+        ui,
+        &kegg_conv_span_str(kegg_conv_time_span),
+        theme::TEXT_SECONDARY,
+    );
+    ui.add_space(8.0);
 }
 
 // ── Stage 3 enrichment-data block (setup) ──────────────────────────────────

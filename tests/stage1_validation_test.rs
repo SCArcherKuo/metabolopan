@@ -30,6 +30,7 @@ fn input<'a>(
     slot1_sample_cols: &'a [String],
 ) -> Stage1ValidationInput<'a> {
     Stage1ValidationInput {
+        route: metabolopan::app::AnalysisRoute::DamEnrichment,
         table_loaded: true,
         slot1_sample_cols,
         slot2_sample_cols: None,

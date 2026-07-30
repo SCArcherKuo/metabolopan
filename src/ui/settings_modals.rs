@@ -218,8 +218,11 @@ pub(crate) fn open_load(app: &mut App) {
         }
     };
 
-    let resets =
-        crate::session_io::validate_against_inputs(&snapshot.settings, app.inputs.mapping.as_ref());
+    let resets = crate::session_io::validate_against_inputs(
+        &snapshot.settings,
+        app.inputs.mapping.as_ref(),
+        app.settings.analysis_route,
+    );
 
     app.settings_load_modal = SettingsLoadModalState::Confirming {
         snapshot,
@@ -281,8 +284,17 @@ pub(crate) fn show_load(app: &mut App, ctx: &Context) {
         if let Some(v) = &resets.pqn_reference_group {
             rows.push(("PQN reference group", v.clone()));
         }
+        if let Some(v) = &resets.coverage_selected_groups {
+            rows.push(("Coverage sample groups", v.join(", ")));
+        }
         rows
     };
+    // The route is NOT a reset row: it is applied verbatim, so it gets its own
+    // warning rather than sitting under "will be reset".
+    let route_switch = resets.analysis_route.map(|r| match r {
+        crate::app::AnalysisRoute::DamEnrichment => "Differential analysis + enrichment",
+        crate::app::AnalysisRoute::KeggCoverage => "KEGG coverage survey",
+    });
     let mismatch_rows: Vec<(String, String, Option<String>)> = mismatches
         .iter()
         .map(|m| {
@@ -325,6 +337,16 @@ pub(crate) fn show_load(app: &mut App, ctx: &Context) {
             ui.label(format!("  DAM:            {}", summary.dam));
             ui.label(format!("  Normalization:  {}", summary.normalization));
             ui.label(format!("  Enrichment:     {}", summary.enrichment));
+
+            if let Some(route_label) = route_switch {
+                ui.add_space(6.0);
+                ui.colored_label(
+                    theme::WARNING,
+                    format!(
+                        "⚠ This snapshot switches the analysis to \"{route_label}\" and returns you to Stage 1.",
+                    ),
+                );
+            }
 
             if !reset_rows.is_empty() {
                 ui.add_space(6.0);
@@ -408,19 +430,39 @@ pub(crate) fn show_load(app: &mut App, ctx: &Context) {
         {
             let m_count = mismatches.len();
             let r_count = [
-                &resets.numerator,
-                &resets.denominator,
-                &resets.metadata_column,
-                &resets.pqn_reference_group,
+                resets.numerator.is_some(),
+                resets.denominator.is_some(),
+                resets.metadata_column.is_some(),
+                resets.pqn_reference_group.is_some(),
+                resets.coverage_selected_groups.is_some(),
             ]
             .iter()
-            .filter(|x| x.is_some())
+            .filter(|x| **x)
             .count();
+            let route_changed = resets.analysis_route.is_some();
             app.settings.apply_snapshot(snapshot.settings, &resets);
+            // Navigation repair. The incoming route was applied verbatim, so the
+            // app is now sitting on a screen belonging to the route it just
+            // left — a screen the new route's stepper has no step index for,
+            // leaving it unable to resolve a current step. Stage 1 is the
+            // destination rather than the chooser: it is the one screen both
+            // routes share, the incoming route is already correct so there is
+            // nothing to re-pick, and it preserves the loaded input files.
+            if route_changed {
+                let (slot1_mode, slot2_revealed, slot2_mode) =
+                    crate::app::slot_fields_from(&app.inputs.ion_tables);
+                app.state = crate::app::AppState::Stage1Input {
+                    slot1_mode,
+                    slot2_revealed,
+                    slot2_mode,
+                    error: None,
+                };
+            }
             info!(
                 path = %path.display(),
                 mismatches = m_count,
                 resets = r_count,
+                route_changed,
                 "settings snapshot loaded"
             );
         }

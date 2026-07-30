@@ -557,9 +557,28 @@ pub(crate) fn download_dedup_audit_csv(app: &App) {
     let AppState::Stage2DamThreshold { dam_results, .. } = &app.state else {
         return;
     };
-    let ion_tables = app.inputs.ion_tables.as_slice();
-    let any_report = dam_results.iter().any(|r| r.dedup_report.is_some());
-    if !any_report {
+    let reports: Vec<&crate::dedup::DedupReport> = dam_results
+        .iter()
+        .filter_map(|r| r.dedup_report.as_ref())
+        .collect();
+    write_dedup_audit(&reports, app.inputs.ion_tables.as_slice());
+}
+
+/// Write the dedup audit for whichever route asked, to a user-chosen path.
+///
+/// One writer for both routes: the button carries the same label and the same
+/// promise on each, so producing different bytes depending on which screen the
+/// user clicked from would be a difference with no reason behind it. Single
+/// report → `export_dedup_audit_csv` alone; two → the same concatenation with
+/// `# Mode:` separators.
+///
+/// `ion_tables` supplies the mode names; a report with no matching table falls
+/// back to a positional label rather than dropping the separator.
+pub(crate) fn write_dedup_audit(
+    reports: &[&crate::dedup::DedupReport],
+    ion_tables: &[crate::data::IonModeTable],
+) {
+    if reports.is_empty() {
         return;
     }
     let Some(path) = crate::ui::widgets::save_dialog("CSV", "csv", "dedup_audit.csv") else {
@@ -573,12 +592,9 @@ pub(crate) fn download_dedup_audit_csv(app: &App) {
         }
     };
     use std::io::Write;
-    for (idx, dr) in dam_results.iter().enumerate() {
-        let Some(report) = dr.dedup_report.as_ref() else {
-            continue;
-        };
+    for (idx, report) in reports.iter().enumerate() {
         // In dual-mode, prefix each report with a `# Mode:` discriminator.
-        if dam_results.len() >= 2 {
+        if reports.len() >= 2 {
             let mode = ion_tables
                 .get(idx)
                 .map(|it| it.mode.to_string())
@@ -596,7 +612,7 @@ pub(crate) fn download_dedup_audit_csv(app: &App) {
             return;
         }
     }
-    info!(path = %path.display(), modes = dam_results.len(), "dedup audit CSV exported");
+    info!(path = %path.display(), modes = reports.len(), "dedup audit CSV exported");
 }
 
 fn continue_to_enrichment(app: &mut App) {

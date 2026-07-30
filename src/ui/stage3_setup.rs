@@ -55,25 +55,8 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
         // Back-navigation handled by the global stage stepper (`ui::stepper`).
         ui.add_space(8.0);
 
-        // === Mode toggle ===
-        render_mode_toggle(ui, app);
-        ui.add_space(6.0);
-
-        // === Mode-aware selector ===
-        match app.settings.analysis_mode {
-            AnalysisMode::Pathway => render_species_selector(ui, app),
-            AnalysisMode::Module => {
-                render_organism_group_selector(ui, app);
-                // Module-mode-only Group-overlap threshold, directly under the
-                // Level + Group picker (binds the existing min_group_overlap).
-                render_min_group_overlap(ui, app);
-            }
-        }
-        ui.add_space(6.0);
-
-        // === Inline KEGG fetch progress strip (active mode only) ===
-        render_inline_fetch_progress(ui, app);
-        ui.add_space(8.0);
+        // === Shared analysis-target block ===
+        render_analysis_target(ui, app);
 
         // === Direction / FDR / Min hit count ===
         // Top N moved to Stage 3 result per smoke-test feedback — the user
@@ -139,40 +122,12 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
         }
 
         // === Run button (Back moved to top in Phase 4) ===
-        let run_enabled = run_button_enabled(app);
+        let run_enabled = target_ready(app);
         let mut action = Action::None;
         // Disabled-state hint: explain *why* the button is disabled when a
         // fetch is in flight in the active mode (per stage3-ui spec scenario
         // "Inline progress strip during pathway fetch" and design D2).
-        let disabled_hint = if !run_enabled {
-            match app.settings.analysis_mode {
-                AnalysisMode::Pathway
-                    if matches!(
-                        &app.state,
-                        AppState::Stage3EnrichSetup {
-                            kegg_fetch: Some(_),
-                            ..
-                        }
-                    ) =>
-                {
-                    Some("Waiting for KEGG pathway fetch…")
-                }
-                AnalysisMode::Module
-                    if matches!(
-                        &app.state,
-                        AppState::Stage3EnrichSetup {
-                            modules_fetch: Some(_),
-                            ..
-                        }
-                    ) =>
-                {
-                    Some("Waiting for KEGG modules fetch…")
-                }
-                _ => None,
-            }
-        } else {
-            None
-        };
+        let disabled_hint = (!run_enabled).then(|| fetch_in_flight_hint(app)).flatten();
         let resp = crate::ui::widgets::primary_button(ui, "Run Enrichment", run_enabled);
         let resp = if let Some(hint) = disabled_hint {
             resp.on_disabled_hover_text(hint)
@@ -196,10 +151,65 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
     drain_organisms_refresh_confirm(app, &ctx);
 }
 
+/// Why the active setup screen's Run button is disabled, when the reason is a
+/// KEGG fetch in flight for the ACTIVE mode. `None` when no such fetch is
+/// running (the caller has other reasons and its own texts for those).
+///
+/// Shared by `Run Enrichment` and `Run Coverage`: the two buttons gate on the
+/// same fetch for the same reason, and the hint is the user's only explanation
+/// of why a button they can see is inert. Reads the slots through
+/// [`crate::app::setup_fetch_slots`], so it is variant-agnostic like the block
+/// it belongs to.
+pub(crate) fn fetch_in_flight_hint(app: &App) -> Option<&'static str> {
+    let (kegg_fetch, modules_fetch) = crate::app::setup_fetch_slots(&app.state)?;
+    match app.settings.analysis_mode {
+        AnalysisMode::Pathway => kegg_fetch
+            .is_some()
+            .then_some("Waiting for KEGG pathway fetch…"),
+        AnalysisMode::Module => modules_fetch
+            .is_some()
+            .then_some("Waiting for KEGG modules fetch…"),
+    }
+}
+
 /// Render the Pathway / Module radio. On change, update
 /// `settings.analysis_mode` via the named API. Pathway and Module
 /// selections coexist — the API is a near-no-op that only sets the mode
 /// (per `reorder-gui-and-move-mode-to-stage3` D3).
+/// The shared **analysis-target block**: the Analysis Mode toggle, the
+/// mode-aware target selector, and the inline KEGG fetch progress strip.
+///
+/// Rendered identically by every screen that selects an analysis target — the
+/// Stage 3 enrichment setup screen and, on the KEGG coverage route, the
+/// coverage setup screen. There MUST NOT be a second implementation: the two
+/// screens differ only in the controls AROUND this block, and a divergence
+/// between copies would surface as two subtly different species selectors
+/// reached by two different routes (see the `stage3-ui` capability spec).
+///
+/// Variant-agnostic by construction — every slot access inside goes through
+/// `crate::app::{is_target_setup, setup_fetch_slots, setup_fetch_slots_mut}`,
+/// so a new setup variant is enabled by adding one arm there, not by editing
+/// this function or any of the renderers it calls.
+pub(crate) fn render_analysis_target(ui: &mut egui::Ui, app: &mut App) {
+    render_mode_toggle(ui, app);
+    ui.add_space(6.0);
+
+    match app.settings.analysis_mode {
+        AnalysisMode::Pathway => render_species_selector(ui, app),
+        AnalysisMode::Module => {
+            render_organism_group_selector(ui, app);
+            // Module-mode-only Group-overlap threshold, directly under the
+            // Level + Group picker (binds the existing min_group_overlap).
+            render_min_group_overlap(ui, app);
+        }
+    }
+    ui.add_space(6.0);
+
+    // Inline KEGG fetch progress strip (active mode only).
+    render_inline_fetch_progress(ui, app);
+    ui.add_space(8.0);
+}
+
 fn render_mode_toggle(ui: &mut egui::Ui, app: &mut App) {
     let current_mode = app.settings.analysis_mode;
     let mut new_mode = current_mode;
@@ -233,14 +243,9 @@ fn render_mode_toggle(ui: &mut egui::Ui, app: &mut App) {
 /// `analysis-mode-toggle` coexistence contract still holds. `new_mode` is used
 /// only for the diagnostic log.
 pub(crate) fn cancel_inflight_for_mode_switch(app: &mut App, new_mode: AnalysisMode) {
-    let (species_incomplete, group_incomplete) = match &app.state {
-        AppState::Stage3EnrichSetup {
-            kegg_fetch,
-            modules_fetch,
-            ..
-        } => (kegg_fetch.is_some(), modules_fetch.is_some()),
-        _ => (false, false),
-    };
+    let (species_incomplete, group_incomplete) = crate::app::setup_fetch_slots(&app.state)
+        .map(|(k, m)| (k.is_some(), m.is_some()))
+        .unwrap_or((false, false));
 
     crate::app::abort_and_clear_setup_fetches(&mut app.state);
 
@@ -274,7 +279,7 @@ fn render_species_selector(ui: &mut egui::Ui, app: &mut App) {
         OrganismsLoadState::Idle => (None, false, None),
     };
     let current = app.settings.kegg_species.clone();
-    let selector_enabled = matches!(&app.state, AppState::Stage3EnrichSetup { .. });
+    let selector_enabled = crate::app::is_target_setup(&app.state);
 
     let event = species_selector::show(
         ui,
@@ -301,7 +306,7 @@ fn render_species_selector(ui: &mut egui::Ui, app: &mut App) {
 
 fn render_organism_group_selector(ui: &mut egui::Ui, app: &mut App) {
     let current_group = app.settings.organism_group.clone();
-    let enabled = matches!(&app.state, AppState::Stage3EnrichSetup { .. });
+    let enabled = crate::app::is_target_setup(&app.state);
 
     let index = match crate::kegg::cache::read_organism_group_index() {
         Ok(Some(idx)) => Some(idx),
@@ -405,12 +410,7 @@ fn render_min_group_overlap(ui: &mut egui::Ui, app: &mut App) {
 /// has in flight. When the active mode's `<mode>_fetch == None`, nothing
 /// renders.
 fn render_inline_fetch_progress(ui: &mut egui::Ui, app: &mut App) {
-    let AppState::Stage3EnrichSetup {
-        kegg_fetch,
-        modules_fetch,
-        ..
-    } = &app.state
-    else {
+    let Some((kegg_fetch, modules_fetch)) = crate::app::setup_fetch_slots(&app.state) else {
         return;
     };
     match app.settings.analysis_mode {
@@ -479,13 +479,14 @@ fn render_inline_fetch_progress(ui: &mut egui::Ui, app: &mut App) {
 /// True iff the user can click `Run enrichment` right now: active mode's
 /// selection is complete AND its cache is populated AND no fetch for that
 /// mode is in flight.
-fn run_button_enabled(app: &App) -> bool {
-    let AppState::Stage3EnrichSetup {
-        kegg_fetch,
-        modules_fetch,
-        ..
-    } = &app.state
-    else {
+/// Is the active mode's analysis target selected AND fetched, with no fetch in
+/// flight?
+///
+/// Shared by `Run Enrichment` and `Run Coverage`: both gate on the same three
+/// conditions for the same reason, and a second copy would let the two screens
+/// disagree about when a target is usable.
+pub(crate) fn target_ready(app: &App) -> bool {
+    let Some((kegg_fetch, modules_fetch)) = crate::app::setup_fetch_slots(&app.state) else {
         return false;
     };
     match app.settings.analysis_mode {
@@ -583,13 +584,12 @@ fn rehydrate_action(
 /// blocks a double-spawn within one transition. A no-op unless the active mode
 /// has a selection whose cache is empty (see [`rehydrate_action`]).
 pub(crate) fn rehydrate_stage3_cache(app: &mut App) {
-    let (kegg_in_flight, modules_in_flight) = match &app.state {
-        AppState::Stage3EnrichSetup {
-            kegg_fetch,
-            modules_fetch,
-            ..
-        } => (kegg_fetch.is_some(), modules_fetch.is_some()),
-        _ => return,
+    // Through the shared accessor, so both setup screens rehydrate: a
+    // coverage-route jump back to `Stage2CoverageSetup` restores a selection
+    // whose cache is empty exactly as the enrichment setup screen does.
+    let (kegg_in_flight, modules_in_flight) = match crate::app::setup_fetch_slots(&app.state) {
+        Some((kegg_fetch, modules_fetch)) => (kegg_fetch.is_some(), modules_fetch.is_some()),
+        None => return,
     };
 
     match rehydrate_action(&app.settings, &app.cache, kegg_in_flight, modules_in_flight) {
@@ -645,7 +645,7 @@ fn handle_species_selected(app: &mut App, code: String) {
     // own abort-prior would otherwise never run), so a switch to an
     // already-cached species would leave the old fetch streaming and its
     // progress bar visible.
-    if let AppState::Stage3EnrichSetup { kegg_fetch, .. } = &mut app.state
+    if let Some((kegg_fetch, _)) = crate::app::setup_fetch_slots_mut(&mut app.state)
         && let Some(prev) = kegg_fetch.take()
     {
         info!(
@@ -724,7 +724,7 @@ pub(crate) fn handle_species_refresh(app: &mut App) {
         Some(c) => c.clone(),
         None => return,
     };
-    if let AppState::Stage3EnrichSetup { kegg_fetch, .. } = &app.state
+    if let Some((kegg_fetch, _)) = crate::app::setup_fetch_slots(&app.state)
         && kegg_fetch.is_some()
     {
         warn!("KEGG species fetch already in progress; ignoring re-fetch click");
@@ -776,7 +776,7 @@ fn spawn_species_fetch(app: &mut App, code: String) {
         })
         .abort_handle();
 
-    if let AppState::Stage3EnrichSetup { kegg_fetch, .. } = &mut app.state {
+    if let Some((kegg_fetch, _)) = crate::app::setup_fetch_slots_mut(&mut app.state) {
         // Cancel a prior in-flight fetch before replacing the slot so the
         // abandoned fetch stops issuing KEGG requests on the shared client
         // instead of running to completion and discarding its result.
@@ -849,7 +849,7 @@ pub(crate) fn spawn_modules_fetch(
         })
         .abort_handle();
 
-    if let AppState::Stage3EnrichSetup { modules_fetch, .. } = &mut app.state {
+    if let Some((_, modules_fetch)) = crate::app::setup_fetch_slots_mut(&mut app.state) {
         // Cancel a prior in-flight fetch before replacing the slot. Aborting
         // the fetch task drops its future, running `ModulesFetchGuard::Drop`
         // and releasing `.modules.lock`.
@@ -999,7 +999,14 @@ fn start_run(app: &mut App) {
         pubchem_inputs = pubchem_total,
         "Stage 3 Run starting"
     );
-    app.spawn_stage3_run(dam_results_clone, target_clone, params, pubchem_total);
+    app.spawn_stage3_run(crate::app::RunSpawn {
+        payload: crate::app::RunPayloadSpec::Enrichment {
+            dam_results: dam_results_clone,
+            params,
+        },
+        target: target_clone,
+        pubchem_total,
+    });
 }
 
 #[cfg(test)]

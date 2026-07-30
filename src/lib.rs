@@ -1,5 +1,6 @@
 pub mod app;
 mod cache_io;
+pub mod coverage;
 pub mod csv_fmt;
 pub mod dam;
 pub mod data;

@@ -292,6 +292,21 @@ impl SessionSettings {
         if resets.pqn_reference_group.is_some() {
             incoming.pqn_reference_group = None;
         }
+        // `None`, NOT `Some(vec![])`. `None` is the "not yet chosen" sentinel
+        // the field's default carries, so the coverage setup screen re-selects
+        // every group present in the CURRENT mapping — a stale selection
+        // degrades to the documented default. `Some(vec![])` means "the user
+        // deliberately chose none" and would leave Run permanently disabled
+        // after a load, with no obvious way to tell why.
+        if resets.coverage_selected_groups.is_some() {
+            incoming.coverage_selected_groups = None;
+        }
+        // `resets.analysis_route` is deliberately NOT applied. The incoming
+        // route is applied verbatim — a snapshot that says "coverage route"
+        // means it, and discarding it would make a saved coverage session
+        // unrestorable, which the round-trip contract forbids. The reset entry
+        // exists so the confirm modal can warn about the switch and so the
+        // apply site knows to repair navigation.
         // Defensive coercion: Stage 2 DAM has no `NoCorrection` radio in
         // its UI (raw p-values across ~13 k features would flood the
         // result set with false positives). A hand-crafted or
@@ -322,6 +337,38 @@ impl SessionSettings {
             );
         }
         incoming.dedup_rt_tolerance_min = clamped;
+
+        // Same load-boundary treatment for the two coverage-route numerics, for
+        // the same reason: the UI floors them, but a hand-edited or foreign
+        // snapshot must not reach the computation with an out-of-range value.
+        //
+        // `coverage_min_entry_size == 0` would re-admit zero-compound entries —
+        // every KEGG global/overview map is one — which the floor exists to make
+        // impossible. A non-finite `coverage_presence_threshold` is worse than
+        // out-of-range: every `count / len >= NaN` comparison is `false`, so it
+        // would silently yield an empty detected set and a screen of zeros.
+        let clamped_entry_size =
+            crate::app::clamp_coverage_min_entry_size(incoming.coverage_min_entry_size);
+        if clamped_entry_size != incoming.coverage_min_entry_size {
+            tracing::warn!(
+                previous = incoming.coverage_min_entry_size,
+                clamped = clamped_entry_size,
+                "snapshot coverage_min_entry_size below the minimum; clamped"
+            );
+        }
+        incoming.coverage_min_entry_size = clamped_entry_size;
+
+        let clamped_threshold =
+            crate::app::clamp_coverage_presence_threshold(incoming.coverage_presence_threshold);
+        if clamped_threshold != incoming.coverage_presence_threshold {
+            tracing::warn!(
+                previous = incoming.coverage_presence_threshold,
+                clamped = clamped_threshold,
+                "snapshot coverage_presence_threshold out of range or non-finite; clamped"
+            );
+        }
+        incoming.coverage_presence_threshold = clamped_threshold;
+
         *self = incoming;
     }
 }
@@ -443,7 +490,7 @@ mod tests {
         match err {
             SnapshotError::UnsupportedSchemaVersion { found, expected } => {
                 assert_eq!(found, 4);
-                assert_eq!(expected, 2);
+                assert_eq!(expected, 3);
             }
             other => panic!("expected UnsupportedSchemaVersion, got {other:?}"),
         }
@@ -619,6 +666,53 @@ mod tests {
         assert_eq!(
             current.enrichment_fdr_method,
             crate::dam::fdr::FdrMethod::NoCorrection
+        );
+    }
+
+    /// A stale coverage selection degrades to the "not yet chosen" sentinel,
+    /// NOT to the empty list.
+    ///
+    /// `Some(vec![])` means "the user deliberately chose none" and fires the
+    /// Run gate; `None` makes the setup screen re-select every group in the
+    /// CURRENT mapping. Collapsing the two here would leave `Run Coverage`
+    /// permanently disabled after a load, with no visible cause.
+    #[test]
+    fn apply_snapshot_resets_a_stale_coverage_selection_to_none_not_empty() {
+        let mut current = SessionSettings::default();
+        let incoming = SessionSettings {
+            coverage_selected_groups: Some(vec!["Treated".to_string()]),
+            ..SessionSettings::default()
+        };
+        let resets = ValidationResets {
+            coverage_selected_groups: Some(vec!["Treated".to_string()]),
+            ..ValidationResets::default()
+        };
+        current.apply_snapshot(incoming, &resets);
+        assert_eq!(current.coverage_selected_groups, None);
+    }
+
+    /// The incoming route is applied VERBATIM. `resets.analysis_route` is a
+    /// warning + a navigation-repair signal, never a field reset — discarding
+    /// the route would make a saved coverage session unrestorable.
+    #[test]
+    fn apply_snapshot_applies_the_incoming_route_verbatim() {
+        let mut current = SessionSettings::default();
+        assert_eq!(
+            current.analysis_route,
+            crate::app::AnalysisRoute::DamEnrichment
+        );
+        let incoming = SessionSettings {
+            analysis_route: crate::app::AnalysisRoute::KeggCoverage,
+            ..SessionSettings::default()
+        };
+        let resets = ValidationResets {
+            analysis_route: Some(crate::app::AnalysisRoute::KeggCoverage),
+            ..ValidationResets::default()
+        };
+        current.apply_snapshot(incoming, &resets);
+        assert_eq!(
+            current.analysis_route,
+            crate::app::AnalysisRoute::KeggCoverage
         );
     }
 

@@ -2,7 +2,7 @@ use egui::{Color32, RichText};
 use std::path::PathBuf;
 use tracing::{error, info, warn};
 
-use crate::app::{App, AppState};
+use crate::app::{AnalysisRoute, App, AppState};
 use crate::data::GroupMapping;
 use crate::data::groups::{UNASSIGNED, load_group_mapping};
 use crate::data::msdial::parse_msdial_txt;
@@ -10,13 +10,16 @@ use crate::data::{AdductPolarityInference, IonMode, IonModeTable, infer_polarity
 use crate::theme;
 use crate::ui::widgets::{file_pick_button, primary_button};
 
-/// Errors that block advancement from Stage 1 to Stage 2. After
+/// Errors that block advancement from Stage 1 to the next screen. After
 /// `reorder-gui-and-move-mode-to-stage3`, Stage 1 is mode-agnostic:
 /// Analysis Mode + species/group selector + their related gates live on
-/// Stage 3 setup, so this struct only carries universal + dual-mode
-/// integrity fields.
+/// the setup screen, so this struct only carries universal + dual-mode
+/// integrity fields — plus the route, which decides which of them run.
 #[derive(Default)]
 pub struct Stage1ValidationInput<'a> {
+    /// Which route's gate to apply. `Default` is `DamEnrichment`, so the
+    /// stricter gate is the one you get by forgetting to set it.
+    pub route: AnalysisRoute,
     pub table_loaded: bool,
     pub slot1_sample_cols: &'a [String],
     pub slot2_sample_cols: Option<&'a [String]>,
@@ -26,30 +29,68 @@ pub struct Stage1ValidationInput<'a> {
     pub slot2_mode: Option<IonMode>,
 }
 
+/// The route-aware Stage 1 gate.
+///
+/// The checks split into those every route runs (a missing or unparseable
+/// `.txt`, an unset ionization mode, a picked-but-broken `.csv`) and four that
+/// only `DamEnrichment` runs — the `.csv` being present at all, ≥ 2
+/// non-`Unassigned` groups, ≥ 2 samples each, and a non-empty intersection with
+/// the `.txt` columns.
+///
+/// Those four exist to guarantee a usable two-group comparison. The coverage
+/// route runs no comparison — it reads intensities only to decide per-group
+/// presence, never to compare conditions — so enforcing them there would block
+/// exactly the single-condition and survey datasets the route exists to serve.
+/// The `.csv` stays OPTIONAL on that route: parsed and surfaced when supplied,
+/// and when absent every sample column is treated as detected data.
+///
+/// The name keeps its `_for_dam` suffix for call-site grep-ability across the
+/// spec history; it is the Stage 1 gate for both routes.
 pub fn validate_for_dam(input: Stage1ValidationInput<'_>) -> Result<(), Vec<String>> {
     let mut issues: Vec<String> = Vec::new();
+    let dam_route = matches!(input.route, AnalysisRoute::DamEnrichment);
 
     if !input.table_loaded {
-        // No MS-DIAL file yet — keep "Continue to DAM" disabled, but render no
+        // No MS-DIAL file yet — keep the advance button disabled, but render no
         // nag (the file pickers above are self-explanatory). An empty `Err`
         // shows nothing while still failing the `matches!(Ok)` gate.
         return Err(issues);
     }
 
-    let mapping = match input.mapping {
-        Some(m) => m,
-        None => {
-            // No metadata CSV picked yet — keep "Continue to DAM" disabled but
-            // render NO nag (the `.csv` picker above is self-explanatory,
-            // mirroring the no-`.txt` branch). Always fail the gate: returning
-            // `Ok` here would wrongly enable Continue in single-mode. A `.csv`
-            // that was picked but FAILED to parse surfaces its red error
-            // elsewhere; this branch only covers "not provided yet".
-            check_dual_mode_rules(&input, &mut issues);
+    match input.mapping {
+        // No metadata CSV picked yet. On the DAM route this fails the gate but
+        // renders NO nag (the `.csv` picker above is self-explanatory,
+        // mirroring the no-`.txt` branch). Returning `Ok` here would wrongly
+        // enable Continue in single-mode. A `.csv` that was picked but FAILED
+        // to parse surfaces its red error elsewhere; this branch only covers
+        // "not provided yet".
+        None if dam_route => {
+            check_dual_mode_rules(&input, dam_route, &mut issues);
             return Err(issues);
         }
-    };
+        // On the coverage route the same condition is not a failure at all —
+        // fall through to the dual-mode slot checks, which skip themselves when
+        // there is no mapping to evaluate.
+        None => {}
+        Some(mapping) if dam_route => check_dam_group_rules(mapping, &mut issues),
+        Some(_) => {}
+    }
 
+    check_dual_mode_rules(&input, dam_route, &mut issues);
+
+    if issues.is_empty() {
+        Ok(())
+    } else {
+        Err(issues)
+    }
+}
+
+/// The four `DamEnrichment`-only group checks: a mapping that intersects the
+/// `.txt`, ≥ 2 non-`Unassigned` groups, and ≥ 2 samples in each.
+///
+/// Only ever called on the DAM route — every message here names a requirement
+/// of the two-group comparison, which the coverage route does not perform.
+fn check_dam_group_rules(mapping: &GroupMapping, issues: &mut Vec<String>) {
     if mapping.assigned_count() == 0 {
         issues.push(
             "No samples in the metadata match the MS-DIAL .txt. Check the `sample` column."
@@ -82,17 +123,28 @@ pub fn validate_for_dam(input: Stage1ValidationInput<'_>) -> Result<(), Vec<Stri
             ));
         }
     }
-
-    check_dual_mode_rules(&input, &mut issues);
-
-    if issues.is_empty() {
-        Ok(())
-    } else {
-        Err(issues)
-    }
 }
 
-fn check_dual_mode_rules(input: &Stage1ValidationInput<'_>, issues: &mut Vec<String>) {
+/// Dual-mode integrity, split by route on the same principle as the gate above:
+/// a check that guards DATA INTEGRITY runs on both routes; a check that guards
+/// THE TWO-GROUP T-TEST runs only on `DamEnrichment`.
+///
+/// Both-route checks: the two slot-mode checks (unset, and both slots the same
+/// mode), plus — when a `.csv` with a `biosample` column was supplied — the
+/// per-mode biosample-uniqueness and biosample-group-consistency checks. A
+/// dataset failing any of those is malformed regardless of what you do with it.
+///
+/// DAM-only checks: the required `biosample` column and the per-mode group
+/// counts. The coverage route evaluates presence independently per ion-mode
+/// table and then unions the compound sets, so a group present in only one mode
+/// contributes through that mode and is simply absent from the other. Requiring
+/// biosample pairing would also make a dual-mode run with no `.csv` undefined,
+/// since `mapping.groups()` cannot be evaluated on `None`.
+fn check_dual_mode_rules(
+    input: &Stage1ValidationInput<'_>,
+    dam_route: bool,
+    issues: &mut Vec<String>,
+) {
     if !input.table_loaded {
         return;
     }
@@ -127,7 +179,10 @@ fn check_dual_mode_rules(input: &Stage1ValidationInput<'_>, issues: &mut Vec<Str
         return;
     };
 
-    if slot2_loaded && !mapping.has_biosample() {
+    // DAM-only: the two-group comparison needs POS/NEG samples paired by
+    // biosample. The coverage route unions the two modes' compound sets, so an
+    // unpaired dual-mode dataset is analysable as-is.
+    if dam_route && slot2_loaded && !mapping.has_biosample() {
         issues.push(
             "Dual-mode requires a 'biosample' column in the metadata CSV. Add it or remove the second .txt file.".to_string(),
         );
@@ -160,14 +215,19 @@ fn check_dual_mode_rules(input: &Stage1ValidationInput<'_>, issues: &mut Vec<Str
             per_group.entry(g.to_string()).or_insert((0, 0)).1 += 1;
         }
     }
-    for (g, (n1, n2)) in &per_group {
-        if *n1 == 0 && *n2 == 0 {
-            continue;
-        }
-        if *n1 < 2 || *n2 < 2 {
-            issues.push(format!(
-                "Group '{g}' has {n1} sample(s) in {slot1_label} but {n2} in {slot2_label} — both modes need ≥ 2."
-            ));
+    // DAM-only: a per-mode two-group comparison needs ≥ 2 samples per group in
+    // EACH mode. On the coverage route a group present in only one mode simply
+    // contributes its presence decisions through that mode.
+    if dam_route {
+        for (g, (n1, n2)) in &per_group {
+            if *n1 == 0 && *n2 == 0 {
+                continue;
+            }
+            if *n1 < 2 || *n2 < 2 {
+                issues.push(format!(
+                    "Group '{g}' has {n1} sample(s) in {slot1_label} but {n2} in {slot2_label} — both modes need ≥ 2."
+                ));
+            }
         }
     }
 
@@ -277,6 +337,8 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.heading(egui::RichText::new("Stage 1 — Input").color(theme::HEADING));
+            ui.add_space(4.0);
+            render_route_escape(ui, app);
             ui.add_space(8.0);
 
             // === MS-DIAL .txt picker(s) ===
@@ -349,6 +411,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                 let slot2_sample_cols: Option<&[String]> =
                     ion_tables.get(1).map(|it| it.table.sample_cols.as_slice());
                 Some(validate_for_dam(Stage1ValidationInput {
+                    route: app.settings.analysis_route,
                     table_loaded: !ion_tables.is_empty(),
                     slot1_sample_cols,
                     slot2_sample_cols,
@@ -368,11 +431,51 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
             }
 
             let can_start = matches!(validation_result, Some(Ok(())));
-            let start_button = primary_button(ui, "Continue to DAM", can_start);
+            // One button whose label follows the route; the screen's only
+            // Primary control either way.
+            let label = match app.settings.analysis_route {
+                AnalysisRoute::DamEnrichment => "Continue to DAM",
+                AnalysisRoute::KeggCoverage => "Continue to Setup",
+            };
+            let start_button = primary_button(ui, label, can_start);
             if start_button.clicked() && can_start {
                 promote_to_stage2(app);
             }
         });
+}
+
+/// The `Change analysis type` escape.
+///
+/// Enabled ONLY while `app.inputs == SessionInputs::default()` — no `.txt`, no
+/// mapping, no `csv_path`. The route chooser is the very first screen a user
+/// sees, before they have any feel for the difference between the two routes;
+/// without an escape, correcting a mis-click costs a full `Start a new analysis`
+/// cycle — load a file, reach a result screen, click through a loss-warning
+/// modal — to discard nothing. While `inputs` is still default there is by
+/// definition nothing to lose, so there is no confirmation and no loss warning.
+///
+/// Deliberately Secondary: a corrective affordance, not a forward CTA. Rendering
+/// it Primary would compete with the advance button on a screen whose one
+/// forward action is that button.
+///
+/// It writes `settings.analysis_route` from outside the chooser, so it is
+/// enumerated as path 2 of the three that may — and its enablement condition is
+/// what keeps that rule meaningful: it cannot fire once any decision downstream
+/// of the route has been made. Nothing is reset, so a user who re-picks the SAME
+/// card lands back on Stage 1 exactly as they left it.
+fn render_route_escape(ui: &mut egui::Ui, app: &mut App) {
+    let enabled = app.inputs.is_pristine();
+    let resp = ui.add_enabled(enabled, egui::Button::new("Change analysis type"));
+    let resp = if enabled {
+        resp
+    } else {
+        resp.on_disabled_hover_text(
+            "Start a new analysis to change the analysis type after loading files.",
+        )
+    };
+    if resp.clicked() {
+        app.state = AppState::Stage0ChooseAnalysis;
+    }
 }
 
 fn render_txt_picker(ui: &mut egui::Ui, app: &mut App) {
@@ -851,8 +954,19 @@ fn promote_to_stage2(app: &mut App) {
         }
     }
 
-    info!(mode = ?app.settings.analysis_mode, "transitioning to Stage 2");
-    app.state = AppState::Stage2DamSetup { error: None };
+    // The advance target follows the route: no screen belonging to one route is
+    // reachable while the other is selected.
+    let route = app.settings.analysis_route;
+    info!(mode = ?app.settings.analysis_mode, ?route, "transitioning to Stage 2");
+    app.state = match route {
+        AnalysisRoute::DamEnrichment => AppState::Stage2DamSetup { error: None },
+        AnalysisRoute::KeggCoverage => AppState::Stage2CoverageSetup {
+            error: None,
+            stale_groups_notice: None,
+            kegg_fetch: None,
+            modules_fetch: None,
+        },
+    };
 }
 
 fn display_path_label(ui: &mut egui::Ui, p: &std::path::Path) {
@@ -915,6 +1029,7 @@ mod tests {
         slot2: &'a [String],
     ) -> Stage1ValidationInput<'a> {
         Stage1ValidationInput {
+            route: AnalysisRoute::DamEnrichment,
             table_loaded: true,
             slot1_sample_cols: slot1,
             slot2_sample_cols: Some(slot2),
@@ -923,6 +1038,190 @@ mod tests {
             slot2_revealed: true,
             slot2_mode: Some(IonMode::Negative),
         }
+    }
+
+    /// A single-`.txt`, no-`.csv` input for the route-gate tests.
+    fn single_slot_input<'a>(
+        route: AnalysisRoute,
+        mapping: Option<&'a GroupMapping>,
+        slot1: &'a [String],
+    ) -> Stage1ValidationInput<'a> {
+        Stage1ValidationInput {
+            route,
+            table_loaded: true,
+            slot1_sample_cols: slot1,
+            slot2_sample_cols: None,
+            mapping,
+            slot1_mode: Some(IonMode::Positive),
+            slot2_revealed: false,
+            slot2_mode: None,
+        }
+    }
+
+    fn single_group_mapping(cols_: &[String]) -> GroupMapping {
+        let f = write_csv(
+            "sample,group\n\
+             P1,only\n\
+             P2,only\n",
+        );
+        load_group_mapping(f.path(), cols_).expect("single-group fixture mapping loads")
+    }
+
+    /// The coverage route needs only a `.txt`: with no `.csv` at all the gate
+    /// passes, where the DAM route fails it silently.
+    #[test]
+    fn coverage_route_advances_with_no_csv() {
+        let s1 = cols(&["P1", "P2"]);
+        assert!(
+            validate_for_dam(single_slot_input(AnalysisRoute::KeggCoverage, None, &s1)).is_ok(),
+            "coverage route must advance with no metadata .csv"
+        );
+        // Same inputs on the DAM route: blocked, and silently (the picker above
+        // is self-explanatory).
+        let dam = validate_for_dam(single_slot_input(AnalysisRoute::DamEnrichment, None, &s1));
+        assert_eq!(
+            dam.expect_err("DAM route requires a .csv"),
+            Vec::<String>::new()
+        );
+    }
+
+    /// One non-`Unassigned` group is fine for a survey and fatal for a t-test.
+    #[test]
+    fn coverage_route_advances_with_a_single_group_csv() {
+        let s1 = cols(&["P1", "P2"]);
+        let m = single_group_mapping(&s1);
+        assert!(
+            validate_for_dam(single_slot_input(
+                AnalysisRoute::KeggCoverage,
+                Some(&m),
+                &s1
+            ))
+            .is_ok()
+        );
+        let dam_issues = validate_for_dam(single_slot_input(
+            AnalysisRoute::DamEnrichment,
+            Some(&m),
+            &s1,
+        ))
+        .expect_err("DAM route needs 2 groups");
+        assert!(
+            dam_issues.iter().any(|i| i.contains("At least 2 groups")),
+            "expected the fewer-than-2-groups message, got {dam_issues:?}"
+        );
+    }
+
+    /// A missing ionization mode is a universal check — it blocks BOTH routes.
+    #[test]
+    fn the_slot_mode_check_is_universal() {
+        let s1 = cols(&["P1", "P2"]);
+        for route in [AnalysisRoute::DamEnrichment, AnalysisRoute::KeggCoverage] {
+            let mut input = single_slot_input(route, None, &s1);
+            input.slot1_mode = None;
+            let issues = validate_for_dam(input).expect_err("unset slot mode must block");
+            assert!(
+                issues
+                    .iter()
+                    .any(|i| i.contains("ionization mode for the first")),
+                "route {route:?} lost the universal slot-mode check: {issues:?}"
+            );
+        }
+    }
+
+    /// Dual-mode without a `biosample` column: DAM blocks, coverage does not.
+    /// The coverage route unions the two modes' compound sets, so pairing is
+    /// not something it can be missing.
+    #[test]
+    fn coverage_route_accepts_a_dual_mode_two_column_csv() {
+        let f = write_csv(
+            "sample,group\n\
+             P1,ctrl\nP2,ctrl\nP3,treat\nP4,treat\n\
+             N1,ctrl\nN2,ctrl\nN3,treat\nN4,treat\n",
+        );
+        let s1 = pos_cols();
+        let s2 = neg_cols();
+        let union: Vec<String> = s1.iter().chain(s2.iter()).cloned().collect();
+        let m = load_group_mapping(f.path(), &union).expect("2-column fixture loads");
+
+        let mut input = dual_mode_input(&m, &s1, &s2);
+        input.route = AnalysisRoute::KeggCoverage;
+        assert!(validate_for_dam(input).is_ok());
+
+        let dam_issues = validate_for_dam(dual_mode_input(&m, &s1, &s2))
+            .expect_err("DAM route requires biosample in dual mode");
+        assert!(
+            dam_issues.iter().any(|i| i.contains("'biosample' column")),
+            "expected the biosample-column message, got {dam_issues:?}"
+        );
+    }
+
+    /// A biosample contradicting itself across modes is a malformed dataset on
+    /// ANY route — this both-route check must survive the route split.
+    #[test]
+    fn coverage_route_still_blocks_a_biosample_group_contradiction() {
+        let f = write_csv(
+            "sample,biosample,group\n\
+             P1,BIO-1,ctrl\nP2,BIO-2,ctrl\nP3,BIO-3,treat\nP4,BIO-4,treat\n\
+             N1,BIO-1,treat\nN2,BIO-2,ctrl\nN3,BIO-3,treat\nN4,BIO-4,treat\n",
+        );
+        let s1 = pos_cols();
+        let s2 = neg_cols();
+        let union: Vec<String> = s1.iter().chain(s2.iter()).cloned().collect();
+        let m = load_group_mapping(f.path(), &union).expect("contradiction fixture loads");
+
+        let mut input = dual_mode_input(&m, &s1, &s2);
+        input.route = AnalysisRoute::KeggCoverage;
+        let issues = validate_for_dam(input).expect_err("a contradiction blocks every route");
+        assert!(
+            issues.iter().any(|i| i.contains("BIO-1")),
+            "expected the biosample-group contradiction, got {issues:?}"
+        );
+    }
+
+    /// Dual-mode coverage with no `.csv` at all: only the two slot-mode checks
+    /// run, and both pass.
+    #[test]
+    fn dual_mode_coverage_with_no_csv_runs_only_the_slot_checks() {
+        let s1 = pos_cols();
+        let s2 = neg_cols();
+        let input = Stage1ValidationInput {
+            route: AnalysisRoute::KeggCoverage,
+            table_loaded: true,
+            slot1_sample_cols: &s1,
+            slot2_sample_cols: Some(&s2),
+            mapping: None,
+            slot1_mode: Some(IonMode::Positive),
+            slot2_revealed: true,
+            slot2_mode: Some(IonMode::Negative),
+        };
+        assert!(validate_for_dam(input).is_ok());
+    }
+
+    /// A group present in only one ion mode blocks DAM (no per-mode comparison)
+    /// but not coverage (it contributes through the mode it is in).
+    #[test]
+    fn coverage_route_accepts_a_group_present_in_only_one_mode() {
+        let f = write_csv(
+            "sample,biosample,group\n\
+             P1,BIO-1,ctrl\nP2,BIO-2,ctrl\nP3,BIO-3,treat\nP4,BIO-4,treat\n\
+             N1,BIO-1,ctrl\nN2,BIO-2,ctrl\n",
+        );
+        let s1 = pos_cols();
+        let s2 = cols(&["N1", "N2"]);
+        let union: Vec<String> = s1.iter().chain(s2.iter()).cloned().collect();
+        let m = load_group_mapping(f.path(), &union).expect("one-sided fixture loads");
+
+        let mut input = dual_mode_input(&m, &s1, &s2);
+        input.route = AnalysisRoute::KeggCoverage;
+        assert!(validate_for_dam(input).is_ok());
+
+        let dam_issues = validate_for_dam(dual_mode_input(&m, &s1, &s2))
+            .expect_err("DAM route needs the group in both modes");
+        assert!(
+            dam_issues
+                .iter()
+                .any(|i| i.contains("both modes need") && i.contains("treat")),
+            "expected the per-mode group-count message, got {dam_issues:?}"
+        );
     }
 
     #[test]
@@ -1033,6 +1332,7 @@ mod tests {
         let m = balanced_mapping();
         let s1 = pos_cols();
         let input = Stage1ValidationInput {
+            route: AnalysisRoute::DamEnrichment,
             table_loaded: true,
             slot1_sample_cols: &s1,
             slot2_sample_cols: None,
@@ -1051,6 +1351,7 @@ mod tests {
         // the no-`.txt` branch. Regression guard for the removed nag.
         let s1 = pos_cols();
         let input = Stage1ValidationInput {
+            route: AnalysisRoute::DamEnrichment,
             table_loaded: true,
             slot1_sample_cols: &s1,
             slot2_sample_cols: None,
@@ -1073,6 +1374,7 @@ mod tests {
         let m = balanced_mapping();
         let s1 = pos_cols();
         let mut input = Stage1ValidationInput {
+            route: AnalysisRoute::DamEnrichment,
             table_loaded: true,
             slot1_sample_cols: &s1,
             slot2_sample_cols: None,
@@ -1101,6 +1403,7 @@ mod tests {
         let m = balanced_mapping();
         let s1 = pos_cols();
         let input = Stage1ValidationInput {
+            route: AnalysisRoute::DamEnrichment,
             table_loaded: true,
             slot1_sample_cols: &s1,
             slot2_sample_cols: None,
@@ -1124,6 +1427,7 @@ mod tests {
         let s1 = pos_cols();
         let m = load_group_mapping(f.path(), &s1).unwrap();
         let input = Stage1ValidationInput {
+            route: AnalysisRoute::DamEnrichment,
             table_loaded: true,
             slot1_sample_cols: &s1,
             slot2_sample_cols: None,

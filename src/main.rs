@@ -119,11 +119,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     eframe::run_native(
-        concat!(
-            "Metabolopan (v",
-            env!("CARGO_PKG_VERSION"),
-            ") — Metabolomic Enrichment Analysis"
-        ),
+        // The pre-route title; `App::update` swaps the suffix once the user
+        // picks a route, so a coverage session never carries an enrichment
+        // title bar. Seeded from the same helper `App::new` uses, so the first
+        // frame sends no viewport command.
+        &metabolopan::app::pre_route_window_title(),
         native_options,
         Box::new(move |cc| {
             egui_extras::install_image_loaders(&cc.egui_ctx);

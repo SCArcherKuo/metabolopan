@@ -13,7 +13,9 @@ A cross-platform desktop GUI application that takes raw [MS-DIAL](https://system
 
 ![Workflow](assets/workflow.png)
 
-The pipeline operates in three stages. All plots (volcano plots and dot plots) are rendered with `plotters` so that the in-window preview and the 600 DPI PNG export share a single rendering engine.
+The app opens on a **Choose your analysis** screen offering two routes: the three-stage **differential analysis + enrichment** pipeline described below, or a **KEGG coverage survey** that maps every detected metabolite onto KEGG pathways or modules and reports how completely each one is covered — no statistical test, only an MS-DIAL `.txt` required, group `.csv` optional. The stages below describe the enrichment route; see [USER_MANUAL.md](docs/manual/USER_MANUAL.md) for the coverage route.
+
+All plots (volcano plots and dot plots) are rendered with `plotters` so that the in-window preview and the 600 DPI PNG export share a single rendering engine.
 
 **For the numerical and operational details** — exact statistical methods, default thresholds, deviations from MetaboAnalyst-style defaults, edge-case handling, references — see [USER_MANUAL.md](docs/manual/USER_MANUAL.md).
 
@@ -81,7 +83,7 @@ The executable is self-contained — Rust is a compile-time toolchain, so there 
    - **macOS:** right-click the app → **Open** → **Open** (or run `xattr -d com.apple.quarantine /path/to/metabolopan` once).
    - **Windows:** click **More info** → **Run anyway** on the SmartScreen prompt.
    - **Linux:** `chmod +x metabolopan` and run it (needs a desktop session with X11/Wayland + OpenGL).
-3. The app opens a native window and guides you through the three stages — see [**What it does**](#what-it-does) above for the full walkthrough and screenshots.
+3. The app opens a native window, asks which analysis you want, and guides you through the stages — see [**What it does**](#what-it-does) above for the full walkthrough and screenshots.
 
 **Verify your download (optional).** Every release artifact — and the attached `SHA256SUMS` — carries [Sigstore](https://www.sigstore.dev) build provenance, so you can confirm a file was built by this repository's CI and was not tampered with:
 

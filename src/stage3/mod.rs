@@ -12,10 +12,13 @@ use std::collections::{HashMap, HashSet};
 use std::sync::mpsc;
 use tracing::{debug, info};
 
-use crate::app::{AnalysisMode, AnalysisPayload, Stage3Funnel, Stage3RunOutput};
+use crate::app::{AnalysisMode, AnalysisPayload, CoverageFunnel, Stage3Funnel, Stage3RunOutput};
+use crate::coverage::CoverageResult;
 use crate::dam::fdr::FdrMethod;
 use crate::dam::run::classify_trend;
 use crate::dam::{DamMethod, DamResult};
+use crate::data::{GroupMapping, IonModeTable};
+use crate::dedup::DedupReport;
 use crate::enrichment::run_ora;
 use crate::enrichment::types::{EnrichmentDirection, EnrichmentResult};
 use crate::kegg::{
@@ -127,6 +130,88 @@ pub struct Stage3Params {
     pub force_refresh_kegg_conv: bool,
 }
 
+/// Output of [`resolve_detected_compounds`] — the InChIKey → CID → KEGG-cpd
+/// chain both analysis routes share.
+///
+/// Carries `all_cids` rather than a bare count because callers need the list
+/// itself: `compute_kegg_conv_time_span` reads the cache entry per CID to
+/// derive the fetched-date span the Data tab renders.
+///
+/// The two provenance counts are DERIVED, not stored, so they cannot drift
+/// from their sources:
+/// - detected InChIKeys = `inchikey_to_cids.len()` — the resolved map's key
+///   count, NOT the input slice's length. Single-mode callers pass an
+///   undeduped per-feature list, so its length would overcount.
+/// - detected CIDs = `all_cids.len()` — unique CIDs submitted to KEGG `/conv`.
+pub struct ResolvedCompounds {
+    pub inchikey_to_cids: HashMap<String, Vec<String>>,
+    pub cid_to_cpd: HashMap<String, Option<String>>,
+    /// Sorted, deduplicated CIDs across every resolved InChIKey — the exact
+    /// slice handed to `resolve_cids_to_cpds`.
+    pub all_cids: Vec<String>,
+}
+
+/// Resolve a list of InChIKeys to KEGG compound IDs: PubChem InChIKey → CID,
+/// then KEGG `/conv` CID → cpd.
+///
+/// Extracted from `run_stage3` so the enrichment and coverage routes share one
+/// implementation of the slow, network-bound part of the pipeline — batching,
+/// retry, cache read/write, force-refresh, and progress emission must not drift
+/// between them (see the `stage3-ui` capability spec).
+///
+/// **Callers do not deduplicate.** `resolve_inchikeys_to_cids` and
+/// `resolve_cids_to_cpds` both dedupe internally via
+/// `crate::seq::dedupe_preserve_order`, so the input contract is "a list which
+/// may repeat" and is identical for both routes. The enrichment route therefore
+/// keeps passing `collect_inchikeys`'s output unchanged, including its
+/// deliberately-undeduped single-mode branch.
+pub async fn resolve_detected_compounds(
+    pubchem_client: &PubchemClient,
+    kegg_client: &KeggClient,
+    inchikeys: &[String],
+    force_refresh_pubchem: bool,
+    force_refresh_kegg_conv: bool,
+    pubchem_progress_tx: mpsc::Sender<PubchemProgress>,
+    kegg_conv_progress_tx: mpsc::Sender<ConvProgress>,
+) -> Result<ResolvedCompounds> {
+    let inchikey_to_cids = resolve_inchikeys_to_cids(
+        pubchem_client,
+        inchikeys,
+        force_refresh_pubchem,
+        Some(pubchem_progress_tx),
+    )
+    .await?;
+
+    // ── Phase 2: collect unique CIDs and resolve → cpd IDs ──
+    let mut all_cids: Vec<String> = inchikey_to_cids
+        .values()
+        .flat_map(|v| v.iter().cloned())
+        .collect();
+    all_cids.sort();
+    all_cids.dedup();
+
+    let inchikeys_with_cids = inchikey_to_cids.values().filter(|v| !v.is_empty()).count();
+    info!(
+        inchikeys_resolved_to_any_cid = inchikeys_with_cids,
+        unique_cids_to_lookup = all_cids.len(),
+        "Phase 1 PubChem resolution complete — Phase 2 KEGG /conv begins"
+    );
+
+    let cid_to_cpd = resolve_cids_to_cpds(
+        kegg_client,
+        &all_cids,
+        force_refresh_kegg_conv,
+        Some(kegg_conv_progress_tx),
+    )
+    .await?;
+
+    Ok(ResolvedCompounds {
+        inchikey_to_cids,
+        cid_to_cpd,
+        all_cids,
+    })
+}
+
 /// Run the full Stage 3 pipeline. Pure async function — no UI awareness.
 /// Errors abort the Run; previously-written cache entries persist.
 ///
@@ -183,34 +268,20 @@ pub async fn run_stage3(
         "Stage 3 Run starting — Phase 1 PubChem resolution begins"
     );
 
-    let inchikey_to_cids = resolve_inchikeys_to_cids(
+    // Phases 1 + 2 are identical on both analysis routes, so they live in the
+    // shared resolver rather than here (see the `stage3-ui` capability spec).
+    let ResolvedCompounds {
+        inchikey_to_cids,
+        cid_to_cpd,
+        all_cids,
+    } = resolve_detected_compounds(
         pubchem_client,
+        kegg_client,
         &inchikeys,
         params.force_refresh_pubchem,
-        Some(pubchem_progress_tx),
-    )
-    .await?;
-
-    // ── Phase 2: collect unique CIDs and resolve → cpd IDs ──
-    let mut all_cids: Vec<String> = inchikey_to_cids
-        .values()
-        .flat_map(|v| v.iter().cloned())
-        .collect();
-    all_cids.sort();
-    all_cids.dedup();
-
-    let inchikeys_with_cids = inchikey_to_cids.values().filter(|v| !v.is_empty()).count();
-    info!(
-        inchikeys_resolved_to_any_cid = inchikeys_with_cids,
-        unique_cids_to_lookup = all_cids.len(),
-        "Phase 1 PubChem resolution complete — Phase 2 KEGG /conv begins"
-    );
-
-    let cid_to_cpd = resolve_cids_to_cpds(
-        kegg_client,
-        &all_cids,
         params.force_refresh_kegg_conv,
-        Some(kegg_conv_progress_tx),
+        pubchem_progress_tx,
+        kegg_conv_progress_tx,
     )
     .await?;
 
@@ -400,6 +471,413 @@ pub async fn run_stage3(
         module_retention,
         dual_mode_breakdown,
         funnel,
+    })
+}
+
+/// The loaded session inputs a coverage run reads.
+///
+/// Bundled rather than passed as two parameters; they also travel together
+/// everywhere — the mapping is only ever interpreted against these tables'
+/// sample columns.
+#[derive(Debug, Clone, Copy)]
+pub struct CoverageInputs<'a> {
+    pub ion_tables: &'a [IonModeTable],
+    /// `None` when no metadata `.csv` was supplied — fully supported on this
+    /// route, and the reason the group-presence stage is optional.
+    pub mapping: Option<&'a GroupMapping>,
+}
+
+/// Per-run parameters for [`run_coverage`].
+///
+/// Deliberately NOT a reuse of [`Stage3Params`]: that struct is more than half
+/// statistics (`method`, `fc_threshold`, `fdr_threshold`, `delta_threshold`,
+/// `direction`, `fdr_method`), none of which exists on a route that performs no
+/// test. Sharing it would put six permanently-unread fields on every coverage
+/// run and invite exactly the confusion the route's `no statistical test`
+/// guarantee exists to prevent.
+///
+/// The two display filters (`min_hit_count`, `top_n`) are absent for a
+/// different reason: they are re-applied live on the result screen over the
+/// rows already in hand, so the run never reads them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoverageParams {
+    /// `settings.coverage_selected_groups`, verbatim. `None` ("not yet chosen")
+    /// and `Some(vec![])` ("deliberately none") are DIFFERENT and are resolved
+    /// by `coverage::detect::selected_groups`, never by `unwrap_or_default`.
+    pub selected_groups: Option<Vec<String>>,
+    pub presence_threshold: f64,
+    pub dedup_enabled: bool,
+    pub dedup_rt_tolerance_min: f64,
+    pub force_refresh_pubchem: bool,
+    pub force_refresh_kegg_conv: bool,
+}
+
+/// Everything a coverage run needs from the loaded tables, extracted BEFORE the
+/// orchestrator is spawned.
+///
+/// The split is here because every table-dependent step of a coverage run — the
+/// group-presence filter, deduplication, and reading each surviving feature's
+/// metabolite name — is pure, synchronous, and fast, while the only slow step
+/// is the network resolver, which never touches a table. Handing the spawned
+/// task this struct instead of the tables means the async future never holds
+/// the intensity matrices: no multi-megabyte clone per run, and
+/// `MetabolomicsTable` does not have to become `Clone` (which would make an
+/// expensive copy easy to write by accident anywhere else in the app).
+#[derive(Debug, Clone)]
+pub struct PreparedFeatures {
+    /// Distinct InChIKeys to resolve — the union across modes, in
+    /// first-appearance order.
+    pub inchikeys: Vec<String>,
+    /// Per ion-mode table, `(inchikey, metabolite_name)` for each SURVIVING
+    /// annotated feature.
+    ///
+    /// Per table rather than unioned because one InChIKey may carry different
+    /// MS-DIAL names in POS and NEG, and the CSV lists every distinct one. Only
+    /// the survivors appear, which is what makes deduplication observable in
+    /// the exported names — its one effect on this route.
+    pub per_mode_annotations: Vec<Vec<(String, String)>>,
+    pub raw_features: usize,
+    /// `None` when no metadata `.csv` was supplied — the stage did not run.
+    pub in_selected_groups: Option<usize>,
+    pub after_dedup: usize,
+    /// One per ion-mode table, in order; empty when dedup was off.
+    pub dedup_reports: Vec<DedupReport>,
+}
+
+/// Apply the group-presence filter and deduplication to every loaded table and
+/// extract what the run needs from them.
+///
+/// Synchronous and cheap — call it on the UI thread immediately before
+/// spawning. Emits one count-only `info!` per table for the group filter: no
+/// sample names and no group names beyond those already on screen, so the event
+/// is safe inside a bug-report bundle. Every other exclusion on this route is
+/// surfaced in both the UI and the log; this one matches.
+pub fn prepare_features(inputs: CoverageInputs<'_>, params: &CoverageParams) -> PreparedFeatures {
+    let CoverageInputs {
+        ion_tables,
+        mapping,
+    } = inputs;
+
+    // Resolve the selection ONCE, against the mapping, so every table applies
+    // the same group list. With no mapping there is nothing to resolve against
+    // and the filter is inert anyway.
+    let groups: Vec<String> = match mapping {
+        Some(m) => crate::coverage::detect::selected_groups(params.selected_groups.as_deref(), m),
+        None => Vec::new(),
+    };
+
+    let mut raw_features = 0usize;
+    let mut in_selected_groups: Option<usize> = None;
+    let mut after_dedup = 0usize;
+    let mut dedup_reports: Vec<DedupReport> = Vec::new();
+    let mut per_mode_annotations: Vec<Vec<(String, String)>> = Vec::new();
+
+    for table in ion_tables {
+        let (detected, report) = crate::coverage::detect::detect_features(
+            &table.table,
+            mapping,
+            &groups,
+            params.presence_threshold,
+            params.dedup_enabled,
+            params.dedup_rt_tolerance_min,
+        );
+        if let Some(surviving) = detected.in_selected_groups {
+            info!(
+                mode = ?table.mode,
+                features_total = detected.raw_features,
+                removed_by_group_filter = detected.raw_features - surviving,
+                surviving,
+                "coverage group-presence filter applied"
+            );
+            *in_selected_groups.get_or_insert(0) += surviving;
+        }
+        raw_features += detected.raw_features;
+        after_dedup += detected.after_dedup;
+        if let Some(r) = report {
+            dedup_reports.push(r);
+        }
+        per_mode_annotations.push(
+            detected
+                .kept
+                .iter()
+                .filter_map(|&i| {
+                    let f = &table.table.features[i];
+                    f.inchikey
+                        .as_ref()
+                        .map(|k| (k.clone(), f.metabolite_name.clone()))
+                })
+                .collect(),
+        );
+    }
+
+    let all_keys: Vec<String> = per_mode_annotations
+        .iter()
+        .flatten()
+        .map(|(k, _)| k.clone())
+        .collect();
+    let inchikeys = crate::seq::dedupe_preserve_order(&all_keys);
+
+    PreparedFeatures {
+        inchikeys,
+        per_mode_annotations,
+        raw_features,
+        in_selected_groups,
+        after_dedup,
+        dedup_reports,
+    }
+}
+
+/// Which ionization modes a detected compound was reached through.
+///
+/// Computed for the Data tab only — the Data tab is its sole surface. It MUST
+/// NOT affect membership in `D`, which is the plain union `D_pos ∪ D_neg`:
+/// with no differential comparison there is no directional verdict that could
+/// contradict another, so this route has no conflict rule to apply.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CoverageModePartition {
+    pub pos_only: usize,
+    pub neg_only: usize,
+    pub in_both: usize,
+}
+
+/// Output of [`run_coverage`] — the coverage route's counterpart to
+/// [`Stage3RunOutput`].
+pub struct CoverageRunOutput {
+    pub coverage_result: CoverageResult,
+    pub funnel: CoverageFunnel,
+    /// cpd ID → the user's MS-DIAL metabolite names for the features that
+    /// resolved to it, sorted and deduplicated. Consumed only by the CSV
+    /// exporter (`CoverageExportContext`); the on-screen table renders bare
+    /// cpd IDs, which is why `coverage::compute` never sees this map.
+    pub cpd_to_names: HashMap<String, Vec<String>>,
+    /// Module mode only, exactly as on the enrichment route.
+    pub module_retention: Option<ModuleRetention>,
+    /// `None` in single-mode runs.
+    pub mode_partition: Option<CoverageModePartition>,
+    /// One `DedupReport` per ion-mode table, in `ion_tables` order. Empty when
+    /// `dedup_enabled` is false.
+    pub dedup_reports: Vec<DedupReport>,
+    pub pubchem_time_span: Option<(DateTime<Utc>, DateTime<Utc>, usize)>,
+    pub kegg_conv_time_span: Option<(DateTime<Utc>, DateTime<Utc>, usize)>,
+}
+
+/// Run the coverage survey: resolve the prepared feature set to KEGG compounds
+/// through the SHARED resolver, assemble the entry catalogue from the SHARED
+/// `AnalysisTarget`, and compute descriptive coverage.
+///
+/// No statistical test is performed and none can be: `CoverageResult` has no
+/// field to carry one.
+///
+/// Takes [`PreparedFeatures`] rather than the tables — see that type for why.
+/// `force_refresh` is `(pubchem, kegg_conv)`, paired so the signature stays
+/// inside clippy's argument limit; the two flags are always set together.
+pub async fn run_coverage(
+    pubchem_client: &PubchemClient,
+    kegg_client: &KeggClient,
+    prepared: PreparedFeatures,
+    target: &AnalysisTarget,
+    force_refresh: (bool, bool),
+    pubchem_progress_tx: mpsc::Sender<PubchemProgress>,
+    kegg_conv_progress_tx: mpsc::Sender<ConvProgress>,
+) -> Result<CoverageRunOutput> {
+    let (force_refresh_pubchem, force_refresh_kegg_conv) = force_refresh;
+    let PreparedFeatures {
+        inchikeys,
+        per_mode_annotations,
+        raw_features,
+        in_selected_groups,
+        after_dedup,
+        dedup_reports,
+    } = prepared;
+
+    info!(
+        mode = ?target.mode(),
+        n_modes = per_mode_annotations.len(),
+        raw_features,
+        after_dedup,
+        inchikeys_to_resolve = inchikeys.len(),
+        "Coverage run starting"
+    );
+
+    // ── The shared resolver: InChIKey → CID → KEGG cpd ──
+    let resolved = resolve_detected_compounds(
+        pubchem_client,
+        kegg_client,
+        &inchikeys,
+        force_refresh_pubchem,
+        force_refresh_kegg_conv,
+        pubchem_progress_tx,
+        kegg_conv_progress_tx,
+    )
+    .await?;
+
+    // ── D, and the cpd → metabolite-name map the CSV needs ──
+    let cpds_of = |key: &str| -> Vec<String> {
+        resolved
+            .inchikey_to_cids
+            .get(key)
+            .into_iter()
+            .flatten()
+            .filter_map(|cid| resolved.cid_to_cpd.get(cid).and_then(|c| c.clone()))
+            .collect()
+    };
+    let (detected_cpds, cpd_to_names) = build_detected_and_names(&per_mode_annotations, cpds_of);
+
+    // Per-mode partition — Data tab only, never a membership rule.
+    let per_mode_cpds: Vec<HashSet<String>> = per_mode_annotations
+        .iter()
+        .map(|anns| anns.iter().flat_map(|(k, _)| cpds_of(k)).collect())
+        .collect();
+    let mode_partition = partition_by_mode(&per_mode_cpds);
+    debug_assert_eq!(
+        per_mode_cpds.iter().flatten().collect::<HashSet<_>>().len(),
+        detected_cpds.len(),
+        "D must be the plain union of the per-mode compound sets"
+    );
+
+    // ── Entries: the SAME catalogue assembly the enrichment route uses ──
+    let (entries, module_retention): (Vec<KeggCompoundSet>, Option<ModuleRetention>) = match target
+    {
+        AnalysisTarget::Pathway { species_kegg } => (species_kegg.pathways.clone(), None),
+        AnalysisTarget::Module {
+            modules_pack,
+            group_level,
+            group_name,
+            group_org_codes,
+            min_group_overlap,
+        } => assemble_module_entries(
+            modules_pack,
+            *group_level,
+            group_name,
+            group_org_codes,
+            *min_group_overlap,
+        ),
+    };
+
+    let coverage_result = crate::coverage::compute(&detected_cpds, &entries);
+
+    let funnel = CoverageFunnel {
+        raw_features,
+        in_selected_groups,
+        after_dedup,
+        // The resolved map's key count, not the input slice's length — the same
+        // derivation the enrichment funnel uses.
+        detected_inchikeys: resolved.inchikey_to_cids.len(),
+        detected_cids: resolved.all_cids.len(),
+    };
+
+    let pubchem_cache_map = pubchem_cache::read_cache().unwrap_or_default();
+    let kegg_conv_cache_map = kegg_cache::read_cid_to_cpd_cache().unwrap_or_default();
+    let pubchem_time_span = compute_pubchem_time_span(&pubchem_cache_map, &inchikeys);
+    let kegg_conv_time_span = compute_kegg_conv_time_span(&kegg_conv_cache_map, &resolved.all_cids);
+
+    info!(
+        entries_total = coverage_result.entries_total,
+        entries_without_compounds = coverage_result.entries_without_compounds,
+        detected_total = coverage_result.detected_total,
+        detected_in_entries = coverage_result.detected_in_entries,
+        "Coverage run complete"
+    );
+
+    Ok(CoverageRunOutput {
+        coverage_result,
+        funnel,
+        cpd_to_names,
+        module_retention,
+        mode_partition,
+        dedup_reports,
+        pubchem_time_span,
+        kegg_conv_time_span,
+    })
+}
+
+impl CoverageRunOutput {
+    /// Consume the orchestrator output into a fully-populated
+    /// `AppState::Stage3CoverageResult`. The result-screen runtime fields start
+    /// fresh, mirroring `Stage3RunOutput::into_result_state`.
+    pub(crate) fn into_result_state(self) -> crate::app::AppState {
+        crate::app::AppState::Stage3CoverageResult {
+            coverage_result: self.coverage_result,
+            funnel: self.funnel,
+            cpd_to_names: self.cpd_to_names,
+            module_retention: self.module_retention,
+            mode_partition: self.mode_partition,
+            dedup_reports: self.dedup_reports,
+            pubchem_time_span: self.pubchem_time_span,
+            kegg_conv_time_span: self.kegg_conv_time_span,
+            dotplot_tex: None,
+            rendering: false,
+            render_rx: None,
+            confirming_new_round: false,
+            // Fresh per-run state: the run-entry autosize is authoritative
+            // until the user hand-edits the Height field on this screen.
+            height_user_overridden: false,
+        }
+    }
+}
+
+/// Build `D` and the cpd → metabolite-name map from the SURVIVING features.
+///
+/// `per_mode_annotations` already contains only the features that survived both
+/// filters (see [`PreparedFeatures`]), which is precisely how deduplication
+/// earns its place on this route: it elects a different representative per
+/// InChIKey, so `C00031 (D-Glucose / Glucose)` becomes `C00031 (D-Glucose)`.
+/// Including the dup-losers would make the dedup control inert in its ONE
+/// observable effect — `D` and every number derived from it are invariant under
+/// it.
+///
+/// Per table rather than over the unioned InChIKey list, because one InChIKey
+/// may carry different MS-DIAL names in POS and NEG and the CSV lists every
+/// distinct one.
+///
+/// Names come back sorted and deduplicated, so the CSV cell is deterministic.
+fn build_detected_and_names(
+    per_mode_annotations: &[Vec<(String, String)>],
+    cpds_of: impl Fn(&str) -> Vec<String>,
+) -> (HashSet<String>, HashMap<String, Vec<String>>) {
+    let mut detected: HashSet<String> = HashSet::new();
+    let mut names: HashMap<String, HashSet<String>> = HashMap::new();
+    for anns in per_mode_annotations {
+        for (key, metabolite_name) in anns {
+            for cpd in cpds_of(key) {
+                detected.insert(cpd.clone());
+                names
+                    .entry(cpd)
+                    .or_default()
+                    .insert(metabolite_name.clone());
+            }
+        }
+    }
+    let names = names
+        .into_iter()
+        .map(|(cpd, set)| {
+            let mut v: Vec<String> = set.into_iter().collect();
+            v.sort();
+            (cpd, v)
+        })
+        .collect();
+    (detected, names)
+}
+
+/// Partition the detected compounds by which ionization mode reached them.
+///
+/// `None` for a single-mode run: there is nothing to partition, and reporting
+/// "100 % POS-only" would be a tautology dressed as a finding.
+///
+/// **Descriptive only.** `D` is the plain union `D_pos ∪ D_neg`, and this
+/// function is deliberately incapable of changing it — it takes the per-mode
+/// sets and returns three counts. On the enrichment route the equivalent
+/// dual-mode logic applies a conflict rule that EXCLUDES compounds; here there
+/// is no differential comparison, so there is no directional verdict that could
+/// contradict another and nothing to exclude.
+fn partition_by_mode(per_mode_cpds: &[HashSet<String>]) -> Option<CoverageModePartition> {
+    let [pos, neg] = per_mode_cpds else {
+        return None;
+    };
+    Some(CoverageModePartition {
+        pos_only: pos.difference(neg).count(),
+        neg_only: neg.difference(pos).count(),
+        in_both: pos.intersection(neg).count(),
     })
 }
 
@@ -1881,5 +2359,189 @@ mod tests {
         assert_eq!(g.foreground_pos_only, 1);
         assert_eq!(g.foreground_neg_only, 1);
         assert_eq!(g.foreground_agree_both, 1);
+    }
+
+    // ── Coverage route: dual-mode union + partition (T6-D) ──
+
+    fn cpd_set(ids: &[&str]) -> HashSet<String> {
+        ids.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// The `(inchikey, metabolite_name)` annotation list one ion-mode table
+    /// contributes — exactly what `PreparedFeatures` carries.
+    fn anns(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(k, n)| ((*k).to_string(), (*n).to_string()))
+            .collect()
+    }
+
+    /// `D` is the plain set union across modes — no conflict rule, no
+    /// strictness parameter, no direction-based exclusion. With no differential
+    /// comparison there is no directional verdict that could contradict
+    /// another, so there is nothing a conflict rule could act on.
+    #[test]
+    fn coverage_dual_mode_unions_without_a_conflict_rule() {
+        let pos = cpd_set(&["C00001", "C00002"]);
+        let neg = cpd_set(&["C00002", "C00007"]);
+        let union: HashSet<String> = pos.union(&neg).cloned().collect();
+        assert_eq!(union, cpd_set(&["C00001", "C00002", "C00007"]));
+
+        // Nothing is excluded for appearing in only one mode or in both — the
+        // union's size is exactly pos_only + neg_only + in_both.
+        let p = partition_by_mode(&[pos, neg]).expect("dual mode partitions");
+        assert_eq!(p.pos_only + p.neg_only + p.in_both, union.len());
+    }
+
+    /// The three partition buckets, on a set with one compound of each kind.
+    #[test]
+    fn coverage_mode_partition_counts_each_bucket() {
+        let p = partition_by_mode(&[
+            cpd_set(&["C00001", "C00002"]),
+            cpd_set(&["C00002", "C00007"]),
+        ])
+        .expect("dual mode partitions");
+        assert_eq!(p.pos_only, 1, "C00001");
+        assert_eq!(p.neg_only, 1, "C00007");
+        assert_eq!(p.in_both, 1, "C00002");
+    }
+
+    /// A single-mode run has nothing to partition. Reporting "100 % POS-only"
+    /// would be a tautology dressed as a finding.
+    #[test]
+    fn coverage_mode_partition_is_none_in_single_mode() {
+        assert_eq!(partition_by_mode(&[cpd_set(&["C00001"])]), None);
+        assert_eq!(partition_by_mode(&[]), None);
+    }
+
+    /// Disjoint modes, and one mode empty — the degenerate ends of the range.
+    #[test]
+    fn coverage_mode_partition_handles_disjoint_and_empty_modes() {
+        let disjoint = partition_by_mode(&[cpd_set(&["C00001"]), cpd_set(&["C00007"])])
+            .expect("dual mode partitions");
+        assert_eq!(
+            (disjoint.pos_only, disjoint.neg_only, disjoint.in_both),
+            (1, 1, 0)
+        );
+
+        let neg_empty = partition_by_mode(&[cpd_set(&["C00001", "C00002"]), cpd_set(&[])])
+            .expect("dual mode partitions");
+        assert_eq!(
+            (neg_empty.pos_only, neg_empty.neg_only, neg_empty.in_both),
+            (2, 0, 0)
+        );
+    }
+
+    /// The one observable effect of deduplication on this route: which MS-DIAL
+    /// metabolite name the CSV attaches to a compound.
+    ///
+    /// Two features share an InChIKey and therefore a cpd, but carry different
+    /// names. With both kept, the CSV lists both; with the cascade having
+    /// elected one, it lists one. `D` is identical in both cases — which is why
+    /// this test, and the funnel, are the entire justification for keeping the
+    /// dedup control on the coverage route at all (design D16).
+    #[test]
+    fn dedup_changes_the_exported_names_but_never_d() {
+        let cpds_of = |key: &str| match key {
+            "GLUCOSEKEY" => vec!["C00031".to_string()],
+            "CITRATEKEY" => vec!["C00158".to_string()],
+            _ => vec![],
+        };
+
+        // Dedup off: both same-InChIKey features survive, so both names travel.
+        let off = anns(&[
+            ("GLUCOSEKEY", "D-Glucose"),
+            ("GLUCOSEKEY", "Glucose"),
+            ("CITRATEKEY", "Citrate"),
+        ]);
+        // Dedup on: the cascade elected one, so only its name does.
+        let on = anns(&[("GLUCOSEKEY", "D-Glucose"), ("CITRATEKEY", "Citrate")]);
+
+        let (d_off, names_off) = build_detected_and_names(&[off], cpds_of);
+        let (d_on, names_on) = build_detected_and_names(&[on], cpds_of);
+
+        assert_eq!(d_off, d_on, "D is invariant under deduplication");
+        assert_eq!(
+            names_off.get("C00031"),
+            Some(&vec!["D-Glucose".to_string(), "Glucose".to_string()]),
+            "names sorted and both listed"
+        );
+        assert_eq!(
+            names_on.get("C00031"),
+            Some(&vec!["D-Glucose".to_string()]),
+            "only the elected representative's name survives"
+        );
+    }
+
+    /// One InChIKey named differently in POS and NEG contributes BOTH names —
+    /// which is why the map is built per table rather than over the unioned key
+    /// list.
+    #[test]
+    fn a_compound_named_differently_per_mode_lists_both_names() {
+        let cpds_of = |key: &str| {
+            if key == "GLUCOSEKEY" {
+                vec!["C00031".to_string()]
+            } else {
+                vec![]
+            }
+        };
+        let (d, names) = build_detected_and_names(
+            &[
+                anns(&[("GLUCOSEKEY", "Glucose (POS)")]),
+                anns(&[("GLUCOSEKEY", "Glucose (NEG)")]),
+            ],
+            cpds_of,
+        );
+        assert_eq!(d.len(), 1);
+        assert_eq!(
+            names.get("C00031"),
+            Some(&vec![
+                "Glucose (NEG)".to_string(),
+                "Glucose (POS)".to_string()
+            ])
+        );
+    }
+
+    /// An annotated feature whose InChIKey resolves to no cpd contributes
+    /// nothing. (A feature with no InChIKey at all never reaches the annotation
+    /// list in the first place — that exclusion is structural, one layer up.)
+    #[test]
+    fn unresolvable_features_contribute_nothing() {
+        let cpds_of = |key: &str| {
+            if key == "CITRATEKEY" {
+                vec!["C00158".to_string()]
+            } else {
+                vec![]
+            }
+        };
+        let (d, names) = build_detected_and_names(
+            &[anns(&[("NOCPDKEY", "Unmapped"), ("CITRATEKEY", "Citrate")])],
+            cpds_of,
+        );
+        assert_eq!(d, cpd_set(&["C00158"]));
+        assert_eq!(names.len(), 1);
+    }
+
+    /// `CoverageParams` carries no statistical field. Asserted by construction,
+    /// like the `CoverageResult` guarantee: a `direction` or `fdr_method` added
+    /// here would fail to compile against this literal rather than quietly
+    /// giving the route a knob it must not have.
+    #[test]
+    fn coverage_params_carry_no_statistical_field() {
+        let CoverageParams {
+            selected_groups: _,
+            presence_threshold: _,
+            dedup_enabled: _,
+            dedup_rt_tolerance_min: _,
+            force_refresh_pubchem: _,
+            force_refresh_kegg_conv: _,
+        } = CoverageParams {
+            selected_groups: None,
+            presence_threshold: 0.5,
+            dedup_enabled: true,
+            dedup_rt_tolerance_min: 0.1,
+            force_refresh_pubchem: false,
+            force_refresh_kegg_conv: false,
+        };
     }
 }

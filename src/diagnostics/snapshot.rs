@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::fmt::Write;
 
-use crate::app::{AppState, SessionCache, SessionInputs, SessionSettings};
+use crate::app::{AppState, RunningPayload, SessionCache, SessionInputs, SessionSettings};
 use crate::data::{GroupMapping, IonModeTable};
 
 /// Returns a plain-text block describing the current `AppState` variant
@@ -113,6 +113,38 @@ pub fn render_app_state(
     )
     .ok();
 
+    // ── Analysis route + KEGG coverage route ──
+    // `analysis_route` leads because every field above it is route-relevant
+    // only on the route it belongs to — a reader of a bug report needs to know
+    // which route the session was on before any other setting means anything.
+    writeln!(s, "analysis_route: {:?}", settings.analysis_route).ok();
+    writeln!(
+        s,
+        "coverage_min_entry_size: {}",
+        settings.coverage_min_entry_size
+    )
+    .ok();
+    writeln!(s, "coverage_sort_key: {:?}", settings.coverage_sort_key).ok();
+    // Count only — group NAMES come from the user's metadata and are exactly
+    // the kind of identifier the bundle's privacy contract keeps out. `None`
+    // (not yet chosen) and `Some([])` (deliberately none) are distinguished,
+    // because that difference decides whether the Run gate fires.
+    writeln!(
+        s,
+        "coverage_selected_groups: {}",
+        match &settings.coverage_selected_groups {
+            None => "not yet chosen".to_string(),
+            Some(v) => format!("{} selected", v.len()),
+        }
+    )
+    .ok();
+    writeln!(
+        s,
+        "coverage_presence_threshold: {}",
+        settings.coverage_presence_threshold
+    )
+    .ok();
+
     // ── Inputs (loaded raw data summary, no contents) ──
     writeln!(s, "\n[inputs]").ok();
     write_ion_tables(&mut s, &inputs.ion_tables);
@@ -204,6 +236,11 @@ pub fn render_app_state(
             writeln!(s, "rendering: {rendering}").ok();
             write_dam_results(&mut s, dam_results);
         }
+        AppState::Stage0ChooseAnalysis => {
+            // No input is loaded and no runtime exists; the variant name is the
+            // whole story. The chosen route is dumped under [settings] above.
+            writeln!(s, "Variant: Stage0ChooseAnalysis").ok();
+        }
         AppState::Stage3EnrichSetup {
             dam_results,
             error,
@@ -212,41 +249,29 @@ pub fn render_app_state(
         } => {
             writeln!(s, "Variant: Stage3EnrichSetup").ok();
             writeln!(s, "error: {}", opt_str(error.as_deref())).ok();
-            match kegg_fetch.as_ref() {
-                None => {
-                    writeln!(s, "kegg_fetch: <none in flight>").ok();
-                }
-                Some(f) => {
-                    writeln!(
-                        s,
-                        "kegg_fetch: in_flight completed={} total={} current_pathway={}",
-                        f.completed, f.total, f.current_pathway
-                    )
-                    .ok();
-                }
-            }
-            match modules_fetch.as_ref() {
-                None => {
-                    writeln!(s, "modules_fetch: <none in flight>").ok();
-                }
-                Some(f) => {
-                    writeln!(
-                        s,
-                        "modules_fetch: in_flight completed={} total={} current_id={} eta_secs={}",
-                        f.completed,
-                        f.total,
-                        f.current_id,
-                        f.eta_secs
-                            .map(|v| v.to_string())
-                            .unwrap_or_else(|| "<n/a>".into())
-                    )
-                    .ok();
-                }
-            }
+            write_fetch_slots(&mut s, kegg_fetch, modules_fetch);
             write_dam_results(&mut s, dam_results);
         }
+        AppState::Stage2CoverageSetup {
+            error,
+            stale_groups_notice,
+            kegg_fetch,
+            modules_fetch,
+        } => {
+            writeln!(s, "Variant: Stage2CoverageSetup").ok();
+            writeln!(s, "error: {}", opt_str(error.as_deref())).ok();
+            writeln!(
+                s,
+                "stale_groups_notice: {}",
+                opt_str(stale_groups_notice.as_deref())
+            )
+            .ok();
+            // Identically-shaped slots to `Stage3EnrichSetup`, so one dump path
+            // serves both.
+            write_fetch_slots(&mut s, kegg_fetch, modules_fetch);
+        }
         AppState::Stage3EnrichRunning {
-            dam_results,
+            payload,
             phase,
             pubchem_completed,
             pubchem_total,
@@ -255,6 +280,17 @@ pub fn render_app_state(
             ..
         } => {
             writeln!(s, "Variant: Stage3EnrichRunning").ok();
+            // Names which run owns the shared screen: without it a report taken
+            // mid-run cannot be told apart from the other route's.
+            writeln!(
+                s,
+                "payload: {}",
+                match payload {
+                    RunningPayload::Enrichment(_) => "Enrichment",
+                    RunningPayload::Coverage => "Coverage",
+                }
+            )
+            .ok();
             writeln!(s, "phase: {phase:?}").ok();
             writeln!(s, "pubchem_progress: {pubchem_completed}/{pubchem_total}").ok();
             writeln!(
@@ -262,7 +298,53 @@ pub fn render_app_state(
                 "kegg_conv_progress: {kegg_conv_completed}/{kegg_conv_total}"
             )
             .ok();
-            write_dam_results(&mut s, dam_results);
+            if let RunningPayload::Enrichment(dam_results) = payload {
+                write_dam_results(&mut s, dam_results);
+            }
+        }
+        AppState::Stage3CoverageResult {
+            coverage_result,
+            funnel,
+            rendering,
+            confirming_new_round,
+            ..
+        } => {
+            writeln!(s, "Variant: Stage3CoverageResult").ok();
+            writeln!(s, "rendering: {rendering}").ok();
+            writeln!(s, "confirming_new_round: {confirming_new_round}").ok();
+            writeln!(s, "coverage_rows: {}", coverage_result.rows.len()).ok();
+            writeln!(
+                s,
+                "coverage_detected_total: {}",
+                coverage_result.detected_total
+            )
+            .ok();
+            writeln!(
+                s,
+                "coverage_detected_in_entries: {}",
+                coverage_result.detected_in_entries
+            )
+            .ok();
+            writeln!(
+                s,
+                "coverage_entries_without_compounds: {}",
+                coverage_result.entries_without_compounds
+            )
+            .ok();
+            // Counts only — no entry names, no sample names.
+            writeln!(
+                s,
+                "funnel: raw={} in_selected_groups={} after_dedup={} inchikeys={} cids={}",
+                funnel.raw_features,
+                funnel
+                    .in_selected_groups
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "<no csv>".into()),
+                funnel.after_dedup,
+                funnel.detected_inchikeys,
+                funnel.detected_cids
+            )
+            .ok();
         }
         AppState::Stage3EnrichResult {
             dam_results,
@@ -376,6 +458,49 @@ fn write_mapping(s: &mut String, mapping: Option<&GroupMapping>) {
     }
 }
 
+/// Dump the two in-flight fetch slots both setup variants own.
+///
+/// One path for `Stage3EnrichSetup` and `Stage2CoverageSetup`: the slots are
+/// identically shaped, so a report taken mid-fetch reads the same on either
+/// screen. Counts and the current item only — no paths, no sample names.
+fn write_fetch_slots(
+    s: &mut String,
+    kegg_fetch: &Option<crate::app::KeggFetchInFlight>,
+    modules_fetch: &Option<crate::app::ModulesFetchInFlight>,
+) {
+    match kegg_fetch.as_ref() {
+        None => {
+            writeln!(s, "kegg_fetch: <none in flight>").ok();
+        }
+        Some(f) => {
+            writeln!(
+                s,
+                "kegg_fetch: in_flight completed={} total={} current_pathway={}",
+                f.completed, f.total, f.current_pathway
+            )
+            .ok();
+        }
+    }
+    match modules_fetch.as_ref() {
+        None => {
+            writeln!(s, "modules_fetch: <none in flight>").ok();
+        }
+        Some(f) => {
+            writeln!(
+                s,
+                "modules_fetch: in_flight completed={} total={} current_id={} eta_secs={}",
+                f.completed,
+                f.total,
+                f.current_id,
+                f.eta_secs
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "<n/a>".into())
+            )
+            .ok();
+        }
+    }
+}
+
 fn write_dam_results(s: &mut String, dam_results: &[crate::dam::DamResult]) {
     writeln!(s, "dam_results_count: {}", dam_results.len()).ok();
     for (i, dr) in dam_results.iter().enumerate() {
@@ -409,6 +534,134 @@ fn fmt_time_span(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::app::{CoverageFunnel, RunningPayload};
+
+    fn render(state: &AppState) -> String {
+        render_app_state(
+            state,
+            &SessionSettings::default(),
+            &SessionInputs::default(),
+            &SessionCache::default(),
+        )
+    }
+
+    fn coverage_result_state() -> AppState {
+        AppState::Stage3CoverageResult {
+            coverage_result: crate::coverage::CoverageResult {
+                rows: vec![],
+                detected_total: 391,
+                entries_total: 372,
+                entries_without_compounds: 76,
+                detected_in_entries: 264,
+            },
+            funnel: CoverageFunnel {
+                raw_features: 12431,
+                in_selected_groups: Some(9004),
+                after_dedup: 2317,
+                detected_inchikeys: 1974,
+                detected_cids: 4187,
+            },
+            cpd_to_names: std::collections::HashMap::new(),
+            module_retention: None,
+            mode_partition: None,
+            dedup_reports: vec![],
+            pubchem_time_span: None,
+            kegg_conv_time_span: None,
+            dotplot_tex: None,
+            rendering: false,
+            render_rx: None,
+            confirming_new_round: false,
+            height_user_overridden: false,
+        }
+    }
+
+    fn running_state(payload: RunningPayload) -> AppState {
+        let (_a, rx1) = std::sync::mpsc::channel();
+        let (_b, rx2) = std::sync::mpsc::channel();
+        let (_c, rx3) = std::sync::mpsc::channel();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("test runtime");
+        AppState::Stage3EnrichRunning {
+            payload,
+            phase: crate::app::Stage3Phase::PubChem,
+            pubchem_progress_rx: rx1,
+            kegg_conv_progress_rx: rx2,
+            result_rx: rx3,
+            pubchem_completed: 0,
+            pubchem_total: 0,
+            kegg_conv_completed: 0,
+            kegg_conv_total: 0,
+            run_handle: rt.spawn(std::future::pending::<()>()).abort_handle(),
+        }
+    }
+
+    /// Every new variant dumps its name, so a report taken on one is not just
+    /// a `[settings]` block with nothing above it.
+    #[test]
+    fn every_coverage_route_variant_names_itself() {
+        assert!(render(&AppState::Stage0ChooseAnalysis).contains("Variant: Stage0ChooseAnalysis"));
+        assert!(
+            render(&AppState::Stage2CoverageSetup {
+                error: None,
+                stale_groups_notice: None,
+                kegg_fetch: None,
+                modules_fetch: None,
+            })
+            .contains("Variant: Stage2CoverageSetup")
+        );
+        assert!(render(&coverage_result_state()).contains("Variant: Stage3CoverageResult"));
+    }
+
+    /// The shared running screen names WHICH run owns it. Without this a report
+    /// taken mid-run cannot be told apart from the other route's.
+    #[test]
+    fn the_running_screen_names_its_payload() {
+        let enrich = render(&running_state(RunningPayload::Enrichment(vec![])));
+        assert!(enrich.contains("Variant: Stage3EnrichRunning"));
+        assert!(enrich.contains("payload: Enrichment"));
+
+        let coverage = render(&running_state(RunningPayload::Coverage));
+        assert!(coverage.contains("payload: Coverage"));
+    }
+
+    /// The coverage result dumps counts only — no entry names, no sample names.
+    /// A bug-report bundle is shared publicly; the funnel is what makes a
+    /// coverage report diagnosable without leaking what was measured.
+    #[test]
+    fn the_coverage_result_dumps_counts_only() {
+        let dump = render(&coverage_result_state());
+        for needle in [
+            "coverage_detected_total: 391",
+            "coverage_detected_in_entries: 264",
+            "coverage_entries_without_compounds: 76",
+            "raw=12431",
+            "in_selected_groups=9004",
+            "after_dedup=2317",
+            "inchikeys=1974",
+            "cids=4187",
+        ] {
+            assert!(dump.contains(needle), "missing {needle} in:\n{dump}");
+        }
+    }
+
+    /// With no `.csv` the group term reads `<no csv>` rather than a number that
+    /// would be indistinguishable from a real count.
+    #[test]
+    fn the_coverage_funnel_marks_an_absent_group_stage() {
+        let mut state = coverage_result_state();
+        if let AppState::Stage3CoverageResult { funnel, .. } = &mut state {
+            funnel.in_selected_groups = None;
+        }
+        assert!(render(&state).contains("in_selected_groups=<no csv>"));
+    }
+
+    /// The route is dumped, because every other field's relevance depends on it.
+    #[test]
+    fn the_analysis_route_is_dumped() {
+        assert!(render(&AppState::Stage0ChooseAnalysis).contains("analysis_route: DamEnrichment"));
+    }
 
     /// Drift-guard (`harden-diagnostics-redaction` D2): the `[settings]` block
     /// is a hand-written `writeln!` per `SessionSettings` field, with no

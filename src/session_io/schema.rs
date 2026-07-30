@@ -14,14 +14,24 @@ use crate::app::SessionSettings;
 /// `Snapshot`, `InputFileEntry`, `SessionSettings`, or any enum
 /// transitively referenced by `SessionSettings` changes name, is removed,
 /// or is added. Triple-locked against drift by the
-/// `tests/fixtures/settings_default_v2.json` golden fixture + the
+/// `tests/fixtures/settings_default_v3.json` golden fixture + the
 /// version-rock test in `tests/session_io_test.rs`. (Reset `3 → 1` once,
 /// pre-adoption, collapsing the internal `1→2→3` dev-churn history — a
 /// one-time carve-out documented in the `session-settings-io` "tracked
 /// invariant" spec; the monotonic +1 rule governs every change after it,
 /// e.g. the `1 → 2` bump by `add-rt-aware-dedup` that added
-/// `SessionSettings.dedup_rt_tolerance_min`.)
-pub const SCHEMA_VERSION: u32 = 2;
+/// `SessionSettings.dedup_rt_tolerance_min`, and the `2 → 3` bump by
+/// `add-kegg-coverage-route` that added `analysis_route`,
+/// `coverage_min_entry_size`, `coverage_sort_key`,
+/// `coverage_selected_groups`, and `coverage_presence_threshold`.)
+///
+/// The user-facing rejection message is TEMPLATED from
+/// `SnapshotError::UnsupportedSchemaVersion { found, expected }` with
+/// `expected` read from this constant, so a bump needs no message edit and
+/// MUST NOT introduce a hard-coded version literal. What does hard-code the
+/// version is the spec scenarios in `session-settings-io` and `app-shell`;
+/// `openspec validate` cannot detect a missed one.
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Top-level shape of a saved settings JSON file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,7 +89,7 @@ mod tests {
     /// `non_default_settings` helper (we cannot import a `#[cfg(test)]`
     /// helper from another file).
     fn settings_with_every_field_non_default() -> SessionSettings {
-        use crate::app::AnalysisMode;
+        use crate::app::{AnalysisMode, AnalysisRoute, CoverageSortKey};
         SessionSettings {
             analysis_mode: AnalysisMode::Module,
             kegg_species: Some("hsa".to_string()),
@@ -115,6 +125,13 @@ mod tests {
             stage3_export_width_in: 5.0,
             stage3_export_height_in: 10.0,
             stage3_export_dpi: 600,
+
+            // Analysis route + KEGG coverage route (every value non-default)
+            analysis_route: AnalysisRoute::KeggCoverage,
+            coverage_min_entry_size: 7,
+            coverage_sort_key: CoverageSortKey::Hits,
+            coverage_selected_groups: Some(vec!["QC".to_string()]),
+            coverage_presence_threshold: 0.75,
         }
     }
 

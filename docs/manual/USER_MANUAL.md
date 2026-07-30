@@ -1,8 +1,8 @@
 # User Manual
 
-Software version: metabolopan v1.3.0
+Software version: metabolopan v1.4.0
 
-Update date: 2026-07-17
+Update date: 2026-07-30
 
 This manual documents what the software does numerically — algorithms, default thresholds, deviations from common alternatives — so you can defend any number it produces in a paper or report.
 Read this once before publishing results that depend on the software.
@@ -29,12 +29,16 @@ Other callouts you will see: `> **Note:**` (clarifications, or where this softwa
 - **(a) Just running an analysis.** Read the leads of [Stage 1 — Input parsing](#stage-1--input-parsing), [Stage 2 — Normalization, Deduplication & DAM](#stage-2--normalization-deduplication--dam), [Stage 3 — Enrichment (over-representation analysis)](#stage-3--enrichment-over-representation-analysis), and the [Worked example](#worked-example).
 - **(b) Defending numbers in a paper.** Read the method subsections ([DAM](#differentially-accumulated-metabolites-dam) test methods 3a–3c), [Multiple-testing correction (FDR)](#4-multiple-testing-correction), [Missing values vs true zeros](#missing-values-nan-vs-true-zeros-00), and [Key references](#key-references).
 - **(c) Reproducibility / scripting.** Read [Saving and loading session settings (reproducibility)](#saving-and-loading-session-settings-reproducibility) and [Caches and provenance](#caches-and-provenance).
+- **(d) Surveying what you detected, without a comparison.** Read [KEGG coverage survey](#kegg-coverage-survey). That route runs no statistical test, so most of the Stage 2 / Stage 3 methodology above does not apply to it.
 
 ## Pipeline at a glance
 
 **Who this is for:** wet-lab metabolomics researchers — no coding is needed to run it.
 
-The pipeline operates in three stages. Each stage takes an input, performs one key operation, and hands the next stage a result:
+The first screen you see is **Choose your analysis**, which offers two routes.
+Pick one and the rest of the session follows it — the screens, the stepper, and the output all change accordingly.
+
+**Route 1 — Differential analysis + enrichment** (three stages). Compare two sample groups, then test which KEGG pathways or modules are over-represented among the metabolites that changed:
 
 | Stage | Input | Key operation | Output |
 |-------|-------|---------------|--------|
@@ -42,7 +46,17 @@ The pipeline operates in three stages. Each stage takes an input, performs one k
 | **Stage 2 — Normalize → deduplicate → test** | The parsed table | Optional sample normalization, then InChIKey deduplication, then a per-feature statistical test | **DAM features + a volcano plot** |
 | **Stage 3 — Enrichment** | The DAM features | InChIKey → PubChem CID → KEGG compound, then hypergeometric over-representation | **A dot plot** |
 
-> **Note:** Single-mode runs one MS-DIAL `.txt` + one group `.csv`; dual-mode runs two MS-DIAL `.txt` files (positive + negative ionization) + one group `.csv` with a `biosample` column. The mode you pick is set at Stage 1 and threads through every later stage.
+**Route 2 — KEGG coverage survey** (two stages). Map every detected metabolite onto KEGG pathways or modules and report how completely each one is covered. **No statistical test is performed.** It needs only an MS-DIAL `.txt`; the group `.csv` is optional:
+
+| Stage | Input | Key operation | Output |
+|-------|-------|---------------|--------|
+| **Stage 1 — Input** | MS-DIAL `.txt` (+ optional group `.csv`) | The same parse and align | A parsed table |
+| **Stage 2 — Setup** | The parsed table | Optional per-group presence filter, InChIKey deduplication, then map to KEGG | **A coverage table + a dot plot** |
+
+See [KEGG coverage survey](#kegg-coverage-survey) for the full description of route 2.
+The rest of this manual describes route 1 unless a section says otherwise.
+
+> **Note:** Single-mode runs one MS-DIAL `.txt`; dual-mode runs two MS-DIAL `.txt` files (positive + negative ionization). On route 1 both need a group `.csv`, and dual-mode needs a `biosample` column in it. The mode you pick is set at Stage 1 and threads through every later stage.
 
 ## Key terms & symbols
 
@@ -126,6 +140,13 @@ The pipeline operates in three stages. Each stage takes an input, performs one k
     - [Pathway mode](#pathway-mode)
     - [Module mode](#module-mode)
     - [Starting a new analysis round](#starting-a-new-analysis-round)
+  - [KEGG coverage survey](#kegg-coverage-survey)
+    - [When to use it](#when-to-use-it)
+    - [Inputs](#inputs)
+    - [Setup screen](#setup-screen)
+    - [Result screen](#result-screen)
+    - [Dot plot](#dot-plot)
+    - [CSV export](#csv-export)
   - [Advanced topics & reference](#advanced-topics--reference)
   - [Missing values (`NaN`) vs true zeros (`0.0`)](#missing-values-nan-vs-true-zeros-00)
   - [Dual-mode (positive + negative ionization) input](#dual-mode-positive--negative-ionization-input)
@@ -756,6 +777,145 @@ If you might want the current configuration again, save it via the Data tab's **
 
 ---
 
+## KEGG coverage survey
+
+The coverage survey answers a different question from enrichment: not *"which pathways changed?"* but *"how much of each pathway did I actually see?"*
+It takes every metabolite you detected, maps it onto a KEGG pathway or module catalog, and reports — for each entry — how many of that entry's compounds you detected and what fraction that is.
+
+**It performs no statistical test.** There is no *p*-value, no *q*-value, no FDR method, no enrichment ratio, and no significance threshold anywhere on this route.
+That is a deliberate design decision, not an omission, and it follows from the input: a hypergeometric test needs a *foreground* drawn from a *background*, and with no two-group comparison there is no defensible foreground to draw.
+Reporting a *p*-value against an invented foreground would give a number that looks like evidence and is not.
+
+> **⚠ Warning:** A high coverage percentage reflects **both biology and what your method can detect**.
+> An entry whose compounds happen to ionize well, elute in your gradient, and sit in your spectral library will score higher than an equally-present entry whose compounds do not.
+> Coverage is a statement about your dataset's reach, not about the biological importance of a pathway.
+> The result screen repeats this in-window, and the exported CSV repeats it again on its second line.
+
+### When to use it
+
+- You have a **single condition** — one tissue, one time point, one treatment — so there is nothing to compare against.
+- You want to know **what your method covers** before designing a comparison: which pathways your platform can see at all.
+- You want a **quick survey** of a dataset before committing to the full DAM + enrichment route. The PubChem and KEGG caches are shared between the two routes, so running a coverage survey first makes a later enrichment run faster.
+
+If you *do* have two groups of at least two samples each and want to know which pathways *changed*, use route 1 instead — see [Stage 3 — Enrichment](#stage-3--enrichment-over-representation-analysis).
+
+### Inputs
+
+- **MS-DIAL `.txt`** — required, single or dual mode, exactly as on route 1.
+- **Group `.csv`** — **optional.** When supplied, its groups become selectable on the setup screen and you can exclude QC pools or solvent blanks. When absent, every sample column counts as data and no intensity value is read for filtering.
+
+The Stage 1 gate is correspondingly relaxed: the "at least 2 groups of at least 2 samples" checks that guard the *t*-test do not run on this route.
+A `.csv` that you picked but that **fails to parse** still blocks the run on both routes — that is a real loading problem, not an absent input.
+
+### Setup screen
+
+**Sample groups** (shown only when a `.csv` was loaded).
+One checkbox per group, `Unassigned` excluded — it is the absence of a group assignment, not a condition you chose to measure.
+Every group starts checked. Uncheck a QC pool or a solvent blank so its compounds do not enter the results.
+The software never guesses which groups those are from their names: group naming is yours, and a wrong guess would silently discard real data.
+
+**Detected in at least N % of a group's samples** (default `50 %`).
+A feature counts as *detected in a group* when it has a real measured intensity — present and above zero — in at least this fraction of that group's samples.
+A feature detected in **no** selected group is excluded.
+The test is applied per group and the results are OR-ed: a compound seen in any one selected condition is a compound the sample contains.
+
+> **Note:** This filter reads the raw as-loaded intensity matrix, never a normalized one. No sample normalization is offered on the coverage route.
+
+> **⚠ Warning — gap-filling.** MS-DIAL writes a literal `0` for a position it did not detect, and the presence test above treats `0` as an absence. **If you enabled gap-filling in MS-DIAL**, not-detected positions instead carry small non-zero values, and this test will count them as *present*.
+> A gap-filled dataset will therefore report higher coverage than the same dataset exported without gap-filling. If you need the stricter reading, re-export from MS-DIAL with gap-filling off.
+
+**Deduplication** — the same checkbox and the same `RT tolerance (min)` field as the Stage 2 DAM setup screen, bound to the same settings.
+On this route deduplication **cannot change which compounds are found or any coverage number.**
+The reason is structural: it groups features by InChIKey and always returns at least one survivor per group, and the detected compound set is the KEGG image of the surviving InChIKey *set* — so the set is identical either way.
+What it does change is **which metabolite names are listed for each compound in the exported CSV**, because a different representative feature is elected. The Data tab's `Dedupe:` line and its audit download are the other places its effect is visible.
+
+There is deliberately **no Drop Unknown features checkbox** on this screen. A feature without an InChIKey cannot reach the results under any setting, so offering a checkbox for it would present a non-choice as a choice.
+
+**Analysis Mode + target** — identical to the enrichment setup screen: the Pathway / Module radio, the species selector or the Level + Group picker, and the inline KEGG fetch progress.
+
+**Run Coverage** — disabled while a KEGG fetch is in flight or before a target is selected, and additionally when a `.csv` is loaded and you have unchecked every group (hover text: `Select at least one sample group.`).
+
+### Result screen
+
+**The provenance funnel** opens the screen, one term per filter stage in the order the stages run:
+
+```
+12,431 features -> 9,004 in selected groups -> 2,317 after deduplication
+  -> 1,974 InChIKeys -> 4,187 CIDs -> 391 KEGG compounds -> 264 in at least one entry
+```
+
+The `in selected groups` term is omitted entirely when no `.csv` was supplied — the stage did not run, and repeating the raw count there would print a step that never happened.
+
+**The results table** has five columns:
+
+| Column | Content |
+| --- | --- |
+| `Entry` | The KEGG pathway or module ID |
+| `Name` | The entry name; hover for the full text |
+| `Hits` | `<detected> / <entry size>` — **always both numbers** |
+| `Coverage` | `hits / entry_size` as a percentage, one decimal |
+| `Compounds` | The detected KEGG compound IDs, truncated with a `…(+N)` marker; the CSV has the full list |
+
+The `Hits` column never shows a bare count without its denominator, and `Coverage` is never shown without `Hits` beside it.
+A coverage percentage divorced from its denominator is the most misreadable number on this screen: `100 %` of a two-compound entry and `40 %` of a fifty-compound entry are not comparable claims, and the fraction is what makes that visible.
+
+Click the `Entry`, `Hits`, or `Coverage` header to sort by that column; the **Sort by** selector and the headers write the same setting, so they always agree.
+
+**Four live filters** re-apply on the next frame with no re-run, no PubChem request, and no KEGG request:
+
+- **Sort by** — `Coverage` (default) or `Hits`. Clicking the `Hits` or `Coverage` column header sets the same setting, so the two controls always agree; the active column is marked `(desc)`.
+- **Top N entries** — the display cap.
+- **Minimum hit count** — drops entries with fewer detected compounds than this.
+- **Minimum entry size** — drops entries with fewer compounds *in KEGG* than this. Default `3`, **hard minimum `1`**.
+
+That floor is what makes a coverage-descending table meaningful.
+About **20 %** of a typical species pathway catalog carries *no* KEGG compounds at all — including every "global and overview map" such as `hsa01100 Metabolic pathways` — and a further ~10 % carries one or two.
+Without a floor, those entries would occupy the top of the table at `0 %`, `50 %`, or `100 %` on a single hit, ahead of every meaningful result.
+The count of zero-compound entries is reported in grey beneath the control (`76 of 372 entries have no compounds in KEGG and are never shown.`) rather than silently swallowed.
+
+> **Note:** No entry is ever excluded by its identifier. There is no hard-coded list of "global map" IDs anywhere in the software; those entries vanish from the table only because KEGG gives them no compounds, which the minimum-entry-size floor then removes like any other empty entry. The shared on-disk KEGG cache is never filtered either, so a coverage run leaves a later enrichment run's universe untouched.
+
+### Dot plot
+
+The coverage dot plot inverts the enrichment plot's encoding:
+
+| Channel | Enrichment plot | Coverage plot |
+| --- | --- | --- |
+| X axis | Fold enrichment | **the quantity you sorted by** |
+| Marker size | Hit count | **Entry size** — always |
+| Marker color | `-log10(FDR)` | **the quantity you did *not* sort by** |
+| Reference line | at `enrichment_ratio = 1` | **none** |
+
+**The X axis follows the Sort by setting.** With `Coverage` selected, X is coverage % and the marker colour is the hit count; with `Hits` selected, the two swap — X becomes the hit count and colour becomes coverage %.
+The two channels always move together: the axis you sorted by is the axis the top-to-bottom row order reads off, so leaving the sort key off the X axis would give a chart whose ordering looks arbitrary.
+Marker size stays **entry size** in both, because it is the denominator behind both of the other quantities — the one fixed reference in the figure.
+
+There is no reference line because there is no null expectation to mark.
+The rows drawn are exactly the rows the table shows, in the same order — both come from the same filter chain.
+The annotation strip records the mode and target, the detected compound count, how many entries are displayed out of the whole catalog, the active filter values, a compact group record, and the line `Descriptive coverage — no statistical test`.
+
+### CSV export
+
+`Download coverage CSV` writes the **displayed** rows, in display order, with five `#` comment lines ahead of the header:
+
+1. A title line.
+2. `# No statistical test was performed. These are descriptive counts.`
+3. The run context: mode, target, detected compounds, entry counts, and the active filters.
+4. The feature-inclusion record: the selected group list, the full offered list, and the detection threshold — or `# Sample groups: none supplied; every feature included.`
+5. A note that `share` values do not sum to 1, because entries share compounds.
+
+The columns are `entry_id,entry_name,entry_size,hits,coverage,share,hit_compounds`.
+`coverage` and `share` are decimal **fractions**, not percentages.
+`share` is `hits / detected_total` — "what fraction of my metabolome is in this entry", a different question from `coverage`'s "what fraction of this entry did I detect".
+It is exported but deliberately **not displayed**: on screen, two percentages that do not compare would invite comparing them.
+
+Each hit compound renders as `C00031 (D-Glucose)` — the KEGG ID followed by **your own MS-DIAL metabolite names**, not KEGG's compound names, so no extra lookup is introduced.
+When one compound was reached from several features with different names, all of them are listed, sorted and joined by `" | "`.
+(A pipe, not a slash: lipid shorthand such as `PC(16:0/18:1)` contains slashes, so splitting on `/` would shred those names.)
+When no name is available, the bare ID is written with no parentheses.
+
+---
+
 ## Advanced topics & reference
 
 The remaining sections are reference material you can read as needed — the foundational missing-vs-zero concept, dual-mode input, caches, the settings file, bug reports, and citations.
@@ -996,7 +1156,7 @@ The example shows the optional fields populated — `null` is their default (see
 ```json
 {
   "schema_version": 1,
-  "app_version": "1.3.0",
+  "app_version": "1.4.0",
   "saved_at": "2026-06-04T09:15:22Z",
   "user_note": "",
   "input_files": [

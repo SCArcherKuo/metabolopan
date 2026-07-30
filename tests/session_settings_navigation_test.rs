@@ -18,7 +18,10 @@
 
 use std::io::Write;
 
-use metabolopan::app::{AnalysisMode, AppState, SessionCache, SessionInputs, SessionSettings};
+use metabolopan::app::{
+    AnalysisMode, AnalysisRoute, AppState, CoverageSortKey, SessionCache, SessionInputs,
+    SessionSettings,
+};
 use metabolopan::dam::{DamConfig, DamMethod, fdr::FdrMethod, run_dam, types::DamResult};
 use metabolopan::data::{GroupMapping, load_group_mapping, parse_msdial_txt};
 use metabolopan::enrichment::EnrichmentDirection;
@@ -80,6 +83,13 @@ fn populated_settings() -> SessionSettings {
         stage3_export_width_in: 5.0,
         stage3_export_height_in: 10.0,
         stage3_export_dpi: 600,
+
+        // Analysis route + KEGG coverage route (every value non-default)
+        analysis_route: AnalysisRoute::KeggCoverage,
+        coverage_min_entry_size: 7,
+        coverage_sort_key: CoverageSortKey::Hits,
+        coverage_selected_groups: Some(vec!["QC".into()]),
+        coverage_presence_threshold: 0.75,
     }
 }
 

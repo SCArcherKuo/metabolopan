@@ -17,16 +17,15 @@ fn fixture_path() -> PathBuf {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     p.push("tests");
     p.push("fixtures");
-    p.push("settings_default_v2.json");
+    p.push("settings_default_v3.json");
     p
 }
 
 /// Path to the demoted v1 fixture (former `settings_default_v1.json`),
 /// preserved verbatim under a different name so the schema-rejection path
 /// has a real-world prior-release sample to load. Repurposed by
-/// `add-rt-aware-dedup` at the v1 → v2 schema bump (same pattern as the
-/// earlier v2 demotion; the former `settings_v2_rejected.json` was removed
-/// because schema 2 is now the accepted current version).
+/// `add-rt-aware-dedup` at the v1 → v2 schema bump. Still genuinely
+/// rejected at v3.
 fn v1_rejected_fixture_path() -> PathBuf {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     p.push("tests");
@@ -35,17 +34,30 @@ fn v1_rejected_fixture_path() -> PathBuf {
     p
 }
 
+/// Path to the demoted v2 fixture (former `settings_default_v2.json`),
+/// repurposed by `add-kegg-coverage-route` at the v2 → v3 bump under the
+/// same rotation rule: the outgoing golden becomes the newest rejection
+/// sample. There is no `settings_v3_rejected.json` to remove, since v3 is
+/// the first version at which 3 is the accepted value.
+fn v2_rejected_fixture_path() -> PathBuf {
+    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    p.push("tests");
+    p.push("fixtures");
+    p.push("settings_v2_rejected.json");
+    p
+}
+
 /// Triple-lock #1 of the schema-drift detection (per design D12): the
 /// `SCHEMA_VERSION` constant. Any PR that bumps this MUST update this
 /// test, which surfaces in review and forces a commit-message
 /// explanation of why the bump happened.
 #[test]
-fn schema_version_is_locked_at_2() {
-    assert_eq!(SCHEMA_VERSION, 2);
+fn schema_version_is_locked_at_3() {
+    assert_eq!(SCHEMA_VERSION, 3);
 }
 
 /// Triple-lock #2 of the schema-drift detection (per design D12): the
-/// golden fixture roundtrip. Loading `settings_default_v2.json` and
+/// golden fixture roundtrip. Loading `settings_default_v3.json` and
 /// comparing against `SessionSettings::default()` catches three classes
 /// of drift in one assertion:
 ///
@@ -56,7 +68,7 @@ fn schema_version_is_locked_at_2() {
 /// - Adding a new field to `SessionSettings` → either fixture missing
 ///   it (serde error) or default-value drift on read.
 #[test]
-fn golden_default_snapshot_v2_roundtrips() {
+fn golden_default_snapshot_v3_roundtrips() {
     let snap = load_from_path(&fixture_path()).expect("golden fixture must load");
     assert_eq!(snap.schema_version, SCHEMA_VERSION);
     assert_eq!(snap.app_version, "0.0.0-test");
@@ -67,7 +79,7 @@ fn golden_default_snapshot_v2_roundtrips() {
 }
 
 /// Regression: the demoted v1 snapshot (former golden fixture) must be
-/// rejected with `UnsupportedSchemaVersion { found: 1, expected: 2 }`.
+/// rejected with `UnsupportedSchemaVersion { found: 1, expected: 3 }`.
 /// Locks the v1-rejection contract in `session-settings-io`'s
 /// "v1 snapshots are rejected (historical sample)" scenario.
 #[test]
@@ -78,10 +90,31 @@ fn v1_snapshot_is_rejected_with_unsupported_schema_version() {
         Err(SnapshotError::UnsupportedSchemaVersion { found, expected }) => {
             assert_eq!(found, 1);
             assert_eq!(expected, SCHEMA_VERSION);
-            assert_eq!(expected, 2);
+            assert_eq!(expected, 3);
         }
         other => {
-            panic!("expected UnsupportedSchemaVersion {{ found: 1, expected: 2 }}, got {other:?}")
+            panic!("expected UnsupportedSchemaVersion {{ found: 1, expected: 3 }}, got {other:?}")
+        }
+    }
+}
+
+/// Regression: the demoted v2 snapshot (the golden fixture up to the
+/// `add-kegg-coverage-route` bump) must now be rejected with
+/// `UnsupportedSchemaVersion { found: 2, expected: 3 }`. Locks the
+/// "A v2 snapshot is rejected after the bump" scenario, and is the
+/// real-world sample for the most recently released shape.
+#[test]
+fn v2_snapshot_is_rejected_with_unsupported_schema_version() {
+    use metabolopan::session_io::SnapshotError;
+    let result = load_from_path(&v2_rejected_fixture_path());
+    match result {
+        Err(SnapshotError::UnsupportedSchemaVersion { found, expected }) => {
+            assert_eq!(found, 2);
+            assert_eq!(expected, SCHEMA_VERSION);
+            assert_eq!(expected, 3);
+        }
+        other => {
+            panic!("expected UnsupportedSchemaVersion {{ found: 2, expected: 3 }}, got {other:?}")
         }
     }
 }
