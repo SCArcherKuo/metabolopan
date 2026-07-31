@@ -93,6 +93,7 @@ const DOT_BASE_RADIUS: f64 = 10.0;
 
 /// Render the dot plot into an RGBA buffer of `width * height * 4` bytes.
 pub fn render_dotplot(result: &EnrichmentResult, opts: &DotplotOpts) -> Result<Vec<u8>> {
+    common::ensure_font_registered();
     let w = opts.width_px;
     let h = opts.height_px;
     let pixel_count = (w as usize) * (h as usize);
@@ -107,7 +108,14 @@ pub fn render_dotplot(result: &EnrichmentResult, opts: &DotplotOpts) -> Result<V
     // Reserve a fixed-width legend on the right. Trimmed from 140 → 105 so
     // the main plotting area reclaims ~10% width; the narrow colorbar + the
     // `-log10(FDR (…))` title still fit (verified against the widest title).
-    let legend_w = ((105.0 * scale).round() as u32).min(w * 3 / 10).max(120);
+    //
+    // Widened 105 → 120 by `embed-plot-font`: DejaVu Sans sets
+    // `-log10(FDR (BH))` wider than the host face this was tuned against, and
+    // at the default 1050 px the title's right margin had collapsed from 17 px
+    // to 1 px — not yet clipped, but one glyph away from it. Measured, not
+    // eyeballed; the coverage dot plot keeps 105 because its widest colorbar
+    // title is `Coverage %`, which leaves ~55 px to spare.
+    let legend_w = ((120.0 * scale).round() as u32).min(w * 3 / 10).max(120);
     let chart_w_boundary = (w - legend_w) as i32;
 
     // Rows the dot plot draws, ordered top-to-bottom: the most-significant

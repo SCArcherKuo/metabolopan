@@ -140,8 +140,10 @@ metabolopan-settings-*.json
 *.snap.new
 
 # Runtime PNGs from `cargo run --example render_dotplot_demo`
+# and `--example render_typography_review`
 # (visual verification scratch — regenerated on demand).
 /dotplot_demo*.png
+/typography_*.png
 
 # Dot-plot renders saved into data/ during manual GUI testing (scratch).
 /data/enrichment-dotplot*.png

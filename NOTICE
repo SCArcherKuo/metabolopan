@@ -6,3 +6,22 @@ you may not use this product except in compliance with the License.
 A copy of the License is provided in the LICENSE file and is available at:
 
     http://www.apache.org/licenses/LICENSE-2.0
+
+--------------------------------------------------------------------------------
+Third-party assets bundled with this product
+--------------------------------------------------------------------------------
+
+DejaVu Sans (assets/DejaVuSans.ttf)
+
+    Embedded in the binary and used to render all text in the volcano plot,
+    the enrichment dot plot and the coverage dot plot, so that an exported
+    figure does not depend on the fonts installed on the machine that
+    rendered it.
+
+    Version 2.37. Fonts are (c) Bitstream (Bitstream Vera Fonts Copyright);
+    DejaVu changes are in the public domain; glyphs imported from the Arev
+    fonts are (c) Tavmjong Bah. This is a permissive license separate from
+    the Apache License above; its full text — which must accompany all
+    copies — is provided in assets/DejaVuSans-LICENSE.txt.
+
+    Upstream: https://github.com/dejavu-fonts/dejavu-fonts

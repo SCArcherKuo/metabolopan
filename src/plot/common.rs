@@ -13,10 +13,43 @@
 //! public plot API (`render_*` / `export_*` / `*Opts`).
 
 use anyhow::{Context, Result, anyhow};
-use plotters::style::RGBColor;
+use plotters::style::{FontStyle, RGBColor};
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::Path;
+use std::sync::OnceLock;
+
+/// The family name every renderer asks plotters for. Registered by
+/// [`ensure_font_registered`] against the embedded bytes below, so it resolves
+/// to the same typeface on every platform rather than to whatever the host
+/// decides `"sans-serif"` means.
+pub(crate) const FONT_FAMILY: &str = "sans-serif";
+
+/// DejaVu Sans, embedded so an exported figure never depends on the fonts
+/// installed on the machine that rendered it. License: `assets/DejaVuSans-LICENSE.txt`,
+/// credited in `NOTICE`.
+pub(crate) const FONT_BYTES: &[u8] = include_bytes!("../../assets/DejaVuSans.ttf");
+
+/// Register the embedded font, once per process.
+///
+/// **Every render entry point must call this before drawing.** With plotters'
+/// `ab_glyph` backend an unregistered family is not a fallback — it is
+/// `FontError::FontUnavailable`, which surfaces as `Err` from `render_*`.
+/// Registering in `main()` instead would leave every plot unit test and
+/// `render_dotplot_demo` failing, since neither starts the application.
+///
+/// Only `FontStyle::Normal` is registered: no renderer requests bold or italic,
+/// and the backend falls back to `Normal` for unregistered styles anyway.
+pub(crate) fn ensure_font_registered() {
+    static REGISTERED: OnceLock<()> = OnceLock::new();
+    REGISTERED.get_or_init(|| {
+        // `InvalidFont` carries no detail and does not implement `Debug`, so
+        // there is nothing to unwrap into a message.
+        if plotters::style::register_font(FONT_FAMILY, FontStyle::Normal, FONT_BYTES).is_err() {
+            panic!("embedded DejaVu Sans failed to parse as a valid font");
+        }
+    });
+}
 
 /// 800-px design baseline: every pixel-denominated constant in both renderers
 /// scales relative to this so charts stay legible from the in-window preview
@@ -223,6 +256,61 @@ fn lerp(a: u8, b: u8, t: f64) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every character that appears anywhere in the plot sources must exist in
+    /// the embedded font.
+    ///
+    /// This is the load-bearing test of the `plot-typography` capability,
+    /// because a missing glyph does **not** fail at render time: `ab_glyph`
+    /// maps an unmapped character to `.notdef` and returns no error. A font
+    /// without `δ` would ship a blank where the volcano's `|δ| size` legend
+    /// should be, with the entire suite still green — the strip and legend
+    /// guarantees are asserted against assembled *strings*, not pixels.
+    ///
+    /// The character set is **scanned out of the sources rather than listed**,
+    /// so it cannot drift. A hand-maintained list was tried first and was
+    /// already wrong on the day it was written: it named six symbols, while the
+    /// sources actually carry thirteen — the volcano's `−∞` / `+∞` strip
+    /// (U+2212, U+221E) was missed, and those *are* drawn. Scanning covers
+    /// comment and test-message characters too; that is a deliberately
+    /// conservative superset, since today's assertion message is tomorrow's
+    /// axis label.
+    #[test]
+    fn embedded_font_covers_every_character_in_the_plot_sources() {
+        use ab_glyph::{Font, FontRef};
+
+        const SOURCES: &[(&str, &str)] = &[
+            ("common.rs", include_str!("common.rs")),
+            ("volcano.rs", include_str!("volcano.rs")),
+            ("dotplot.rs", include_str!("dotplot.rs")),
+            ("coverage_dotplot.rs", include_str!("coverage_dotplot.rs")),
+        ];
+
+        let font = FontRef::try_from_slice(FONT_BYTES).expect("embedded font parses");
+        let mut checked = 0usize;
+        for (name, src) in SOURCES {
+            for c in src.chars().filter(|c| !c.is_control()) {
+                assert_ne!(
+                    font.glyph_id(c).0,
+                    0,
+                    "embedded font has no glyph for {c:?} (U+{:04X}), used in {name} — \
+                     it would render blank, silently",
+                    c as u32
+                );
+                checked += 1;
+            }
+        }
+        // Guard against the scan silently covering nothing.
+        assert!(checked > 10_000, "only {checked} characters scanned");
+    }
+
+    /// Registration is idempotent and safe to call from every render entry
+    /// point, including concurrently from parallel tests.
+    #[test]
+    fn font_registration_is_idempotent() {
+        ensure_font_registered();
+        ensure_font_registered();
+    }
 
     #[test]
     fn rgb_to_rgba_expands_with_opaque_alpha() {

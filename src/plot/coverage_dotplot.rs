@@ -133,6 +133,7 @@ pub fn render_coverage_dotplot(
     result: &CoverageResult,
     opts: &CoverageDotplotOpts,
 ) -> Result<Vec<u8>> {
+    common::ensure_font_registered();
     let w = opts.width_px;
     let h = opts.height_px;
     let pixel_count = (w as usize) * (h as usize);
@@ -656,6 +657,39 @@ mod tests {
         assert!(
             buf.iter().any(|&b| b != 0),
             "buffer is all zeros — nothing rendered"
+        );
+    }
+
+    /// Two renders of one input agree, compared by digest.
+    ///
+    /// This is the assertion `correct-coverage-dotplot-reproducibility-claim`
+    /// had to remove: it failed reproducibly on Windows while passing on macOS
+    /// and Linux, because glyphs were rasterized by the host font stack. With
+    /// `plot-typography` the font is embedded and rasterized in pure Rust, so
+    /// the property should now hold everywhere — **this test is what verifies
+    /// that, and Windows CI is the only place it can be verified.**
+    ///
+    /// Compared by digest, never `assert_eq!` on the buffers: formatting two
+    /// multi-megabyte `Vec<u8>`s into a panic message is what made the original
+    /// failure undiagnosable and truncated the CI log.
+    #[test]
+    fn repeated_renders_agree_by_digest() {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        fn digest(buf: &[u8]) -> u64 {
+            let mut h = DefaultHasher::new();
+            buf.hash(&mut h);
+            h.finish()
+        }
+
+        let result = result_of(vec![row("a", 42, 18), row("b", 10, 3)], 318);
+        let o = opts();
+        let first = digest(&render_coverage_dotplot(&result, &o).expect("first render"));
+        let second = digest(&render_coverage_dotplot(&result, &o).expect("second render"));
+        assert_eq!(
+            first, second,
+            "two renders of identical input produced different pixels"
         );
     }
 

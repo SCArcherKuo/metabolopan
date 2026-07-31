@@ -19,7 +19,13 @@ serde_json = "1"
 eframe = "0.31"
 egui = "0.31"
 egui_extras = { version = "0.31", features = ["http", "image"] }
-plotters = "0.3"
+# `default-features = false` drops the `ttf` font backend (font-kit / dwrote /
+# pathfinder / fontconfig) so text is rasterized by `ab_glyph` from the font we
+# embed, not by the host font stack. See the `plot-typography` capability spec.
+plotters = { version = "0.3", default-features = false, features = [
+    "ab_glyph",
+    "bitmap_backend",
+] }
 rfd = "0.15"
 image = "0.25"
 tracing = "0.1"
@@ -37,6 +43,11 @@ sha2 = "0.10"
 dirs = "6.0.0"
 
 [dev-dependencies]
+# Only so the glyph-coverage test can ask the embedded font directly whether a
+# character maps to a real glyph. A missing glyph fails SILENTLY at render time
+# (`ab_glyph` returns `.notdef`, not an error), so this has to be asserted.
+# Pinned to the version plotters already resolves, to avoid a second copy.
+ab_glyph = "0.2.32"
 tempfile = "3"
 wiremock = "0.6"
 filetime = "0.2"

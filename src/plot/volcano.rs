@@ -80,6 +80,7 @@ pub struct VolcanoOpts {
 /// expand to RGBA so callers (egui, image PNG export) can use it directly. The right
 /// edge of the canvas is reserved for a trend legend (counts of Up / Down / ns).
 pub fn render_volcano(result: &DamResult, opts: &VolcanoOpts) -> Result<Vec<u8>> {
+    common::ensure_font_registered();
     let w = opts.width_px;
     let h = opts.height_px;
     let pixel_count = (w as usize) * (h as usize);
