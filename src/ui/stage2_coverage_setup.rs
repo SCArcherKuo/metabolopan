@@ -331,6 +331,16 @@ fn render_run_button(ui: &mut egui::Ui, app: &mut App) -> bool {
 /// exactly the plumbing whose per-call-site duplication caused the
 /// `fix-stage3-ui-dual-mode-spawn` regression.
 fn start_coverage_run(app: &mut App) {
+    // Matches the enrichment route's `start_run`: the transition below replaces
+    // `app.state`, so a still-streaming other-mode fetch (or a refresh) would be
+    // orphaned by it — its `AbortHandle` goes out of scope with the old state.
+    // Unreachable today via the Run gate, exactly as on the enrichment route,
+    // which carries this guard anyway.
+    if crate::app::is_busy(&app.state) {
+        tracing::info!("stopping the in-flight setup fetch: starting the coverage run");
+    }
+    crate::app::abort_in_flight(&app.state);
+
     let Some(target) = crate::ui::stage3_setup::build_analysis_payload(&app.settings, &app.cache)
     else {
         if let AppState::Stage2CoverageSetup { error, .. } = &mut app.state {

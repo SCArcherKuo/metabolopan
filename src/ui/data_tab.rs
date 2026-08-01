@@ -143,6 +143,9 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
             // Only a setup screen carries `modules_fetch`; `Running` does not.
             let module_fetch_in_flight = crate::app::setup_fetch_slots(&app.state)
                 .is_some_and(|(_, modules_fetch)| modules_fetch.is_some());
+            // The Cache-data block renders on the RUNNING states too, where a
+            // refresh click would spawn a fetch no screen can receive.
+            let busy = crate::app::is_busy(&app.state);
             match &app.state {
                 AppState::Initializing { .. } => {
                     ui.label("Loading…");
@@ -186,6 +189,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                         module_fetch_in_flight,
                         organisms_fetched_at,
                         organisms_loading,
+                        busy,
                         &mut setup_module_refresh,
                         &mut setup_pathway_refresh,
                         &mut organisms_refresh,
@@ -274,6 +278,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                         module_fetch_in_flight,
                         organisms_fetched_at,
                         organisms_loading,
+                        busy,
                         &mut setup_module_refresh,
                         &mut setup_pathway_refresh,
                         &mut organisms_refresh,
@@ -920,6 +925,12 @@ fn render_cache_block_setup(
     module_fetch_in_flight: bool,
     organisms_fetched_at: Option<DateTime<Utc>>,
     organisms_loading: bool,
+    // The shared busy predicate for the current state. This block renders on
+    // the RUNNING states of both routes as well as the setup screens, and a
+    // running state owns neither an in-flight fetch slot nor an `error` field
+    // — so a refused refresh there could not even report itself. Disabling is
+    // the only intelligible answer; see the `data-summary-panel` spec.
+    busy: bool,
     out_module_refresh: &mut bool,
     out_pathway_refresh: &mut bool,
     out_organisms_refresh: &mut bool,
@@ -945,7 +956,14 @@ fn render_cache_block_setup(
                     ),
                     theme::TEXT_SECONDARY,
                 );
-                if ui.button("Refresh KEGG pathway cache").clicked() {
+                if ui
+                    .add_enabled(!busy, egui::Button::new("Refresh KEGG pathway cache"))
+                    .on_disabled_hover_text(
+                        "Unavailable while an analysis or fetch is running — \
+                         this screen cannot receive the result.",
+                    )
+                    .clicked()
+                {
                     *out_pathway_refresh = true;
                 }
             }
@@ -972,7 +990,15 @@ fn render_cache_block_setup(
                     && settings.organism_group.is_some()
                     && cache.group_org_codes.is_some()
                     && !module_fetch_in_flight;
-                if refresh_ready && ui.button("Refresh KEGG module cache").clicked() {
+                if refresh_ready
+                    && ui
+                        .add_enabled(!busy, egui::Button::new("Refresh KEGG module cache"))
+                        .on_disabled_hover_text(
+                            "Unavailable while an analysis or fetch is running — \
+                             this screen cannot receive the result.",
+                        )
+                        .clicked()
+                {
                     *out_module_refresh = true;
                 }
             }

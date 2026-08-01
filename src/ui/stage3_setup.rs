@@ -724,6 +724,18 @@ pub(crate) fn handle_species_refresh(app: &mut App) {
         Some(c) => c.clone(),
         None => return,
     };
+    // BEFORE `invalidate_cache`, not only inside `spawn_species_fetch`: this
+    // function destroys the on-disk cache and clears `cache.species_kegg`
+    // before delegating, so a precondition checked only at the spawn would
+    // leave the user with neither cache and no fetch. Note the guard below
+    // cannot cover this — `setup_fetch_slots` returns `None` off a setup
+    // screen, so the `&&` short-circuits and never fires.
+    if !crate::app::is_target_setup(&app.state) {
+        warn!(
+            "species cache refresh requested from a screen that owns no in-flight slot; refusing"
+        );
+        return;
+    }
     if let Some((kegg_fetch, _)) = crate::app::setup_fetch_slots(&app.state)
         && kegg_fetch.is_some()
     {
@@ -738,8 +750,14 @@ pub(crate) fn handle_species_refresh(app: &mut App) {
 }
 
 fn spawn_species_fetch(app: &mut App, code: String) {
-    if app.inputs.ion_tables.is_empty() || app.inputs.mapping.is_none() {
-        warn!(code = %code, "cannot start KEGG species fetch without table + mapping; aborting");
+    // Same precondition and the same reason as `spawn_modules_fetch`: a screen
+    // must own the slot that will receive the result. See the `kegg-fetching`
+    // capability spec.
+    if !crate::app::is_target_setup(&app.state) {
+        warn!(code = %code, "species fetch requested from a screen that owns no in-flight slot; refusing");
+        if let Some(err) = crate::app::screen_error_mut(&mut app.state) {
+            *err = Some("Cannot fetch KEGG pathways from this screen.".into());
+        }
         return;
     }
 
@@ -803,8 +821,19 @@ pub(crate) fn spawn_modules_fetch(
     org_codes: std::collections::HashSet<String>,
     force_refresh: bool,
 ) {
-    if app.inputs.ion_tables.is_empty() || app.inputs.mapping.is_none() {
-        warn!("spawn_modules_fetch called without complete inputs; aborting");
+    // The load-bearing precondition is that a screen can RECEIVE the result,
+    // not what the user loaded: a KEGG catalogue fetch is keyed by Group and
+    // reads nothing from the samples, and the coverage route's metadata `.csv`
+    // is optional by design. Checked BEFORE spawning — the tasks below are
+    // installed into a slot afterwards, so on a slotless state they would run
+    // detached: undrained, their `AbortHandle`s never stored (so the in-flight
+    // cancellation path can never reach them), holding `.modules.lock` for the
+    // full 6-12 minute fetch. See the `module-fetching` capability spec.
+    if !crate::app::is_target_setup(&app.state) {
+        warn!("module fetch requested from a screen that owns no in-flight slot; refusing");
+        if let Some(err) = crate::app::screen_error_mut(&mut app.state) {
+            *err = Some("Cannot refresh the KEGG module cache from this screen.".into());
+        }
         return;
     }
 
@@ -1179,22 +1208,165 @@ mod build_run_inputs_tests {
             modules_fetch: None,
         };
 
-        // Switch to a different, uncached species. `inputs` is empty, so
-        // `spawn_species_fetch` early-returns without installing a new fetch —
-        // isolating the clear that `handle_species_selected` must perform.
+        // Switch to a different, uncached species.
+        //
+        // This test used to lean on `spawn_species_fetch` early-returning
+        // because `inputs` was empty, which isolated the clear by leaving the
+        // slot at `None`. That precondition is gone: the guard is now "does a
+        // screen own the slot" (`is_target_setup`), which this state satisfies,
+        // so a fetch for the NEW species is installed. The load-bearing
+        // assertion was always the abort, not the emptiness — the regression
+        // this test was written for was csab's progress bar still running after
+        // switching to hsa.
         handle_species_selected(&mut app, "zzqx_uncached_code".to_string());
 
-        // The prior fetch's slot is cleared (no leaked progress strip)...
-        assert!(matches!(
-            &app.state,
-            AppState::Stage3EnrichSetup {
-                kegg_fetch: None,
-                ..
-            }
-        ));
-        // ...and both of its tasks were aborted.
+        // Both of the PRIOR fetch's tasks were aborted, so nothing from csab
+        // keeps streaming into the strip.
         assert!(parked_rt.block_on(fj).unwrap_err().is_cancelled());
         assert!(parked_rt.block_on(rj).unwrap_err().is_cancelled());
+        // The screen still owns the slot; what it now holds is the newly
+        // selected species' fetch, not the stale one whose handles just died.
+        assert!(
+            crate::app::setup_fetch_slots(&app.state).is_some(),
+            "the setup screen must still own its fetch slots"
+        );
+        assert_eq!(
+            app.settings.kegg_species.as_deref(),
+            Some("zzqx_uncached_code"),
+            "the new selection is recorded"
+        );
+    }
+
+    /// A `Stage3EnrichRunning` state — owns no in-flight fetch slot and no
+    /// `error` field, which is what makes it the one reachable place a spawn
+    /// can be requested with nowhere to put the result.
+    fn running_state(rt: &tokio::runtime::Runtime) -> AppState {
+        fn dummy_rx<T>() -> std::sync::mpsc::Receiver<T> {
+            let (_tx, rx) = std::sync::mpsc::channel();
+            rx
+        }
+        AppState::Stage3EnrichRunning {
+            payload: crate::app::RunningPayload::Coverage,
+            phase: crate::app::Stage3Phase::PubChem,
+            pubchem_progress_rx: dummy_rx(),
+            kegg_conv_progress_rx: dummy_rx(),
+            result_rx: dummy_rx(),
+            pubchem_completed: 0,
+            pubchem_total: 0,
+            kegg_conv_completed: 0,
+            kegg_conv_total: 0,
+            run_handle: rt.spawn(std::future::pending::<()>()).abort_handle(),
+        }
+    }
+
+    /// A Group pick with NO metadata `.csv` must still start the fetch.
+    ///
+    /// `inputs.ion_tables` is left EMPTY on purpose. Under the old guard
+    /// (`ion_tables.is_empty() || mapping.is_none()`) that alone forced the
+    /// early return, so this test also fails against a half-fix that removes
+    /// only the `mapping` half — which is exactly the signal wanted. A KEGG
+    /// catalogue fetch reads neither the samples nor the mapping.
+    #[test]
+    fn group_selection_without_a_mapping_installs_the_fetch_slot() {
+        let rt = parked_app_rt();
+        let mut app = App::new(
+            crate::logging::LogStore::new(16),
+            "info".to_string(),
+            rt,
+            None,
+        );
+        app.state = AppState::Stage2CoverageSetup {
+            error: None,
+            stale_groups_notice: None,
+            kegg_fetch: None,
+            modules_fetch: None,
+        };
+        assert!(app.inputs.mapping.is_none() && app.inputs.ion_tables.is_empty());
+
+        spawn_modules_fetch(
+            &mut app,
+            2,
+            "Plants".to_string(),
+            std::collections::HashSet::new(),
+            false,
+        );
+
+        let (_, modules_fetch) =
+            crate::app::setup_fetch_slots(&app.state).expect("coverage setup owns the slots");
+        assert!(
+            modules_fetch.is_some(),
+            "the fetch must start without a metadata CSV — the coverage route makes it optional"
+        );
+        assert_eq!(app.settings.organism_group.as_deref(), Some("Plants"));
+    }
+
+    /// A spawn requested from a state that owns no slot must start nothing.
+    ///
+    /// Without the precondition the tasks are spawned first and the slot
+    /// installed afterwards inside an `if let` with no `else`, so they run
+    /// detached: undrained, their `AbortHandle`s never stored, holding
+    /// `.modules.lock` for the whole fetch.
+    #[test]
+    fn a_spawn_from_a_slotless_state_starts_nothing() {
+        let rt = parked_app_rt();
+        let mut app = App::new(
+            crate::logging::LogStore::new(16),
+            "info".to_string(),
+            rt,
+            None,
+        );
+        let handle_rt = parked_app_rt();
+        app.state = running_state(&handle_rt);
+
+        spawn_modules_fetch(
+            &mut app,
+            2,
+            "Plants".to_string(),
+            std::collections::HashSet::new(),
+            false,
+        );
+
+        assert!(
+            crate::app::setup_fetch_slots(&app.state).is_none(),
+            "precondition of the test: this state owns no slot"
+        );
+        assert!(
+            app.settings.organism_group.is_none(),
+            "the guard must return BEFORE recording the selection, i.e. before spawning"
+        );
+    }
+
+    /// A species refresh from a slotless state must not destroy the cache.
+    ///
+    /// `handle_species_refresh` invalidates the on-disk cache and clears
+    /// `cache.species_kegg` before delegating to the spawn, and its own
+    /// in-flight guard short-circuits to false off a setup screen. A
+    /// precondition living only inside `spawn_species_fetch` would leave the
+    /// user with neither cache and no fetch to refill them.
+    #[test]
+    fn a_species_refresh_from_a_slotless_state_keeps_the_cache() {
+        let rt = parked_app_rt();
+        let mut app = App::new(
+            crate::logging::LogStore::new(16),
+            "info".to_string(),
+            rt,
+            None,
+        );
+        let handle_rt = parked_app_rt();
+        app.state = running_state(&handle_rt);
+        app.settings.kegg_species = Some("ath".to_string());
+        app.cache.species_kegg = Some(crate::kegg::SpeciesKegg {
+            code: "ath".into(),
+            fetched_at: chrono::Utc::now(),
+            pathways: vec![],
+        });
+
+        handle_species_refresh(&mut app);
+
+        assert!(
+            app.cache.species_kegg.is_some(),
+            "the in-memory catalogue must survive a refusal — it is not replaced by anything"
+        );
     }
 
     fn parked_app_rt() -> tokio::runtime::Runtime {

@@ -718,6 +718,11 @@ pub enum AppState {
     /// fetch-in-flight slots for the same reason. See the `coverage-ui`
     /// capability spec.
     Stage2CoverageSetup {
+        /// The screen's general error label: a failed run, a failed KEGG
+        /// species/module fetch, and a refused fetch spawn all land here, as on
+        /// `Stage3EnrichSetup`. Distinct from `stale_groups_notice`, which is a
+        /// repair notice rather than a failure. Reached by non-local writers
+        /// through `screen_error_mut`.
         error: Option<String>,
         /// Set by the stale-group-selection guard when it repairs a selection
         /// naming groups absent from the current mapping; cleared on the next
@@ -988,6 +993,33 @@ pub(crate) fn setup_fetch_slots_mut(
         | AppState::Stage0ChooseAnalysis
         | AppState::Stage1Input { .. }
         | AppState::Stage2DamSetup { .. }
+        | AppState::Stage2DamRunning { .. }
+        | AppState::Stage2DamThreshold { .. }
+        | AppState::Stage3EnrichRunning { .. }
+        | AppState::Stage3EnrichResult { .. }
+        | AppState::Stage3CoverageResult { .. } => None,
+    }
+}
+
+/// The screen-local error label, on whichever variant owns one.
+///
+/// Deliberately a SEPARATE enumeration from [`setup_fetch_slots_mut`] rather
+/// than a third element of its tuple: `error` is owned by four variants where
+/// the fetch slots are owned by two, and it is written by paths with no fetch
+/// involved (the coverage run-failure label, the DAM terminal handler). Folding
+/// them together would make one accessor answer `None` for two screens that do
+/// own an `error`, so it would stop being the honest enumeration of either set.
+///
+/// Exhaustive on purpose — a new variant carrying an error label is a compile
+/// error here until it is listed.
+pub(crate) fn screen_error_mut(state: &mut AppState) -> Option<&mut Option<String>> {
+    match state {
+        AppState::Stage1Input { error, .. }
+        | AppState::Stage2DamSetup { error, .. }
+        | AppState::Stage3EnrichSetup { error, .. }
+        | AppState::Stage2CoverageSetup { error, .. } => Some(error),
+        AppState::Initializing { .. }
+        | AppState::Stage0ChooseAnalysis
         | AppState::Stage2DamRunning { .. }
         | AppState::Stage2DamThreshold { .. }
         | AppState::Stage3EnrichRunning { .. }
@@ -2537,82 +2569,92 @@ impl App {
         }
     }
 
-    /// Handle the terminal `Done` / `Failed` from an in-flight module
-    /// fetch. The current variant MUST be `Stage3EnrichSetup` with
-    /// `modules_fetch.is_some()` — on Done writes `cache.modules_pack`
-    /// and clears the in-flight slot to `None` (no AppState transition);
-    /// on Failed writes the error string into `Stage3EnrichSetup.error`
-    /// and clears the slot.
+    /// Handle the terminal `Done` / `Failed` from an in-flight module fetch,
+    /// on **whichever setup screen owns the slot** — `Stage3EnrichSetup` on the
+    /// enrichment route, `Stage2CoverageSetup` on the coverage route.
+    ///
+    /// Reached through `setup_fetch_slots_mut` / `screen_error_mut` rather than
+    /// by destructuring a variant. Destructuring one variant here is silently
+    /// destructive: the shared drain has already taken the event off the
+    /// channel, so an unmatched state loses it, the slot stays `Some` forever,
+    /// `is_busy` never clears, and the Run button is dead for the session.
+    ///
+    /// `cache.group_org_codes` is deliberately untouched on BOTH paths — it was
+    /// written synchronously at spawn, and on failure the Group selection is
+    /// still valid for a retry. Clearing it would leave the target incomplete
+    /// and the Run button permanently disabled. See the `app-shell` capability
+    /// spec.
     fn handle_modules_fetch_terminal_event(&mut self, event: ModulesFetchEvent) {
-        let AppState::Stage3EnrichSetup {
-            modules_fetch,
-            error,
-            ..
-        } = &mut self.state
-        else {
-            error!(
-                "unexpected terminal modules event outside Stage3EnrichSetup; current state ignored"
-            );
-            return;
-        };
+        let group = self.settings.organism_group.clone();
         match event {
             ModulesFetchEvent::Done(cache) => {
                 info!(
                     cached = cache.modules.len(),
-                    group = ?self.settings.organism_group,
+                    group = ?group,
                     "modules fetch complete"
                 );
+                // The catalogue lands on `App::cache`, a sibling of `AppState`
+                // owned by no screen, so it is kept even if no screen owns the
+                // slot — discarding a completed fetch is the failure this
+                // routing exists to prevent.
                 self.cache.modules_pack = Some(cache);
-                *modules_fetch = None;
-                *error = None;
+                if let Some((_, modules_fetch)) = setup_fetch_slots_mut(&mut self.state) {
+                    *modules_fetch = None;
+                }
+                if let Some(error) = screen_error_mut(&mut self.state) {
+                    *error = None;
+                }
             }
             ModulesFetchEvent::Failed(msg) => {
                 error!(error = %msg, "modules fetch failed");
                 self.cache.modules_pack = None;
-                *modules_fetch = None;
-                *error = Some(format!("KEGG modules fetch failed: {msg}"));
+                if let Some((_, modules_fetch)) = setup_fetch_slots_mut(&mut self.state) {
+                    *modules_fetch = None;
+                }
+                if let Some(error) = screen_error_mut(&mut self.state) {
+                    *error = Some(format!("KEGG modules fetch failed: {msg}"));
+                }
             }
             ModulesFetchEvent::Progress(_) => {
                 error!("unexpected Progress event in modules terminal handler");
-                *modules_fetch = None;
+                if let Some((_, modules_fetch)) = setup_fetch_slots_mut(&mut self.state) {
+                    *modules_fetch = None;
+                }
             }
         }
     }
 
-    /// Handle the terminal `Done` / `Failed` from an in-flight species
-    /// fetch. The current variant MUST be `Stage3EnrichSetup` with
-    /// `kegg_fetch.is_some()` — on Done writes `cache.species_kegg` and
-    /// clears the in-flight slot to `None` (no AppState transition); on
-    /// Failed writes the error string into `Stage3EnrichSetup.error` and
-    /// clears the slot.
+    /// Handle the terminal `Done` / `Failed` from an in-flight species fetch,
+    /// on **whichever setup screen owns the slot**. Same routing and the same
+    /// reason as [`Self::handle_modules_fetch_terminal_event`].
     fn handle_kegg_terminal_event(&mut self, event: KeggEvent) {
         let species = self.settings.kegg_species.clone().unwrap_or_default();
-        let AppState::Stage3EnrichSetup {
-            kegg_fetch, error, ..
-        } = &mut self.state
-        else {
-            error!(
-                ?event,
-                "unexpected terminal KEGG event outside Stage3EnrichSetup; current state ignored"
-            );
-            return;
-        };
         match event {
             KeggEvent::Done(species_kegg) => {
                 info!(code = %species, pathways = species_kegg.pathways.len(), "KEGG fetch complete");
                 self.cache.species_kegg = Some(species_kegg);
-                *kegg_fetch = None;
-                *error = None;
+                if let Some((kegg_fetch, _)) = setup_fetch_slots_mut(&mut self.state) {
+                    *kegg_fetch = None;
+                }
+                if let Some(error) = screen_error_mut(&mut self.state) {
+                    *error = None;
+                }
             }
             KeggEvent::Failed(msg) => {
                 error!(code = %species, error = %msg, "KEGG fetch failed");
                 self.cache.species_kegg = None;
-                *kegg_fetch = None;
-                *error = Some(format!("KEGG fetch failed: {msg}"));
+                if let Some((kegg_fetch, _)) = setup_fetch_slots_mut(&mut self.state) {
+                    *kegg_fetch = None;
+                }
+                if let Some(error) = screen_error_mut(&mut self.state) {
+                    *error = Some(format!("KEGG fetch failed: {msg}"));
+                }
             }
             KeggEvent::Progress(_) => {
                 error!("unexpected Progress event in KEGG terminal handler");
-                *kegg_fetch = None;
+                if let Some((kegg_fetch, _)) = setup_fetch_slots_mut(&mut self.state) {
+                    *kegg_fetch = None;
+                }
             }
         }
     }
@@ -3348,7 +3390,7 @@ mod tests {
 
     /// The coverage route's setup screen, which owns the same two slots. Every
     /// slot-driven predicate is asserted against BOTH constructors: six of the
-    /// eight dispatching sites are not compiler-enforced for a missing arm.
+    /// nine dispatching sites are not compiler-enforced for a missing arm.
     fn coverage_setup_state(
         kegg_fetch: Option<KeggFetchInFlight>,
         modules_fetch: Option<ModulesFetchInFlight>,
@@ -3520,6 +3562,121 @@ mod tests {
         assert!(!needs_nav_confirm(&coverage_running(a.clone())));
         assert!(!needs_nav_confirm(&coverage_result_state(true)));
         assert!(!needs_nav_confirm(&AppState::Stage0ChooseAnalysis));
+    }
+
+    /// Regression: a modules-fetch terminal event must clear the slot on the
+    /// COVERAGE setup screen, not only on the enrichment one.
+    ///
+    /// The handler destructured `Stage3EnrichSetup` alone, so on
+    /// `Stage2CoverageSetup` the `Done` event — already consumed off the channel
+    /// by the shared drain — was logged and dropped. `modules_fetch` stayed
+    /// `Some` forever, `is_busy` stayed true, the inline strip froze on its last
+    /// progress line (`Fetching (cache complete)` when the on-disk cache was
+    /// warm, since that is then the only progress event), and `Run Coverage`
+    /// never re-enabled. The fetched catalogue was discarded too.
+    #[test]
+    fn modules_terminal_event_clears_the_slot_on_the_coverage_setup_screen() {
+        let rt = mt_rt();
+        let (fh, _j1) = parked(&rt);
+        let (rh, _j2) = parked(&rt);
+        let mut app = test_app();
+        app.state = coverage_setup_state(None, Some(modules_inflight(fh, rh)));
+        // Written synchronously by the spawn, before the fetch task existed.
+        app.cache.group_org_codes = Some(std::collections::HashSet::from(["ath".to_string()]));
+        if let Some(e) = screen_error_mut(&mut app.state) {
+            *e = Some("a stale label from an earlier failure".into());
+        }
+
+        app.handle_modules_fetch_terminal_event(ModulesFetchEvent::Done(
+            KeggModulesCache::default(),
+        ));
+
+        let (_, modules_fetch) = setup_fetch_slots(&app.state).expect("coverage setup owns slots");
+        assert!(
+            modules_fetch.is_none(),
+            "the in-flight slot must be cleared, or the screen stays busy forever"
+        );
+        assert!(
+            app.cache.modules_pack.is_some(),
+            "the fetched module catalogue must be stored"
+        );
+        assert!(!is_busy(&app.state), "the screen must not stay busy");
+        assert_eq!(
+            screen_error_mut(&mut app.state).and_then(|e| e.clone()),
+            None,
+            "a stale error label must be cleared on success"
+        );
+        assert!(
+            app.cache.group_org_codes.is_some(),
+            "group_org_codes is not the terminal handler's to touch"
+        );
+    }
+
+    /// A FAILED module fetch must leave the Group selection usable for a retry.
+    ///
+    /// `cache.group_org_codes` feeds `target_ready`; clearing it here would
+    /// leave the coverage target incomplete and `Run Coverage` permanently
+    /// disabled — the same dead end this change exists to remove, reached a
+    /// different way. The canonical `Stage3EnrichSetup` scenarios pin this, but
+    /// they are scoped to that variant, so without this test the coverage
+    /// screen has no guard for it at all.
+    #[test]
+    fn a_failed_module_fetch_keeps_group_org_codes_on_the_coverage_setup_screen() {
+        let rt = mt_rt();
+        let (fh, _j1) = parked(&rt);
+        let (rh, _j2) = parked(&rt);
+        let mut app = test_app();
+        app.state = coverage_setup_state(None, Some(modules_inflight(fh, rh)));
+        app.cache.group_org_codes = Some(std::collections::HashSet::from(["ath".to_string()]));
+
+        app.handle_modules_fetch_terminal_event(ModulesFetchEvent::Failed("boom".into()));
+
+        assert!(
+            app.cache.group_org_codes.is_some(),
+            "the Group selection is still valid for a retry and MUST survive a failed fetch"
+        );
+        assert!(app.cache.modules_pack.is_none(), "the catalogue is cleared");
+        assert_eq!(
+            screen_error_mut(&mut app.state).and_then(|e| e.clone()),
+            Some("KEGG modules fetch failed: boom".to_string()),
+            "the failure must be labelled on the owning screen, in the pinned format"
+        );
+        assert!(
+            !is_busy(&app.state),
+            "a failed fetch must not leave the screen busy"
+        );
+    }
+
+    /// The same defect on the species-fetch handler. Not the reported symptom
+    /// only because Pathway mode has a synchronous disk fast-path
+    /// (`handle_species_selected`) that returns before spawning whenever the
+    /// species is already cached — so it hangs only on a cold cache.
+    #[test]
+    fn kegg_terminal_event_clears_the_slot_on_the_coverage_setup_screen() {
+        let rt = mt_rt();
+        let (fh, _j1) = parked(&rt);
+        let (rh, _j2) = parked(&rt);
+        let mut app = test_app();
+        app.state = coverage_setup_state(Some(kegg_inflight(fh, rh)), None);
+
+        app.handle_kegg_terminal_event(KeggEvent::Done(crate::kegg::SpeciesKegg {
+            code: "ath".into(),
+            fetched_at: chrono::Utc::now(),
+            pathways: vec![],
+        }));
+
+        let (kegg_fetch, _) = setup_fetch_slots(&app.state).expect("coverage setup owns slots");
+        assert!(kegg_fetch.is_none(), "the in-flight slot must be cleared");
+        assert!(
+            app.cache.species_kegg.is_some(),
+            "the fetched pathway catalogue must be stored"
+        );
+        assert!(!is_busy(&app.state), "the screen must not stay busy");
+        assert_eq!(
+            screen_error_mut(&mut app.state).and_then(|e| e.clone()),
+            None,
+            "a stale error label must be cleared on success"
+        );
     }
 
     /// The shared-block accessors answer for BOTH setup screens and for neither
