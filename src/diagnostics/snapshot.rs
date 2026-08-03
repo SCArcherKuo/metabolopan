@@ -307,11 +307,33 @@ pub fn render_app_state(
             funnel,
             rendering,
             confirming_new_round,
+            target_species,
+            module_retention,
             ..
         } => {
             writeln!(s, "Variant: Stage3CoverageResult").ok();
             writeln!(s, "rendering: {rendering}").ok();
             writeln!(s, "confirming_new_round: {confirming_new_round}").ok();
+            // The target the run was performed against, from the run's captured
+            // provenance — NOT from the settings dump above, which reports the
+            // CURRENT selection and will disagree once a confirmed
+            // organism-roster refresh clears a retired species or Group. Seeing
+            // both in one bundle is the point: it is the only way to tell a
+            // stale selection from a mislabelled run. Deliberately more detail
+            // than the enrichment arm's `module_retention_present` bool — on
+            // that route the target reaches no export, so the dump is not the
+            // only place it survives.
+            if let Some(code) = target_species {
+                writeln!(s, "run_target_species: {code}").ok();
+            }
+            if let Some(r) = module_retention {
+                writeln!(
+                    s,
+                    "run_target_group: {} (level {})",
+                    r.group_name, r.group_level
+                )
+                .ok();
+            }
             writeln!(s, "coverage_rows: {}", coverage_result.rows.len()).ok();
             writeln!(
                 s,
@@ -564,6 +586,7 @@ mod tests {
             },
             cpd_to_names: std::collections::HashMap::new(),
             module_retention: None,
+            target_species: None,
             mode_partition: None,
             dedup_reports: vec![],
             pubchem_time_span: None,
@@ -644,6 +667,85 @@ mod tests {
         ] {
             assert!(dump.contains(needle), "missing {needle} in:\n{dump}");
         }
+    }
+
+    /// The bundle records the target the RUN was performed against, so a report
+    /// taken after a confirmed organism-roster refresh cleared the selection
+    /// still says what was surveyed. The settings dump above it reports the
+    /// current selection; seeing the two disagree is the whole diagnostic value.
+    ///
+    /// The base fixture leaves both target fields `None` — a shape no real run
+    /// produces — so without these two cases the lines are never rendered by any
+    /// test at all.
+    #[test]
+    fn the_coverage_result_dumps_the_runs_captured_target() {
+        let pathway = match coverage_result_state() {
+            AppState::Stage3CoverageResult {
+                coverage_result,
+                funnel,
+                ..
+            } => AppState::Stage3CoverageResult {
+                coverage_result,
+                funnel,
+                cpd_to_names: std::collections::HashMap::new(),
+                module_retention: None,
+                target_species: Some("gmx".to_string()),
+                mode_partition: None,
+                dedup_reports: vec![],
+                pubchem_time_span: None,
+                kegg_conv_time_span: None,
+                dotplot_tex: None,
+                rendering: false,
+                render_rx: None,
+                confirming_new_round: false,
+                height_user_overridden: false,
+            },
+            _ => unreachable!("fixture builds the coverage result"),
+        };
+        let dump = render(&pathway);
+        assert!(
+            dump.contains("run_target_species: gmx"),
+            "missing captured species in:\n{dump}"
+        );
+
+        let now = chrono::Utc::now();
+        let module = match coverage_result_state() {
+            AppState::Stage3CoverageResult {
+                coverage_result,
+                funnel,
+                ..
+            } => AppState::Stage3CoverageResult {
+                coverage_result,
+                funnel,
+                cpd_to_names: std::collections::HashMap::new(),
+                module_retention: Some(crate::stage3::ModuleRetention {
+                    total_modules: 573,
+                    retained_modules: 158,
+                    min_group_overlap: 1,
+                    group_level: 2,
+                    group_name: "Plants".to_string(),
+                    group_org_count: 183,
+                    oldest_fetched_at: now,
+                    newest_fetched_at: now,
+                }),
+                target_species: None,
+                mode_partition: None,
+                dedup_reports: vec![],
+                pubchem_time_span: None,
+                kegg_conv_time_span: None,
+                dotplot_tex: None,
+                rendering: false,
+                render_rx: None,
+                confirming_new_round: false,
+                height_user_overridden: false,
+            },
+            _ => unreachable!("fixture builds the coverage result"),
+        };
+        let dump = render(&module);
+        assert!(
+            dump.contains("run_target_group: Plants (level 2)"),
+            "missing captured Group in:\n{dump}"
+        );
     }
 
     /// With no `.csv` the group term reads `<no csv>` rather than a number that

@@ -143,12 +143,6 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
             Action::Run => start_run(app),
         }
         });
-
-    // Stage-3-local organism-roster refresh confirm — drained + rendered after
-    // the scroll area so the modal floats above it (outside the App-level
-    // four-modal family; see the `app-shell` organism-roster refresh spec).
-    let ctx = ui.ctx().clone();
-    drain_organisms_refresh_confirm(app, &ctx);
 }
 
 /// Why the active setup screen's Run button is disabled, when the reason is a
@@ -671,14 +665,19 @@ fn handle_species_selected(app: &mut App, code: String) {
     spawn_species_fetch(app, code);
 }
 
-/// Drain `LogPaneState.organisms_refresh_requested` and render the Stage-3-local
-/// organism-roster refresh confirm. `pub(crate)` so BOTH `stage3_setup::show` and
-/// `stage3_result::show` can call it (the `Refresh KEGG organism list` button is
-/// mode-independent and appears on both screens). Modelled on the `RefreshState`
-/// cache-refresh confirms: it is NOT an App-level `*ModalState` and sits OUTSIDE
-/// the four-modal mutual-exclusion family / `drain_modal_requests` (see the
-/// `app-shell` organism-roster refresh requirement). On confirm it calls
-/// `App::handle_organisms_refresh`.
+/// Drain `LogPaneState.organisms_refresh_requested` and render the
+/// organism-roster refresh confirm. `pub(crate)` for its ONE caller,
+/// `App::drain_frame_dialogs` — the frame owns this, not a screen, because the
+/// `Refresh KEGG organism list` button renders on five `AppState` variants and
+/// a drain owned by two `show` functions left the request set on the other
+/// three. Modelled on the `RefreshState` cache-refresh confirms: it is NOT an
+/// App-level `*ModalState` and sits OUTSIDE the four-modal mutual-exclusion
+/// family / `drain_modal_requests` (see the `app-shell` organism-roster refresh
+/// requirement). On confirm it calls `App::handle_organisms_refresh`.
+///
+/// Rendered unconditionally, so an unanswered confirm follows the user across
+/// navigation rather than vanishing and re-appearing; `App::start_new_round` is
+/// the only thing that closes it for them.
 pub(crate) fn drain_organisms_refresh_confirm(app: &mut App, ctx: &egui::Context) {
     if std::mem::take(&mut app.log_ui.organisms_refresh_requested)
         && matches!(app.organisms.state, OrganismsLoadState::Loaded { .. })
@@ -697,6 +696,14 @@ pub(crate) fn drain_organisms_refresh_confirm(app: &mut App, ctx: &egui::Context
         .show(ctx, |ui| {
             ui.label(
                 "Re-fetch the full KEGG organism roster from KEGG and rebuild the organism groups?",
+            );
+            // Disclosure at the point of decision: the user cannot otherwise
+            // see that confirming may empty their current selection. It stops
+            // there deliberately — a completed run's recorded target is taken
+            // from the run itself, so this cannot relabel finished results.
+            ui.label(
+                "If KEGG has retired your selected species or Group, it is cleared from the \
+                 current selection and must be re-picked before the next run.",
             );
             ui.add_space(8.0);
             ui.horizontal(|ui| {

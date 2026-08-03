@@ -1,8 +1,8 @@
 # User Manual
 
-Software version: metabolopan v1.4.0
+Software version: metabolopan v1.5.0
 
-Update date: 2026-07-30
+Update date: 2026-08-03
 
 This manual documents what the software does numerically — algorithms, default thresholds, deviations from common alternatives — so you can defend any number it produces in a paper or report.
 Read this once before publishing results that depend on the software.
@@ -145,6 +145,7 @@ The rest of this manual describes route 1 unless a section says otherwise.
     - [Inputs](#inputs)
     - [Setup screen](#setup-screen)
     - [Result screen](#result-screen)
+    - [The entry chain in the Data tab](#the-entry-chain-in-the-data-tab)
     - [Dot plot](#dot-plot)
     - [CSV export](#csv-export)
   - [Advanced topics & reference](#advanced-topics--reference)
@@ -861,19 +862,50 @@ A coverage percentage divorced from its denominator is the most misreadable numb
 
 Click the `Entry`, `Hits`, or `Coverage` header to sort by that column; the **Sort by** selector and the headers write the same setting, so they always agree.
 
-**Four live filters** re-apply on the next frame with no re-run, no PubChem request, and no KEGG request:
+**Four live filters** re-apply on the next frame with no re-run, no PubChem request, and no KEGG request.
+They are laid out in the order they are applied, so the screen reads top to bottom in the direction the data flows:
 
-- **Sort by** — `Coverage` (default) or `Hits`. Clicking the `Hits` or `Coverage` column header sets the same setting, so the two controls always agree; the active column is marked `(desc)`.
-- **Top N entries** — the display cap.
-- **Minimum hit count** — drops entries with fewer detected compounds than this.
 - **Minimum entry size** — drops entries with fewer compounds *in KEGG* than this. Default `3`, **hard minimum `1`**.
 
-That floor is what makes a coverage-descending table meaningful.
-About **20 %** of a typical species pathway catalog carries *no* KEGG compounds at all — including every "global and overview map" such as `hsa01100 Metabolic pathways` — and a further ~10 % carries one or two.
-Without a floor, those entries would occupy the top of the table at `0 %`, `50 %`, or `100 %` on a single hit, ahead of every meaningful result.
-The count of zero-compound entries is reported in grey beneath the control (`76 of 372 entries have no compounds in KEGG and are never shown.`) rather than silently swallowed.
+    That floor is what makes a coverage-descending table meaningful.
+    About **20 %** of a typical species pathway catalog carries *no* KEGG compounds at all — including every "global and overview map" such as `hsa01100 Metabolic pathways` — and a further ~10 % carries one or two.
+    Without a floor, those entries would occupy the top of the table at `0 %`, `50 %`, or `100 %` on a single hit, ahead of every meaningful result.
+    The count of zero-compound entries is reported in grey beneath the control (`76 of 372 entries have no compounds in KEGG and are never shown.`) rather than silently swallowed.
+
+- **Minimum hit count** — drops entries with fewer detected compounds than this.
+- **Sort by** — `Coverage` (default) or `Hits`. Clicking the `Hits` or `Coverage` column header sets the same setting, so the two controls always agree; the active column is marked `(desc)`.
+- **Top N entries** — the display cap. It comes last because it caps whatever the sort left on top, rather than testing a row's own values.
+
+The two thresholds are applied together, so which one is listed first cannot change the set of rows you see.
+The shared order exists so the controls, the counts reported in the **Data** tab, and the documented filter semantics cannot drift apart.
 
 > **Note:** No entry is ever excluded by its identifier. There is no hard-coded list of "global map" IDs anywhere in the software; those entries vanish from the table only because KEGG gives them no compounds, which the minimum-entry-size floor then removes like any other empty entry. The shared on-disk KEGG cache is never filtered either, so a coverage run leaves a later enrichment run's universe untouched.
+
+### The entry chain in the Data tab
+
+The bottom-panel **Data** tab answers the question the table cannot: how many pathways or modules were in play, and where the rest went.
+Its `Coverage data` block reports the whole chain, one line per stage, in the same order as the filter controls:
+
+| Line | Module mode | Pathway mode |
+| --- | --- | --- |
+| `Modules fetched:` / `Pathways fetched:` | the whole KEGG module catalog | every pathway in the species catalog |
+| `In selected Group:` | modules surviving the organism-Group filter | — (no Group filter in pathway mode) |
+| `With compound list:` | of those, the ones KEGG annotates with compounds, with the dropped count in `(−N empty)` | same |
+| `Entry size >= <k>:` | entries clearing the **Minimum entry size** floor | same |
+| `Hits >= <h>:` | *of those*, entries clearing **Minimum hit count** | same |
+| `Displayed: <n> (Top N = <t>)` | rows the table actually shows, after sorting and truncation | same |
+
+Each number is less than or equal to the one above it, so the chain reads as a funnel.
+The last three lines are cumulative — an entry removed by the size floor is not counted again further down, even if its hit count would have cleared the next threshold.
+
+The first lines are fixed for a run and never move.
+The last three follow the filter controls and update **one frame after** you drag a control, because the Data tab is drawn before the controls are.
+The dot plot's annotation strip is different again: it reports the filter values from the last time you pressed `Draw dot plot`, not the current ones.
+
+At the hard minimum of `1`, `With compound list:` and `Entry size >= 1:` are necessarily equal — an entry has at least one compound exactly when it has a compound list at all.
+Both lines are still shown: a funnel stage that drops nothing is itself worth knowing, and a chain whose length changes with a setting is harder to read.
+
+There is no `Tested:` line anywhere on this route. "Tested" means "entered a hypergeometric test", and this route runs none.
 
 ### Dot plot
 
@@ -1156,7 +1188,7 @@ The example shows the optional fields populated — `null` is their default (see
 ```json
 {
   "schema_version": 1,
-  "app_version": "1.4.0",
+  "app_version": "1.5.0",
   "saved_at": "2026-06-04T09:15:22Z",
   "user_note": "",
   "input_files": [

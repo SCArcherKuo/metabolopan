@@ -447,6 +447,7 @@ mod tests {
             funnel: CoverageFunnel::default(),
             cpd_to_names: std::collections::HashMap::new(),
             module_retention: None,
+            target_species: None,
             mode_partition: None,
             dedup_reports: vec![],
             pubchem_time_span: None,

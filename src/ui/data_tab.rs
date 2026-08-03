@@ -17,10 +17,11 @@ use crate::app::{
     AnalysisMode, App, AppState, RefreshState, RunningPayload, SessionCache, SessionSettings,
     Stage3Funnel,
 };
+use crate::coverage::{CoverageResult, DisplayFilters, displayed_rows};
 use crate::dam::{DamMethod, DamResult, Trend, classify_trend};
 use crate::data::{GroupMapping, IonMode, IonModeTable, UNASSIGNED};
 use crate::enrichment::types::EnrichmentResult;
-use crate::kegg::{KeggModulesCache, SpeciesKegg};
+use crate::kegg::{KeggCompoundSet, KeggModulesCache, SpeciesKegg};
 use crate::stage3::{DualModeBreakdown, ModuleRetention};
 use crate::theme;
 use crate::ui::widgets::{kv_line, kv_line_colored, section_header};
@@ -88,9 +89,10 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
     let mut organisms_refresh = false;
     let mut result_cache_action = ResultCacheAction::None;
 
-    // Organism roster fetched-date + loading state for the Cache-data block
-    // (mode-independent, Stage 3 only). While a refresh is in flight the state is
-    // `Loading`; show the stashed prior timestamp so the date line persists.
+    // Organism roster fetched-date + loading state for the Cache-data block —
+    // mode- AND route-independent, on all five variants that render the block,
+    // not Stage 3 only. While a refresh is in flight the state is `Loading`;
+    // show the stashed prior timestamp so the date line persists.
     let (organisms_fetched_at, organisms_loading) = match &app.organisms.state {
         crate::app::OrganismsLoadState::Loaded { fetched_at, .. } => (Some(*fetched_at), false),
         crate::app::OrganismsLoadState::Loading { .. } => (
@@ -283,7 +285,21 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                         &mut setup_pathway_refresh,
                         &mut organisms_refresh,
                     );
-                    render_coverage_target_block(ui, settings, cache);
+                    // No run exists on these two screens, so the live selection
+                    // IS the target and the cache IS the catalogue — there is
+                    // nothing yet to be provenance of.
+                    let group_counts = cached_module_group_counts(ui, settings, cache);
+                    render_coverage_target_block(
+                        ui,
+                        settings,
+                        &CoverageTarget::Selected {
+                            species: settings.kegg_species.as_deref(),
+                            group: settings.organism_group.as_deref(),
+                            group_level: settings.organism_group_level,
+                            group_org_count: cache.group_org_codes.as_ref().map(|c| c.len()),
+                        },
+                        &coverage_cache_chain(settings, cache, group_counts),
+                    );
                     ui.add_space(8.0);
                     render_stage2_setup(ui, &inputs.ion_tables, mapping);
                 }
@@ -291,6 +307,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                     coverage_result,
                     funnel,
                     module_retention,
+                    target_species,
                     mode_partition,
                     dedup_reports,
                     pubchem_time_span,
@@ -311,10 +328,11 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                     render_coverage_result_block(
                         ui,
                         settings,
-                        cache,
                         coverage_result,
                         funnel,
                         mode_partition.as_ref(),
+                        target_species.as_deref(),
+                        module_retention.as_ref(),
                     );
                     ui.add_space(8.0);
                     render_coverage_slots(
@@ -352,9 +370,11 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
         ResultCacheAction::Rerun => app.log_ui.rerun_enrichment_requested = true,
         ResultCacheAction::None => {}
     }
-    // The organism-roster refresh button (setup OR result) sets a flag drained by
-    // `stage3_setup::show` / `stage3_result::show`, which open the Stage-3-local
-    // refresh confirm (NOT an App-level modal — see the `app-shell` spec).
+    // The organism-roster refresh button sets a flag the FRAME drains — every
+    // frame, on every screen — which opens the refresh confirm (App-owned, but
+    // outside the four-modal family; see the `app-shell` spec). It renders on
+    // five `AppState` variants, so a screen-owned drain could not have covered
+    // it.
     if organisms_refresh {
         app.log_ui.organisms_refresh_requested = true;
     }
@@ -455,48 +475,287 @@ fn render_dam_slots(
 
 // ── Coverage-route blocks ──────────────────────────────────────────────────
 
-/// `Coverage data` on the coverage SETUP screens: the analysis target, and the
+/// Where the `Coverage data` block's target line gets its facts.
+///
+/// Two regimes, and the split is the point. Before a run there is nothing to be
+/// provenance *of*, so the live selection IS the answer. After a run, the run
+/// captured what it surveyed and the live selection is no longer about it — a
+/// confirmed organism-roster refresh can clear the selection out from under a
+/// finished run whose dot plot and CSV still name it. See the `coverage-ui`
+/// capability spec.
+pub(crate) enum CoverageTarget<'a> {
+    /// `Stage2CoverageSetup` and `Stage3EnrichRunning` carrying a coverage run.
+    Selected {
+        species: Option<&'a str>,
+        group: Option<&'a str>,
+        group_level: Option<u8>,
+        group_org_count: Option<usize>,
+    },
+    /// `Stage3CoverageResult` — read off the completed run, never off settings.
+    Captured {
+        species: Option<&'a str>,
+        retention: Option<&'a crate::stage3::ModuleRetention>,
+    },
+}
+
+/// The `Coverage data` block's target line, or `None` when its underlying
+/// selection does not exist.
+///
+/// `None` means the line is **omitted**, not rendered with `—` placeholders:
+/// the enrichment block already omits, and the capability requires it ("These
+/// lines render only when their underlying selection exists"). Under the shared
+/// Module format a placeholder would read `Group: — (Level —, — organisms)`,
+/// which is not a coherent string.
+///
+/// The Module form matches the enrichment screens exactly — same wording, same
+/// capitalisation, same organism count — so one label does not read two ways
+/// depending on which route produced it.
+pub(crate) fn coverage_target_line(
+    mode: AnalysisMode,
+    target: &CoverageTarget<'_>,
+) -> Option<String> {
+    let (species, group) = match target {
+        CoverageTarget::Selected {
+            species,
+            group,
+            group_level,
+            group_org_count,
+        } => (
+            *species,
+            match (group, group_level, group_org_count) {
+                (Some(g), Some(l), Some(n)) => Some((*g, *l, *n)),
+                _ => None,
+            },
+        ),
+        CoverageTarget::Captured { species, retention } => (
+            *species,
+            retention.map(|r| (r.group_name.as_str(), r.group_level, r.group_org_count)),
+        ),
+    };
+    match mode {
+        AnalysisMode::Pathway => species.map(|code| format!("Species: {code}")),
+        AnalysisMode::Module => group.map(|(name, level, count)| {
+            format!("Group: {name} (Level {level}, {count} organisms)")
+        }),
+    }
+}
+
+/// The fixed catalogue head of the coverage entry chain — the stages that are
+/// the same on every frame of a given run.
+///
+/// Two variants rather than one struct with optional fields because the two
+/// modes genuinely have different chains: Module has a Group-filtering stage
+/// and Pathway does not, and a Pathway head carrying an always-`None`
+/// `in_group` would invite a reader to render it.
+enum CoverageChainHead {
+    Pathway {
+        fetched: usize,
+        empty: usize,
+    },
+    Module {
+        fetched: usize,
+        /// `(retained, empty)`. `None` only before the selected Group's
+        /// organism roster is cached, where the Group-filtered count cannot be
+        /// derived at all and the head is the catalogue size alone — the same
+        /// guard the enrichment setup block applies.
+        in_group: Option<(usize, usize)>,
+    },
+}
+
+/// The live tail of the chain: the three stages that move when the user drags a
+/// filter control on `Stage3CoverageResult`.
+struct CoverageChainTail {
+    /// The **effective** filters (`SessionSettings::coverage_display_filters`
+    /// clamps `min_entry_size`), so a label can never disagree with the count
+    /// it heads.
+    filters: DisplayFilters,
+    passing_entry_size: usize,
+    passing_hits: usize,
+    displayed: usize,
+}
+
+/// The entry chain as ordered lines: how many pathways or modules were in play,
+/// and where the rest went.
+///
+/// A pure formatter over already-resolved counts so the whole chain — wording,
+/// order, and the stages each regime renders — is assertable without an `egui`
+/// context.
+///
+/// No `Tested:` line in either mode: "tested" names the entries that entered
+/// the hypergeometric test, and this route runs none. `Entry size >= <k>` says
+/// what that line would have said without borrowing a word implying a test.
+///
+/// The threshold lines name the control that produces them rather than a
+/// derived noun ("Eligible", "Passing"), so a reader can point at a line and
+/// then at the control that moved it. They use ASCII `>=`, this route's
+/// existing convention — the same block renders `Detected in >= <n>%`, and the
+/// coverage CSV and dot-plot strip both use ASCII.
+fn coverage_entry_chain(head: &CoverageChainHead, tail: Option<&CoverageChainTail>) -> Vec<String> {
+    let mut lines = Vec::with_capacity(6);
+    match head {
+        CoverageChainHead::Pathway { fetched, empty } => {
+            lines.push(format!("Pathways fetched: {fetched}"));
+            lines.push(with_compound_line(*fetched, *empty));
+        }
+        CoverageChainHead::Module { fetched, in_group } => {
+            lines.push(format!("Modules fetched: {fetched}"));
+            if let Some((retained, empty)) = in_group {
+                lines.push(format!("In selected Group: {retained}"));
+                lines.push(with_compound_line(*retained, *empty));
+            }
+        }
+    }
+    if let Some(t) = tail {
+        lines.push(format!(
+            "Entry size >= {}: {}",
+            t.filters.min_entry_size, t.passing_entry_size
+        ));
+        lines.push(format!(
+            "Hits >= {}: {}",
+            t.filters.min_hit_count, t.passing_hits
+        ));
+        lines.push(format!(
+            "Displayed: {} (Top N = {})",
+            t.displayed, t.filters.top_n
+        ));
+    }
+    lines
+}
+
+/// The two threshold counts of the live tail, **cumulatively**: `hits` is
+/// tallied only over rows that already cleared the entry-size floor.
+///
+/// An independent tally would let an entry with `entry_size < k` and
+/// `hits >= h` inflate the second count above the first, and the chain would
+/// stop being non-increasing — the one property that makes it a chain.
+fn coverage_threshold_counts(result: &CoverageResult, filters: DisplayFilters) -> (usize, usize) {
+    let mut passing_entry_size = 0;
+    let mut passing_hits = 0;
+    for row in &result.rows {
+        if row.entry_size >= filters.min_entry_size {
+            passing_entry_size += 1;
+            if row.hits >= filters.min_hit_count {
+                passing_hits += 1;
+            }
+        }
+    }
+    (passing_entry_size, passing_hits)
+}
+
+/// Cached pathways carrying no compound list — the setup-screen counterpart of
+/// `CoverageResult.entries_without_compounds`.
+///
+/// There is no existing helper for this (unlike `module_group_counts`): the
+/// enrichment setup screen's Pathway arm renders no such line, so there is no
+/// precedent to copy. It agrees with the result-screen number because a
+/// non-empty `Vec` always yields a non-empty `HashSet` in `coverage::compute`.
+fn pathway_empty_count(pathways: &[KeggCompoundSet]) -> usize {
+    pathways.iter().filter(|p| p.compounds.is_empty()).count()
+}
+
+/// The chain on `Stage3CoverageResult`: every fixed line off the completed run,
+/// never re-derived from live settings or cache.
+///
+/// Module reads both its fixed counts from one `ModuleRetention` — as the
+/// enrichment result block does — rather than taking the head from
+/// `CoverageResult.entries_total`; splitting one chain across two structs would
+/// leave `In selected Group:` renderable while its own head was not.
+///
+/// The tail necessarily lags one frame: the Data tab is drawn before the result
+/// screen's filter widgets, so it reads the previous frame's settings. The
+/// unconditional 250 ms repaint keeps that a lag rather than a stuck value.
+fn coverage_run_chain(
+    settings: &SessionSettings,
+    result: &CoverageResult,
+    retention: Option<&ModuleRetention>,
+) -> Vec<String> {
+    let head = match settings.analysis_mode {
+        AnalysisMode::Pathway => Some(CoverageChainHead::Pathway {
+            fetched: result.entries_total,
+            empty: result.entries_without_compounds,
+        }),
+        AnalysisMode::Module => retention.map(|r| CoverageChainHead::Module {
+            fetched: r.total_modules,
+            in_group: Some((r.retained_modules, result.entries_without_compounds)),
+        }),
+    };
+    let Some(head) = head else {
+        return Vec::new();
+    };
+    let filters = settings.coverage_display_filters();
+    let (passing_entry_size, passing_hits) = coverage_threshold_counts(result, filters);
+    coverage_entry_chain(
+        &head,
+        Some(&CoverageChainTail {
+            filters,
+            passing_entry_size,
+            passing_hits,
+            displayed: displayed_rows(result, filters).len(),
+        }),
+    )
+}
+
+/// The chain on `Stage2CoverageSetup` and the coverage running screen: no run
+/// exists, so the head comes from `app.cache` and there is no tail — a
+/// `Displayed:` line there would report on nothing.
+///
+/// `module_group_counts` is the memoized `(in_group, with_compounds)` pair,
+/// passed in rather than computed here so this stays a pure function.
+fn coverage_cache_chain(
+    settings: &SessionSettings,
+    cache: &SessionCache,
+    module_group_counts: Option<(usize, usize)>,
+) -> Vec<String> {
+    let head = match settings.analysis_mode {
+        AnalysisMode::Pathway => cache
+            .species_kegg
+            .as_ref()
+            .map(|sk| CoverageChainHead::Pathway {
+                fetched: sk.pathways.len(),
+                empty: pathway_empty_count(&sk.pathways),
+            }),
+        AnalysisMode::Module => cache
+            .modules_pack
+            .as_ref()
+            .map(|pack| CoverageChainHead::Module {
+                fetched: pack.modules.len(),
+                in_group: module_group_counts
+                    .map(|(in_group, with_compounds)| (in_group, in_group - with_compounds)),
+            }),
+    };
+    head.map(|h| coverage_entry_chain(&h, None))
+        .unwrap_or_default()
+}
+
+/// `Coverage data` on every coverage-route screen: the analysis target, and the
 /// group selection when a `.csv` was supplied.
 ///
 /// Named `Coverage data`, not `Enrichment data`: this route computes no
 /// enrichment, and a header naming one would be the first thing a reader of a
 /// bug report saw.
+///
+/// The target line's facts arrive via `target`, and the entry chain via
+/// `chain`, rather than being read from `settings`/`cache` here, because the
+/// result screen sources both from the run — see [`CoverageTarget`],
+/// [`coverage_run_chain`] and [`coverage_cache_chain`]. `Analysis mode:` stays
+/// live in every regime (`analysis-mode-toggle` forbids an `AppState`-local
+/// `analysis_mode`), as do the sample-group lines.
 fn render_coverage_target_block(
     ui: &mut egui::Ui,
     settings: &SessionSettings,
-    cache: &SessionCache,
+    target: &CoverageTarget<'_>,
+    chain: &[String],
 ) {
     section_header(ui, "Coverage data");
     kv_line(
         ui,
         &format!("Analysis mode: {}", mode_name(settings.analysis_mode)),
     );
-    match settings.analysis_mode {
-        AnalysisMode::Pathway => {
-            kv_line(
-                ui,
-                &format!(
-                    "Species: {}",
-                    settings.kegg_species.as_deref().unwrap_or("—")
-                ),
-            );
-            if let Some(sk) = &cache.species_kegg {
-                kv_line(ui, &format!("Pathways in catalogue: {}", sk.pathways.len()));
-            }
-        }
-        AnalysisMode::Module => {
-            kv_line(
-                ui,
-                &format!(
-                    "Group: {} (level {})",
-                    settings.organism_group.as_deref().unwrap_or("—"),
-                    settings
-                        .organism_group_level
-                        .map(|l| l.to_string())
-                        .unwrap_or_else(|| "—".into())
-                ),
-            );
-        }
+    if let Some(line) = coverage_target_line(settings.analysis_mode, target) {
+        kv_line(ui, &line);
+    }
+    for line in chain {
+        kv_line(ui, line);
     }
     // Group selection: the one input on this route that can silently REMOVE
     // features, so a bug report has to record it. Group names are the user's
@@ -526,15 +785,34 @@ fn render_coverage_target_block(
 /// The funnel has **no foreground branch**: there is no foreground on this
 /// route, so no `foreground_*` value is rendered and no label uses the words
 /// "foreground", "significant", or "universe".
+///
+/// `target_species` / `module_retention` come off the completed run and are
+/// threaded down to the target line and the entry chain, neither of which may
+/// be re-derived from `settings`/`cache` on this screen — see
+/// [`CoverageTarget`] and [`coverage_run_chain`].
+///
+/// The funnel carries no `Entries:` line: the entries-without-compounds pair it
+/// used to report is the entry chain's `With compound list:` line one block up,
+/// in the form `data-summary-panel` specifies. The result screen's grey note
+/// and the CSV header report the same pair and are unaffected.
 fn render_coverage_result_block(
     ui: &mut egui::Ui,
     settings: &SessionSettings,
-    cache: &SessionCache,
     result: &crate::coverage::CoverageResult,
     funnel: &crate::app::CoverageFunnel,
     partition: Option<&crate::stage3::CoverageModePartition>,
+    target_species: Option<&str>,
+    module_retention: Option<&crate::stage3::ModuleRetention>,
 ) {
-    render_coverage_target_block(ui, settings, cache);
+    render_coverage_target_block(
+        ui,
+        settings,
+        &CoverageTarget::Captured {
+            species: target_species,
+            retention: module_retention,
+        },
+        &coverage_run_chain(settings, result, module_retention),
+    );
 
     section_header(ui, "Coverage funnel");
     kv_line(ui, &format!("Raw features: {}", funnel.raw_features));
@@ -551,13 +829,6 @@ fn render_coverage_result_block(
     kv_line(
         ui,
         &format!("In at least one entry: {}", result.detected_in_entries),
-    );
-    kv_line(
-        ui,
-        &format!(
-            "Entries: {} ({} with no KEGG compounds)",
-            result.entries_total, result.entries_without_compounds
-        ),
     );
 
     // The Data tab is the SOLE surface for this partition — the results table
@@ -610,10 +881,16 @@ fn render_coverage_slots(
 
 /// `Cache data` on the coverage result screen.
 ///
-/// Same fetched-date lines as the enrichment result's block, WITHOUT any
-/// refresh or re-run button: this route offers no PubChem/KEGG refresh action,
-/// which is also why its state carries no `refresh_state`. Rendering the
-/// buttons anyway would advertise an action the route cannot perform.
+/// Same fetched-date lines as the enrichment result's block, with **no
+/// catalogue / PubChem / KEGG-conv refresh and no re-run action**: this route
+/// offers none of those, which is also why its state carries no
+/// `refresh_state`. Rendering those buttons anyway would advertise an action
+/// the route cannot perform.
+///
+/// It does render the `Refresh KEGG organism list` row — the roster is
+/// session-wide infrastructure, not a per-route cache — and that button is
+/// functional here, because the frame drains its request on every screen. See
+/// the `data-summary-panel` capability spec.
 #[allow(clippy::too_many_arguments)]
 fn render_coverage_cache_block(
     ui: &mut egui::Ui,
@@ -726,27 +1003,8 @@ fn render_enrichment_setup_block(
             Some(pack) => {
                 kv_line(ui, &format!("Modules fetched: {}", pack.modules.len()));
                 if let Some(orgs) = &cache.group_org_codes {
-                    // Memoize the ~573-module Group-overlap scan across frames via
-                    // egui's cross-frame `Context::data`, keyed on every input that
-                    // can change it; recompute only on a key miss.
-                    let key = module_group_memo_key(
-                        settings.min_group_overlap,
-                        settings.organism_group.as_deref(),
-                        settings.organism_group_level,
-                        pack.modules.len(),
-                    );
-                    let id = egui::Id::new("data_tab.module_group_counts");
-                    let cached = ui
-                        .ctx()
-                        .data(|d| d.get_temp::<(ModuleGroupKey, (usize, usize))>(id));
-                    let (in_group, with_compounds) = match cached {
-                        Some((k, v)) if k == key => v,
-                        _ => {
-                            let v = module_group_counts(pack, orgs, settings.min_group_overlap);
-                            ui.ctx().data_mut(|d| d.insert_temp(id, (key, v)));
-                            v
-                        }
-                    };
+                    let (in_group, with_compounds) =
+                        memoized_module_group_counts(ui, settings, pack, orgs);
                     kv_line(ui, &format!("In selected Group: {in_group}"));
                     kv_line(ui, &with_compound_line(in_group, in_group - with_compounds));
                 }
@@ -1213,6 +1471,56 @@ fn module_group_memo_key(
     (min_overlap, group.map(str::to_owned), level, n_modules)
 }
 
+/// [`module_group_counts`] behind egui's cross-frame `Context::data` memo,
+/// keyed on every input that can change it; recomputed only on a key miss.
+///
+/// Shared by the enrichment and coverage setup blocks. A direct call would
+/// re-walk ~573 modules on every frame of a panel that repaints at 4 Hz. The
+/// single `egui::Id` is safe because those two blocks never co-render — the
+/// route decides which screens exist.
+fn memoized_module_group_counts(
+    ui: &egui::Ui,
+    settings: &SessionSettings,
+    pack: &KeggModulesCache,
+    orgs: &HashSet<String>,
+) -> (usize, usize) {
+    let key = module_group_memo_key(
+        settings.min_group_overlap,
+        settings.organism_group.as_deref(),
+        settings.organism_group_level,
+        pack.modules.len(),
+    );
+    let id = egui::Id::new("data_tab.module_group_counts");
+    let cached = ui
+        .ctx()
+        .data(|d| d.get_temp::<(ModuleGroupKey, (usize, usize))>(id));
+    match cached {
+        Some((k, v)) if k == key => v,
+        _ => {
+            let v = module_group_counts(pack, orgs, settings.min_group_overlap);
+            ui.ctx().data_mut(|d| d.insert_temp(id, (key, v)));
+            v
+        }
+    }
+}
+
+/// The memoized Group counts when Module mode has both a module catalogue and
+/// the selected Group's organism roster cached, `None` otherwise — the guard
+/// the enrichment setup block applies inline, hoisted so the coverage chain can
+/// stay a pure function of already-resolved counts.
+fn cached_module_group_counts(
+    ui: &egui::Ui,
+    settings: &SessionSettings,
+    cache: &SessionCache,
+) -> Option<(usize, usize)> {
+    if settings.analysis_mode != AnalysisMode::Module {
+        return None;
+    }
+    let pack = cache.modules_pack.as_ref()?;
+    let orgs = cache.group_org_codes.as_ref()?;
+    Some(memoized_module_group_counts(ui, settings, pack, orgs))
+}
+
 /// Count of in-Group modules and how many of those have a non-empty compound
 /// list — the cheap (no-clone) counterpart of `assemble_module_entries` used
 /// for the setup-screen funnel.
@@ -1556,5 +1864,343 @@ mod tests {
             base,
             module_group_memo_key(1, Some("Animals"), Some(2), 574)
         ); // catalogue size
+    }
+
+    // ── capture-coverage-run-target ───────────────────────────────────
+
+    fn retention(level: u8, name: &str, orgs: usize) -> crate::stage3::ModuleRetention {
+        crate::app::test_support::module_retention_fixture(level, name, orgs)
+    }
+
+    /// The result screen reads the run, so clearing the live selection — which
+    /// is what a confirmed organism-roster refresh does when KEGG retires the
+    /// species — cannot change what the finished run is called.
+    #[test]
+    fn captured_target_line_ignores_the_live_selection() {
+        let r = retention(2, "Plants", 183);
+        let captured = CoverageTarget::Captured {
+            species: Some("gmx"),
+            retention: Some(&r),
+        };
+        assert_eq!(
+            coverage_target_line(AnalysisMode::Pathway, &captured).as_deref(),
+            Some("Species: gmx")
+        );
+        assert_eq!(
+            coverage_target_line(AnalysisMode::Module, &captured).as_deref(),
+            Some("Group: Plants (Level 2, 183 organisms)")
+        );
+    }
+
+    /// Before a run there is nothing to be provenance of, so the live selection
+    /// is the answer — and it renders in the SAME form as the result screen and
+    /// as the enrichment screens.
+    #[test]
+    fn selected_target_line_matches_the_shared_module_format() {
+        let selected = CoverageTarget::Selected {
+            species: Some("gmx"),
+            group: Some("Plants"),
+            group_level: Some(2),
+            group_org_count: Some(183),
+        };
+        assert_eq!(
+            coverage_target_line(AnalysisMode::Pathway, &selected).as_deref(),
+            Some("Species: gmx")
+        );
+        assert_eq!(
+            coverage_target_line(AnalysisMode::Module, &selected).as_deref(),
+            Some("Group: Plants (Level 2, 183 organisms)"),
+            "the coverage screens used to render a shorter `(level 2)` with no \
+             organism count, which data-summary-panel never authorised"
+        );
+    }
+
+    /// Omission, not placeholders: `Group: — (Level —, — organisms)` is not a
+    /// coherent string, and the capability requires these lines to render only
+    /// when their underlying selection exists.
+    #[test]
+    fn target_line_is_omitted_when_its_source_is_absent() {
+        let nothing_selected = CoverageTarget::Selected {
+            species: None,
+            group: None,
+            group_level: None,
+            group_org_count: None,
+        };
+        assert_eq!(
+            coverage_target_line(AnalysisMode::Pathway, &nothing_selected),
+            None
+        );
+        assert_eq!(
+            coverage_target_line(AnalysisMode::Module, &nothing_selected),
+            None
+        );
+
+        // A Group picked but its org-codes not yet cached is still incomplete.
+        let half_selected = CoverageTarget::Selected {
+            species: None,
+            group: Some("Plants"),
+            group_level: Some(2),
+            group_org_count: None,
+        };
+        assert_eq!(
+            coverage_target_line(AnalysisMode::Module, &half_selected),
+            None
+        );
+
+        let nothing_captured = CoverageTarget::Captured {
+            species: None,
+            retention: None,
+        };
+        assert_eq!(
+            coverage_target_line(AnalysisMode::Pathway, &nothing_captured),
+            None
+        );
+        assert_eq!(
+            coverage_target_line(AnalysisMode::Module, &nothing_captured),
+            None
+        );
+    }
+
+    // ── report-coverage-entry-chain ───────────────────────────────────
+
+    use crate::coverage::CoverageResult;
+    use crate::kegg::{KeggCompoundSet, KeggModuleEntry};
+
+    fn compound_set(id: &str, compounds: &[&str]) -> KeggCompoundSet {
+        KeggCompoundSet {
+            id: id.to_string(),
+            name: format!("entry {id}"),
+            compounds: compounds.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    /// Eight entries chosen so the two thresholds exclude **overlapping but
+    /// different** subsets: `e5` and `e8` clear `hits >= 1` while failing the
+    /// entry-size floor, so an independent hit tally would count five and
+    /// exceed the entry-size count of four — breaking the chain's
+    /// monotonicity. That is what makes the cumulative requirement testable.
+    fn chain_fixture() -> CoverageResult {
+        let detected: HashSet<String> = ["C1", "C2", "C3"].iter().map(|s| s.to_string()).collect();
+        crate::coverage::compute(
+            &detected,
+            &[
+                compound_set("e1", &["C1", "C2", "C3", "C4"]), // size 4, hits 3
+                compound_set("e2", &["C1", "C2", "C3"]),       // size 3, hits 3
+                compound_set("e3", &["C1", "C5", "C6", "C7"]), // size 4, hits 1
+                compound_set("e4", &["C9", "C10"]),            // size 2, hits 0
+                compound_set("e5", &["C1", "C2"]),             // size 2, hits 2 — floor-excluded
+                compound_set("e6", &[]),                       // size 0, no compound list
+                compound_set("e7", &["C8", "C9", "C10", "C11"]), // size 4, hits 0
+                compound_set("e8", &["C2"]),                   // size 1, hits 1 — floor-excluded
+            ],
+        )
+    }
+
+    fn chain_settings(
+        mode: AnalysisMode,
+        min_entry_size: usize,
+        min_hit_count: usize,
+        top_n: usize,
+    ) -> SessionSettings {
+        SessionSettings {
+            analysis_mode: mode,
+            coverage_min_entry_size: min_entry_size,
+            min_hit_count,
+            top_n,
+            ..SessionSettings::default()
+        }
+    }
+
+    fn retention_counts(total: usize, retained: usize) -> ModuleRetention {
+        let mut r = crate::app::test_support::module_retention_fixture(2, "Animals", 183);
+        r.total_modules = total;
+        r.retained_modules = retained;
+        r
+    }
+
+    fn modules_pack(n: usize) -> KeggModulesCache {
+        let now = Utc::now();
+        KeggModulesCache {
+            modules: (0..n)
+                .map(|i| {
+                    (
+                        format!("M{i:05}"),
+                        KeggModuleEntry {
+                            name: format!("module {i}"),
+                            compounds: vec![],
+                            complete_orgs: HashSet::new(),
+                            fetched_at: now,
+                        },
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    fn species_cache(with_compounds: usize, empty: usize) -> SpeciesKegg {
+        let mut pathways: Vec<KeggCompoundSet> = (0..with_compounds)
+            .map(|i| compound_set(&format!("p{i}"), &["C1"]))
+            .collect();
+        pathways.extend((0..empty).map(|i| compound_set(&format!("q{i}"), &[])));
+        SpeciesKegg {
+            code: "hsa".to_string(),
+            fetched_at: Utc::now(),
+            pathways,
+        }
+    }
+
+    /// T1-A — the invariant the chain claims. Asserted on the formatter's
+    /// text, not on `displayed_rows`'s internals: restating its single `&&`
+    /// would be a test that cannot fail.
+    #[test]
+    fn the_coverage_chain_is_monotonic_and_cumulative() {
+        let result = chain_fixture();
+        let settings = chain_settings(AnalysisMode::Pathway, 3, 1, 2);
+
+        assert_eq!(
+            coverage_run_chain(&settings, &result, None),
+            vec![
+                "Pathways fetched: 8",
+                "With compound list: 7  (−1 empty)",
+                "Entry size >= 3: 4",
+                "Hits >= 1: 3",
+                "Displayed: 2 (Top N = 2)",
+            ],
+            "8 >= 7 >= 4 >= 3 >= 2, and 2 <= top_n"
+        );
+
+        // An independent `hits >= 1` tally over every row would report 5 —
+        // more than the 4 that cleared the floor — because `e5` and `e8` have
+        // hits but are too small. That is the shape the cumulative rule exists
+        // to exclude.
+        assert_eq!(result.rows.iter().filter(|r| r.hits >= 1).count(), 5);
+    }
+
+    /// T1-B — the Module result form, six lines in order.
+    #[test]
+    fn the_module_coverage_chain_renders_six_lines_in_filter_order() {
+        let result = chain_fixture();
+        let settings = chain_settings(AnalysisMode::Module, 3, 1, 2);
+        let retention = retention_counts(573, 8);
+
+        assert_eq!(
+            coverage_run_chain(&settings, &result, Some(&retention)),
+            vec![
+                "Modules fetched: 573",
+                "In selected Group: 8",
+                "With compound list: 7  (−1 empty)",
+                "Entry size >= 3: 4",
+                "Hits >= 1: 3",
+                "Displayed: 2 (Top N = 2)",
+            ]
+        );
+    }
+
+    /// T1-C — the Pathway result form carries no Module-only line and no
+    /// second catalogue-size label under any other name.
+    #[test]
+    fn the_pathway_coverage_chain_has_one_catalogue_label_and_no_group_line() {
+        let result = chain_fixture();
+        let settings = chain_settings(AnalysisMode::Pathway, 3, 1, 20);
+        let lines = coverage_run_chain(&settings, &result, None);
+
+        assert_eq!(lines.len(), 5);
+        assert!(lines[0].starts_with("Pathways fetched:"));
+        assert!(lines[1].starts_with("With compound list:"));
+        assert!(
+            !lines.iter().any(|l| l.starts_with("In selected Group:")),
+            "`In selected Group:` is Module-only"
+        );
+        assert!(
+            !lines.iter().any(|l| l.contains("Pathways in catalogue")),
+            "the catalogue size has exactly one label on both routes"
+        );
+    }
+
+    /// T1-D — "Tested" names the entries that entered the hypergeometric test,
+    /// and this route runs none.
+    #[test]
+    fn the_coverage_chain_never_reports_a_tested_count() {
+        let result = chain_fixture();
+        let retention = retention_counts(573, 8);
+        for (mode, ret) in [
+            (AnalysisMode::Pathway, None),
+            (AnalysisMode::Module, Some(&retention)),
+        ] {
+            let settings = chain_settings(mode, 3, 1, 20);
+            assert!(
+                !coverage_run_chain(&settings, &result, ret)
+                    .iter()
+                    .any(|l| l.contains("Tested")),
+                "{mode:?} mode leaked a tested count onto the coverage route"
+            );
+        }
+    }
+
+    /// T1-E — the Module setup/running form: the fixed head alone, with the
+    /// `(−<m> empty)` tail, which is derivable pre-run.
+    #[test]
+    fn the_module_setup_chain_is_the_fixed_head_alone() {
+        let settings = chain_settings(AnalysisMode::Module, 3, 1, 20);
+        let cache = SessionCache {
+            modules_pack: Some(modules_pack(573)),
+            ..SessionCache::default()
+        };
+
+        assert_eq!(
+            coverage_cache_chain(&settings, &cache, Some((158, 153))),
+            vec![
+                "Modules fetched: 573",
+                "In selected Group: 158",
+                "With compound list: 153  (−5 empty)",
+            ]
+        );
+    }
+
+    /// T1-E2 — the Pathway setup/running form: two lines, the empty count
+    /// walked off the cached catalogue, and no Module-only line.
+    #[test]
+    fn the_pathway_setup_chain_is_two_lines_with_the_empty_tail() {
+        let settings = chain_settings(AnalysisMode::Pathway, 3, 1, 20);
+        let cache = SessionCache {
+            species_kegg: Some(species_cache(296, 76)),
+            ..SessionCache::default()
+        };
+
+        assert_eq!(
+            coverage_cache_chain(&settings, &cache, None),
+            vec![
+                "Pathways fetched: 372",
+                "With compound list: 296  (−76 empty)"
+            ]
+        );
+    }
+
+    /// T1-F — at the hard floor the first two chain numbers are equal by
+    /// construction, and BOTH lines are still rendered (design D6). A later
+    /// reader must not "fix" this into a conditional line.
+    #[test]
+    fn the_chain_keeps_its_redundant_row_at_the_hard_floor() {
+        let result = chain_fixture();
+        let settings = chain_settings(AnalysisMode::Pathway, 1, 0, 20);
+        let lines = coverage_run_chain(&settings, &result, None);
+
+        assert_eq!(lines[1], "With compound list: 7  (−1 empty)");
+        assert_eq!(lines[2], "Entry size >= 1: 7");
+        assert_eq!(lines.len(), 5, "the stage that drops nothing still renders");
+    }
+
+    /// T1-G — the labels carry the EFFECTIVE `DisplayFilters` values. A raw
+    /// `coverage_min_entry_size` of 0 would otherwise label a count of 8 as
+    /// `Entry size >= 0`, describing a set the screen can never show.
+    #[test]
+    fn the_threshold_labels_use_the_clamped_filter_values() {
+        let result = chain_fixture();
+        let settings = chain_settings(AnalysisMode::Pathway, 0, 1, 20);
+        assert_eq!(settings.coverage_display_filters().min_entry_size, 1);
+
+        let lines = coverage_run_chain(&settings, &result, None);
+        assert_eq!(lines[2], "Entry size >= 1: 7");
+        assert!(!lines.iter().any(|l| l.contains(">= 0:")));
     }
 }

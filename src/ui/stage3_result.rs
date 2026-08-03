@@ -3,7 +3,7 @@
 
 use egui::RichText;
 use std::sync::mpsc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::app::{AnalysisMode, App, AppState, RefreshState, Stage3RunOutput};
 use crate::enrichment::export_csv_with_mode;
@@ -30,9 +30,6 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
     drain_render(app, ui.ctx());
     drain_refresh(app);
     drain_cache_actions(app);
-    // Stage-3-local organism-roster refresh confirm (shared with setup; outside
-    // the App-level four-modal family — see the `app-shell` spec).
-    crate::ui::stage3_setup::drain_organisms_refresh_confirm(app, ui.ctx());
 
     // Snapshot read-only fields we need to render.
     let snap = match &app.state {
@@ -696,7 +693,33 @@ fn download_csv(app: &App) {
     }
 }
 
-fn rerun(app: &mut App) {
+/// `pub(crate)` purely so `app.rs`'s test module can drive it — this file's own
+/// test module holds pure helpers and no `App` fixture. Same move, and same
+/// reason, as `build_stage3_spawn_inputs`.
+pub(crate) fn rerun(app: &mut App) {
+    // Establish that the run CAN be assembled before consuming the state that
+    // holds the previous one. `Stage3EnrichResult` is the sole holder of the
+    // enrichment output and there is no route back to a discarded run, so
+    // transitioning first and discovering afterwards costs the user everything
+    // and returns nothing. `start_refresh` below is the local precedent for the
+    // borrow-first shape. See the `data-summary-panel` capability spec.
+    {
+        let AppState::Stage3EnrichResult { dam_results, .. } = &app.state else {
+            return;
+        };
+        if crate::ui::stage3_setup::build_stage3_run_inputs(dam_results, &app.settings, &app.cache)
+            .is_none()
+        {
+            // Deliberately does NOT say "cache missing": in the state that
+            // actually produces this, the cache is present and the target
+            // SELECTION is gone (a retired organism clears it).
+            warn!(
+                "re-run refused: the analysis target for the current mode is incomplete; state left intact"
+            );
+            return;
+        }
+    }
+
     let prev = std::mem::take(&mut app.state);
     let AppState::Stage3EnrichResult { dam_results, .. } = prev else {
         return;
@@ -704,11 +727,14 @@ fn rerun(app: &mut App) {
     let Some((params, target, pubchem_total)) =
         crate::ui::stage3_setup::build_stage3_run_inputs(&dam_results, &app.settings, &app.cache)
     else {
+        // Unreachable: the guard above established this succeeds. Restoring the
+        // result is impossible here (its other fields were consumed by the take),
+        // so the honest fallback is the setup screen with an accurate message.
+        error!("re-run inputs vanished between the guard and the spawn");
         app.state = AppState::Stage3EnrichSetup {
             dam_results,
             error: Some(
-                "KEGG cache missing for the current analysis mode; return to Stage 3 setup to re-fetch."
-                    .to_string(),
+                "The analysis target became unavailable while starting the re-run.".to_string(),
             ),
             kegg_fetch: None,
             modules_fetch: None,
@@ -764,7 +790,28 @@ fn drain_cache_actions(app: &mut App) {
 /// force re-fetch there, where the fetch's progress strip + `Run Enrichment`
 /// live. Only reached from `drain_cache_actions` after the `idle` guard, so the
 /// state is always `Stage3EnrichResult` here.
-fn refresh_catalogue_via_setup(app: &mut App) {
+pub(crate) fn refresh_catalogue_via_setup(app: &mut App) {
+    // Establish that the re-fetch CAN start before consuming the state that
+    // holds the completed run. The target selection is what the fetch is keyed
+    // by, and a retired organism clears it while leaving the fetched catalogue
+    // intact — so this is NOT the same predicate `rerun` uses, which
+    // additionally needs that catalogue. See the `data-summary-panel` spec.
+    let target_ready = match app.settings.analysis_mode {
+        AnalysisMode::Module => {
+            app.settings.organism_group_level.is_some()
+                && app.settings.organism_group.is_some()
+                && app.cache.group_org_codes.is_some()
+        }
+        AnalysisMode::Pathway => app.settings.kegg_species.is_some(),
+    };
+    if !target_ready {
+        warn!(
+            mode = ?app.settings.analysis_mode,
+            "catalogue refresh refused: no analysis target selected; state left intact"
+        );
+        return;
+    }
+
     let prev = std::mem::take(&mut app.state);
     if let AppState::Stage3EnrichResult { dam_results, .. } = prev {
         app.state = AppState::Stage3EnrichSetup {

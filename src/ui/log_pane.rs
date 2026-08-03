@@ -60,15 +60,21 @@ pub struct LogPaneState {
     /// (Group/species preserved) and triggering the force re-fetch there.
     pub refresh_catalogue_requested: bool,
     /// Set to `true` when the user clicks `Refresh KEGG organism list` in the
-    /// Data tab's Stage 3 Cache-data block (setup OR result; the roster is
-    /// mode-independent). Drained by `stage3_setup::show` / `stage3_result::show`,
-    /// which open the Stage-3-local refresh confirm (NOT an App-level modal — see
-    /// the `app-shell` organism-roster refresh requirement).
+    /// Data tab's Cache-data block (the roster is mode- and route-independent,
+    /// so the button renders on five `AppState` variants). Drained by
+    /// `App::drain_frame_dialogs` every frame, which opens the refresh confirm
+    /// (NOT an App-level modal — see the `app-shell` organism-roster refresh
+    /// requirement). Frame-owned rather than screen-owned precisely so the set
+    /// of screens that can produce it equals the set that consumes it.
     pub organisms_refresh_requested: bool,
-    /// `true` while the organism-roster refresh confirm dialog is open. Gated
-    /// here (a Stage-3-local confirm, like `RefreshState`) rather than as an
-    /// App-level `*ModalState`, so it sits outside the four-modal mutual-exclusion
-    /// rule and `drain_modal_requests`.
+    /// `true` while the organism-roster refresh confirm dialog is open. Lives
+    /// here (like `RefreshState`) rather than as an App-level `*ModalState`, so
+    /// it stays outside the four-modal mutual-exclusion rule and
+    /// `drain_modal_requests` — App-owned, but not one of the four.
+    ///
+    /// Rendered unconditionally by `App::drain_frame_dialogs`, so an unanswered
+    /// confirm follows the user across navigation instead of ghosting;
+    /// `App::start_new_round` is the only thing that clears it unanswered.
     pub organisms_refresh_confirm_open: bool,
 }
 

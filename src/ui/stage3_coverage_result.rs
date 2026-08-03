@@ -236,21 +236,34 @@ fn build_opts(app: &App, w_px: u32, h_px: u32) -> CoverageDotplotOpts {
 }
 
 /// Species code in Pathway mode; `"<Level> / <Group>"` in Module mode.
+///
+/// Read from the provenance the run captured when it finished — NOT from
+/// `app.settings`, which a confirmed organism-roster refresh clears when KEGG
+/// retires the selection, leaving a finished run's exports labelled `—`. This
+/// feeds the dot-plot annotation strip (and therefore the exported PNG) and the
+/// exported CSV; see the `coverage-ui` capability spec.
+///
+/// The analysis mode still comes from `app.settings`: `analysis-mode-toggle`
+/// forbids an `AppState`-local `analysis_mode`, and the toggle renders only on
+/// the setup screens, so it cannot change while this screen is displayed.
+///
+/// Both sinks take a `String`, so unlike the Data-tab line this cannot omit;
+/// the `—` fallbacks are unreachable from a real run.
 fn target_label(app: &App) -> String {
+    let AppState::Stage3CoverageResult {
+        target_species,
+        module_retention,
+        ..
+    } = &app.state
+    else {
+        return "—".to_string();
+    };
     match app.settings.analysis_mode {
-        AnalysisMode::Pathway => app
-            .settings
-            .kegg_species
-            .clone()
-            .unwrap_or_else(|| "—".to_string()),
-        AnalysisMode::Module => format!(
-            "{} / {}",
-            app.settings
-                .organism_group_level
-                .map(|l| l.to_string())
-                .unwrap_or_else(|| "—".into()),
-            app.settings.organism_group.as_deref().unwrap_or("—")
-        ),
+        AnalysisMode::Pathway => target_species.clone().unwrap_or_else(|| "—".to_string()),
+        AnalysisMode::Module => match module_retention {
+            Some(r) => format!("{} / {}", r.group_level, r.group_name),
+            None => "— / —".to_string(),
+        },
     }
 }
 
@@ -503,8 +516,50 @@ fn thousands(n: usize) -> String {
 
 /// The four live display filters. All write settings only; the next render
 /// picks them up, so they stay enabled even while a plot render is in flight.
+///
+/// Laid out **in the order the filters run** — entry size, hit count, sort,
+/// then the `Top N` cap — which is also the order the Data tab's entry chain
+/// reports and the order `displayed_rows` states. The layout is the only thing
+/// that changed: the two thresholds are applied as one conjunction, so which is
+/// named first cannot move a row. `Top N` used to sit above the thresholds it
+/// caps, which read backwards against both.
 fn render_filters(ui: &mut egui::Ui, app: &mut App, result: &CoverageResult) {
     let settings = &mut app.settings;
+
+    ui.horizontal(|ui| {
+        ui.label("Minimum entry size:");
+        // Hard minimum 1 at the input, matching the load-boundary clamp, so a
+        // zero-compound entry can never be displayed, plotted, or exported.
+        ui.add(
+            egui::DragValue::new(&mut settings.coverage_min_entry_size)
+                .speed(1)
+                .range(crate::app::MIN_COVERAGE_ENTRY_SIZE..=200),
+        );
+    });
+
+    // What the floor is hiding. Without this the ~20 % of a species catalogue
+    // that KEGG annotates with no compounds — every global/overview map among
+    // them — would vanish with no account of it anywhere. It stays directly
+    // beneath the control it explains, not beside whatever ends up adjacent.
+    if result.entries_without_compounds > 0 {
+        ui.label(
+            RichText::new(format!(
+                "{} of {} entries have no compounds in KEGG and are never shown.",
+                result.entries_without_compounds, result.entries_total
+            ))
+            .small()
+            .color(theme::TEXT_SECONDARY),
+        );
+    }
+
+    ui.horizontal(|ui| {
+        ui.label("Minimum hit count:");
+        ui.add(
+            egui::DragValue::new(&mut settings.min_hit_count)
+                .speed(1)
+                .range(0..=100),
+        );
+    });
 
     ui.horizontal(|ui| {
         ui.label("Sort by");
@@ -520,6 +575,9 @@ fn render_filters(ui: &mut egui::Ui, app: &mut App, result: &CoverageResult) {
             });
     });
 
+    // Last: a cap on the sorted remainder, not a threshold on a row's own
+    // values. Sort sits with it because the two compose — sort decides WHICH
+    // rows the cap keeps.
     ui.horizontal(|ui| {
         ui.label("Top N entries:");
         ui.add(
@@ -528,40 +586,6 @@ fn render_filters(ui: &mut egui::Ui, app: &mut App, result: &CoverageResult) {
                 .range(1..=500),
         );
     });
-
-    ui.horizontal(|ui| {
-        ui.label("Minimum hit count:");
-        ui.add(
-            egui::DragValue::new(&mut settings.min_hit_count)
-                .speed(1)
-                .range(0..=100),
-        );
-    });
-
-    ui.horizontal(|ui| {
-        ui.label("Minimum entry size:");
-        // Hard minimum 1 at the input, matching the load-boundary clamp, so a
-        // zero-compound entry can never be displayed, plotted, or exported.
-        ui.add(
-            egui::DragValue::new(&mut settings.coverage_min_entry_size)
-                .speed(1)
-                .range(crate::app::MIN_COVERAGE_ENTRY_SIZE..=200),
-        );
-    });
-
-    // What the floor is hiding. Without this the ~20 % of a species catalogue
-    // that KEGG annotates with no compounds — every global/overview map among
-    // them — would vanish with no account of it anywhere.
-    if result.entries_without_compounds > 0 {
-        ui.label(
-            RichText::new(format!(
-                "{} of {} entries have no compounds in KEGG and are never shown.",
-                result.entries_without_compounds, result.entries_total
-            ))
-            .small()
-            .color(theme::TEXT_SECONDARY),
-        );
-    }
 }
 
 /// The sort keys the UI currently offers.
@@ -794,5 +818,55 @@ mod tests {
     fn compounds_cell_renders_ids_only() {
         assert_eq!(compounds_cell(&ids(2)), "C00000, C00001");
         assert_eq!(compounds_cell(&[]), "—");
+    }
+
+    // ── capture-coverage-run-target ───────────────────────────────────
+    //
+    // A finished run's target is provenance: it names what was surveyed and
+    // MUST survive a cleared selection, because the dot-plot annotation strip
+    // and the CSV both carry it into files the user keeps. See the
+    // `coverage-ui` capability spec.
+
+    use crate::app::test_support::{app_on_coverage_result, module_retention_fixture};
+
+    /// The exported PNG and CSV both reach the label through `target_label`,
+    /// so one assertion covers both. `download_csv` itself opens a native file
+    /// dialog and cannot be driven from a test.
+    #[test]
+    fn pathway_target_survives_a_cleared_species_selection() {
+        let mut app = app_on_coverage_result(AnalysisMode::Pathway, Some("gmx".to_string()), None);
+        app.settings.kegg_species = Some("gmx".to_string());
+        assert_eq!(target_label(&app), "gmx");
+
+        // What a confirmed organism-roster refresh does when KEGG retires the
+        // species. The run is untouched; only the selection is gone.
+        app.settings.kegg_species = None;
+
+        assert_eq!(
+            target_label(&app),
+            "gmx",
+            "a completed run's exports must still name the species it surveyed"
+        );
+    }
+
+    #[test]
+    fn module_target_survives_a_cleared_group_selection() {
+        let mut app = app_on_coverage_result(
+            AnalysisMode::Module,
+            None,
+            Some(module_retention_fixture(2, "Plants", 183)),
+        );
+        app.settings.organism_group = Some("Plants".to_string());
+        app.settings.organism_group_level = Some(2);
+        assert_eq!(target_label(&app), "2 / Plants");
+
+        app.settings.organism_group = None;
+        app.settings.organism_group_level = None;
+
+        assert_eq!(
+            target_label(&app),
+            "2 / Plants",
+            "Module mode reads module_retention, which the clearing never touches"
+        );
     }
 }

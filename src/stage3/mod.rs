@@ -652,6 +652,10 @@ pub struct CoverageRunOutput {
     pub cpd_to_names: HashMap<String, Vec<String>>,
     /// Module mode only, exactly as on the enrichment route.
     pub module_retention: Option<ModuleRetention>,
+    /// Pathway mode only: the species code this run was performed against,
+    /// captured from the run's own target. `None` in Module mode, where the
+    /// target components already ride on `module_retention`.
+    pub target_species: Option<String>,
     /// `None` in single-mode runs.
     pub mode_partition: Option<CoverageModePartition>,
     /// One `DedupReport` per ion-mode table, in `ion_tables` order. Empty when
@@ -784,11 +788,26 @@ pub async fn run_coverage(
         funnel,
         cpd_to_names,
         module_retention,
+        target_species: captured_species(target),
         mode_partition,
         dedup_reports,
         pubchem_time_span,
         kegg_conv_time_span,
     })
+}
+
+/// The species code a coverage run was performed against, taken from the run's
+/// own `AnalysisTarget`. `None` in Module mode, where `ModuleRetention` already
+/// carries the target's components.
+///
+/// A free function rather than an inline `match` so it is unit-testable without
+/// a runtime: `run_coverage` is `async` and takes two live clients, and this is
+/// the one assertion that distinguishes capturing from the run's target from
+/// capturing from `app.settings` when the result state is built. Note this
+/// function — like `run_coverage` itself — has no access to `SessionSettings`,
+/// so the capture cannot silently fall back to them.
+pub(crate) fn captured_species(target: &AnalysisTarget) -> Option<String> {
+    target.pathway_species().map(|sk| sk.code.clone())
 }
 
 impl CoverageRunOutput {
@@ -801,6 +820,7 @@ impl CoverageRunOutput {
             funnel: self.funnel,
             cpd_to_names: self.cpd_to_names,
             module_retention: self.module_retention,
+            target_species: self.target_species,
             mode_partition: self.mode_partition,
             dedup_reports: self.dedup_reports,
             pubchem_time_span: self.pubchem_time_span,
@@ -1598,6 +1618,40 @@ mod tests {
     use super::*;
     use crate::dam::types::{DamFeature, FcBasis, Trend};
     use tracing_test::traced_test;
+
+    /// `captured_species` is the whole point of the capture: it reads the run's
+    /// own target and has no access to `SessionSettings`, so a completed run's
+    /// identity cannot be re-derived from a selection the user may since have
+    /// lost. Asserted here rather than through `run_coverage`, which is `async`
+    /// and needs two live clients — this is the seam that makes the property
+    /// testable at all.
+    #[test]
+    fn captured_species_reads_the_runs_own_target() {
+        let target = AnalysisTarget::Pathway {
+            species_kegg: crate::kegg::SpeciesKegg {
+                code: "gmx".to_string(),
+                fetched_at: Utc::now(),
+                pathways: vec![],
+            },
+        };
+        assert_eq!(captured_species(&target), Some("gmx".to_string()));
+    }
+
+    /// Module mode captures nothing new — `ModuleRetention` already carries the
+    /// Group name and level, so a second copy would be two sources for one fact.
+    #[test]
+    fn captured_species_is_none_in_module_mode() {
+        let target = AnalysisTarget::Module {
+            modules_pack: crate::kegg::KeggModulesCache {
+                modules: std::collections::HashMap::new(),
+            },
+            group_level: 2,
+            group_name: "Plants".to_string(),
+            group_org_codes: std::collections::HashSet::new(),
+            min_group_overlap: 1,
+        };
+        assert_eq!(captured_species(&target), None);
+    }
 
     // Decision A (logs are contract): the conflict-only-strict exclusion INFO log
     // is verified directly. `log_k_diagnostics` is private (only reachable from

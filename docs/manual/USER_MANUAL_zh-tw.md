@@ -1,8 +1,8 @@
 # 使用手冊
 
-軟體版本：metabolopan v1.4.0
+軟體版本：metabolopan v1.5.0
 
-更新日期：2026-07-30
+更新日期：2026-08-03
 
 本手冊記錄本軟體在數值上的運作方式——演算法、預設門檻值、以及與常見替代做法的差異——讓你能在論文或報告中為它產生的每一個數字辯護。
 在發表任何依賴本軟體的結果之前，請先閱讀一次本手冊。
@@ -147,6 +147,7 @@
     - [輸入](#inputs)
     - [設定畫面](#setup-screen)
     - [結果畫面](#result-screen)
+    - [Data 分頁中的條目鏈](#the-entry-chain-in-the-data-tab)
     - [點圖](#dot-plot)
     - [CSV 匯出](#csv-export)
   - [進階主題與參考](#advanced-topics--reference)
@@ -888,19 +889,51 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
 
 點擊 `Entry`、`Hits` 或 `Coverage` 欄標題即可依該欄排序；**Sort by** 選擇器與這些標題寫入同一個設定，因此兩者永遠一致。
 
-**四個即時篩選器**會在下一幀重新套用，不重跑、不發出 PubChem 請求、也不發出 KEGG 請求：
+**四個即時篩選器**會在下一幀重新套用，不重跑、不發出 PubChem 請求、也不發出 KEGG 請求。
+它們依照套用的順序由上而下排列，因此畫面的閱讀方向與資料流動的方向一致：
 
-- **Sort by** — `Coverage`（預設）或 `Hits`。點擊 `Hits` 或 `Coverage` 欄標題會寫入同一個設定，因此兩個控制項永遠一致；當前排序欄位以 `(desc)` 標示。
-- **Top N entries** — 顯示上限。
-- **Minimum hit count** — 丟棄偵測到的化合物數低於此值的條目。
 - **Minimum entry size** — 丟棄在 *KEGG 中*化合物數低於此值的條目。預設 `3`，**硬性下限 `1`**。
 
-那個下限正是讓「依覆蓋率遞減」的表格有意義的東西。
-一份典型物種路徑目錄中約有 **20 %** 的條目**完全沒有** KEGG 化合物——包括每一張「global and overview map」，例如 `hsa01100 Metabolic pathways`——另有約 10 % 只有一或兩個。
-若沒有下限，這些條目會以 `0 %`、`50 %` 或單一命中的 `100 %` 盤據表格頂端，排在每一個有意義的結果之前。
-零化合物條目的數量會以灰色文字報告在該控制項下方（`76 of 372 entries have no compounds in KEGG and are never shown.`），而非被默默吞掉。
+    那個下限正是讓「依覆蓋率遞減」的表格有意義的東西。
+    一份典型物種路徑目錄中約有 **20 %** 的條目**完全沒有** KEGG 化合物——包括每一張「global and overview map」，例如 `hsa01100 Metabolic pathways`——另有約 10 % 只有一或兩個。
+    若沒有下限，這些條目會以 `0 %`、`50 %` 或單一命中的 `100 %` 盤據表格頂端，排在每一個有意義的結果之前。
+    零化合物條目的數量會以灰色文字報告在該控制項下方（`76 of 372 entries have no compounds in KEGG and are never shown.`），而非被默默吞掉。
+
+- **Minimum hit count** — 丟棄偵測到的化合物數低於此值的條目。
+- **Sort by** — `Coverage`（預設）或 `Hits`。點擊 `Hits` 或 `Coverage` 欄標題會寫入同一個設定，因此兩個控制項永遠一致；當前排序欄位以 `(desc)` 標示。
+- **Top N entries** — 顯示上限。它排在最後，因為它是對排序後剩下的結果設上限，而不是檢驗某一列自身的數值。
+
+兩個門檻是一起套用的，因此哪一個先列出並不會改變你看到的列。
+之所以要共用同一個順序，是為了讓控制項、**Data** 分頁報告的計數、以及文件所述的篩選語意三者無法各自漂移。
 
 > **注意：** 沒有任何條目是依其識別碼被排除的。軟體中任何地方都沒有硬編碼的「global map」ID 清單；那些條目之所以在表格中消失，只是因為 KEGG 沒有給它們化合物，接著最小條目大小下限就像處理任何其他空條目一樣把它們移除。共用的磁碟 KEGG 快取同樣從不被篩選，因此一次覆蓋率執行不會影響之後富集分析的宇集。
+
+<a id="the-entry-chain-in-the-data-tab"></a>
+### Data 分頁中的條目鏈
+
+底部面板的 **Data** 分頁回答表格無法回答的問題：這次分析中總共有多少路徑或模組參與，其餘的又去了哪裡。
+它的 `Coverage data` 區塊會把整條鏈逐階段列出，順序與篩選控制項相同：
+
+| 行 | 模組模式 | 路徑模式 |
+| --- | --- | --- |
+| `Modules fetched:` / `Pathways fetched:` | 整份 KEGG 模組目錄 | 該物種目錄中的每一條路徑 |
+| `In selected Group:` | 通過生物 Group 篩選的模組 | —（路徑模式沒有 Group 篩選） |
+| `With compound list:` | 其中 KEGG 有標註化合物的那些，被丟棄的數量列在 `(−N empty)` | 同左 |
+| `Entry size >= <k>:` | 通過 **Minimum entry size** 下限的條目 | 同左 |
+| `Hits >= <h>:` | *在上一行的基礎上*，再通過 **Minimum hit count** 的條目 | 同左 |
+| `Displayed: <n> (Top N = <t>)` | 排序與截斷後表格實際顯示的列 | 同左 |
+
+每個數字都小於或等於上一行的數字，因此整條鏈讀起來就是一個漏斗。
+最後三行是**累積**的——被大小下限移除的條目不會在下游被重新計入，即使它的命中數本來可以通過下一個門檻。
+
+前面幾行在一次分析中是固定的，不會變動。
+最後三行跟隨篩選控制項，並在你拖動控制項後的**下一幀**更新，因為 Data 分頁的繪製順序在控制項之前。
+點圖的註解條又是另一回事：它報告的是你上一次按下 `Draw dot plot` 時的篩選值，而不是當前值。
+
+當硬性下限為 `1` 時，`With compound list:` 與 `Entry size >= 1:` 必然相等——一個條目「至少有一個化合物」與「有化合物清單」是同一件事。
+兩行仍然都會顯示：一個什麼都沒濾掉的漏斗階段本身就是有用的資訊，而長度會隨設定改變的鏈更難閱讀。
+
+這條路線上任何地方都沒有 `Tested:` 這一行。「Tested」意指「進入了超幾何檢定」，而這條路線不執行任何檢定。
 
 <a id="dot-plot"></a>
 ### 點圖（Dot plot）
@@ -1197,7 +1230,7 @@ Data 分頁中的兩個按鈕——**[Save settings…]** 與 **[Load settings�
 ```json
 {
   "schema_version": 1,
-  "app_version": "1.4.0",
+  "app_version": "1.5.0",
   "saved_at": "2026-06-04T09:15:22Z",
   "user_note": "",
   "input_files": [

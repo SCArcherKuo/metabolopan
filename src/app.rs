@@ -745,8 +745,11 @@ pub enum AppState {
     /// height autosize) read identically.
     ///
     /// Note there is deliberately no `refresh_state`: the coverage route offers
-    /// no PubChem/KEGG refresh action, so `is_busy` on this variant turns on
-    /// `rendering` alone.
+    /// no catalogue / PubChem / KEGG-conv refresh and no re-run, so `is_busy`
+    /// on this variant turns on `rendering` alone. The Data tab's
+    /// `Refresh KEGG organism list` button does render here — the roster is
+    /// session-wide infrastructure rather than a per-route cache, and its
+    /// confirm is owned by the frame, not by this screen.
     Stage3CoverageResult {
         /// The computed rows plus their provenance counts. Every display
         /// filter is re-applied live over these rows — no re-run, no request.
@@ -755,8 +758,23 @@ pub enum AppState {
         /// cpd ID → the user's MS-DIAL metabolite names. Consumed ONLY by the
         /// CSV exporter; the on-screen table renders bare cpd IDs.
         cpd_to_names: std::collections::HashMap<String, Vec<String>>,
-        /// Module mode only; drives the Data tab's Module target line.
+        /// Module mode only. Source of the Module target line (Data tab, dot-plot
+        /// annotation strip, CSV) on this screen, and of the Module half of the
+        /// bug-report bundle's target section.
         module_retention: Option<crate::stage3::ModuleRetention>,
+        /// Pathway mode only: the species code the run was performed against,
+        /// captured from the run's own `AnalysisTarget` when the result state was
+        /// built. This is **provenance, not a display filter** — it MUST NOT be
+        /// re-read from `settings.kegg_species`, which a confirmed organism-roster
+        /// refresh clears when KEGG retires the species, and which is therefore
+        /// unrelated to what this finished run surveyed. See the `coverage-ui`
+        /// capability spec.
+        ///
+        /// Unreachable as `None` in Pathway mode from a real run — `Run Coverage`
+        /// is gated on a fetched species — but the two export sinks take a
+        /// `String`, so when it is somehow absent they render `—` (they cannot
+        /// omit the way the Data-tab line does). Reaching that is a bug.
+        target_species: Option<String>,
         /// `None` in single-mode runs. The Data tab is its sole surface.
         mode_partition: Option<crate::stage3::CoverageModePartition>,
         /// One per ion-mode table, in `ion_tables` order; empty when dedup was
@@ -856,8 +874,10 @@ pub(crate) fn is_busy(state: &AppState) -> bool {
             rendering,
             ..
         } => !matches!(refresh_state, RefreshState::Idle) || *rendering,
-        // The coverage result screen has no refresh action, so `rendering`
-        // alone decides — there is no `refresh_state` field to consult.
+        // The coverage result screen has no catalogue / PubChem / KEGG-conv
+        // refresh, so `rendering` alone decides — there is no `refresh_state`
+        // field to consult. The roster refresh is not gated on `is_busy` at
+        // all (see `data-summary-panel`), so it does not belong here either.
         AppState::Stage3CoverageResult { rendering, .. } => *rendering,
         AppState::Initializing { .. }
         | AppState::Stage0ChooseAnalysis
@@ -1700,6 +1720,13 @@ impl App {
         self.cache = SessionCache::default();
         self.species_selector = SpeciesSelectorState::default();
         self.organism_group_selector = OrganismGroupSelectorState::default();
+        // The organism-roster confirm otherwise follows the user until they
+        // answer it — that is what stops it ghosting. This is the one exception:
+        // a session reset discards everything, and carrying a half-answered
+        // dialog through it would be surprising. The request flag needs no
+        // counterpart here; an unconditional per-frame drain cannot leave one
+        // set. See the `app-shell` capability spec.
+        self.log_ui.organisms_refresh_confirm_open = false;
         // Back to the route chooser, not to Stage 1: `settings` was just reset
         // to default, so `analysis_route` is back to `DamEnrichment` regardless
         // of which route just finished. Landing on Stage 1 would silently put a
@@ -2228,8 +2255,7 @@ impl EframeApp for App {
                 bottom_panel::show(ui, self);
             });
 
-        self.drain_modal_requests();
-        self.render_modals(ctx);
+        self.drain_frame_dialogs(ctx);
 
         // Global stage stepper / breadcrumb — clickable back-navigation, above
         // the screen body. Rendered after the bottom panel so it claims the top
@@ -2408,6 +2434,33 @@ impl App {
             || !matches!(self.settings_load_modal, SettingsLoadModalState::Closed)
             || !matches!(self.error_modal, ErrorModalState::Closed)
             || self.pending_back_nav.is_some()
+    }
+
+    /// Every dialog request the frame owes, taken and rendered between the
+    /// bottom panel and the stepper: the four-modal family via
+    /// [`Self::drain_modal_requests`] + [`Self::render_modals`], then the
+    /// organism-roster refresh confirm.
+    ///
+    /// The roster confirm sits **beside** `drain_modal_requests`, never inside
+    /// it — it is not an App-level `*ModalState` and stays outside the
+    /// four-modal mutual-exclusion family (see the `app-shell` capability
+    /// spec). What it gains here is unconditionality: the `Refresh KEGG
+    /// organism list` button renders on five `AppState` variants, so a drain
+    /// owned by two `show` functions left the request set on the other three,
+    /// to fire without warning on the next screen that did handle it.
+    ///
+    /// Running after `bottom_panel::show` is what keeps a Data-tab click and
+    /// its handling in one frame. Running before the `CentralPanel` is
+    /// cosmetic: an `egui::Window` is `Order::Middle` and panel content
+    /// `Order::Background`, so the dialog floats above regardless.
+    ///
+    /// A method rather than three inline calls because `eframe::Frame` has no
+    /// public constructor, so `App::update` cannot be driven from a test. This
+    /// is the seam the frame's dialog handling is asserted through.
+    pub(crate) fn drain_frame_dialogs(&mut self, ctx: &Context) {
+        self.drain_modal_requests();
+        self.render_modals(ctx);
+        crate::ui::stage3_setup::drain_organisms_refresh_confirm(self, ctx);
     }
 
     fn drain_modal_requests(&mut self) {
@@ -2917,6 +2970,131 @@ fn spawn_eager_organism_load(
     rx
 }
 
+/// Fixtures shared by this module's tests and other modules' `mod tests`.
+///
+/// `app::tests` keeps its own private helpers; what lives here is only what a
+/// *different* module needs. `src/ui/stage3_coverage_result.rs` tests the
+/// coverage result screen's target sourcing, which needs a real `App` parked on
+/// `Stage3CoverageResult` — a thirteen-field variant no other module can
+/// reasonably hand-build, and `app::tests` is private, so without this the
+/// fixture would have to be copied.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::*;
+
+    /// Build an `App` WITHOUT firing the eager organism load over the network.
+    /// `App::new` spawns `list_organisms` onto the runtime, but a
+    /// current-thread runtime never drives spawned tasks absent a `block_on`,
+    /// so the task is queued and dropped untouched when the runtime is dropped
+    /// at end of test — no request fires.
+    pub(crate) fn test_app() -> App {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("build current-thread test runtime");
+        App::new(LogStore::new(16), "info".to_string(), rt, None)
+    }
+
+    /// A `ModuleRetention` carrying the Group target components a completed
+    /// Module-mode run records. Built with `Some` deliberately: all three
+    /// pre-existing `Stage3CoverageResult` fixtures use `module_retention:
+    /// None`, which `assemble_module_entries` never produces in Module mode, so
+    /// a Module-mode test written against them would exercise a shape no run
+    /// can reach.
+    pub(crate) fn module_retention_fixture(
+        group_level: u8,
+        group_name: &str,
+        group_org_count: usize,
+    ) -> crate::stage3::ModuleRetention {
+        let now = Utc::now();
+        crate::stage3::ModuleRetention {
+            total_modules: 0,
+            retained_modules: 0,
+            min_group_overlap: 1,
+            group_level,
+            group_name: group_name.to_string(),
+            group_org_count,
+            oldest_fetched_at: now,
+            newest_fetched_at: now,
+        }
+    }
+
+    /// A `Stage3CoverageResult` carrying whichever target a completed run would
+    /// have captured: `target_species` in Pathway mode, `module_retention` in
+    /// Module mode.
+    pub(crate) fn coverage_result_state(
+        target_species: Option<String>,
+        module_retention: Option<crate::stage3::ModuleRetention>,
+    ) -> AppState {
+        AppState::Stage3CoverageResult {
+            coverage_result: crate::coverage::CoverageResult {
+                rows: vec![],
+                detected_total: 0,
+                entries_total: 0,
+                entries_without_compounds: 0,
+                detected_in_entries: 0,
+            },
+            funnel: CoverageFunnel::default(),
+            cpd_to_names: std::collections::HashMap::new(),
+            module_retention,
+            target_species,
+            mode_partition: None,
+            dedup_reports: vec![],
+            pubchem_time_span: None,
+            kegg_conv_time_span: None,
+            dotplot_tex: None,
+            rendering: false,
+            render_rx: None,
+            confirming_new_round: false,
+            height_user_overridden: false,
+        }
+    }
+
+    /// An `App` parked on a completed coverage run, with `settings` matching the
+    /// mode so the screen renders the arm under test.
+    pub(crate) fn app_on_coverage_result(
+        mode: AnalysisMode,
+        target_species: Option<String>,
+        module_retention: Option<crate::stage3::ModuleRetention>,
+    ) -> App {
+        let mut app = test_app();
+        app.settings.analysis_mode = mode;
+        app.state = coverage_result_state(target_species, module_retention);
+        app
+    }
+
+    /// An `App` parked on the shared running screen, with a roster already
+    /// loaded so the refresh confirm is reachable.
+    ///
+    /// The progress/result senders are dropped immediately: nothing in this
+    /// state drains them except the `CentralPanel` dispatch, which no test
+    /// here runs. `run_handle` is a real `AbortHandle` from a task spawned onto
+    /// the current-thread test runtime, which never drives it.
+    pub(crate) fn app_on_enrich_running(payload: RunningPayload) -> App {
+        let mut app = test_app();
+        let run_handle = app.rt.spawn(async {}).abort_handle();
+        let (_pubchem_tx, pubchem_progress_rx) = mpsc::channel();
+        let (_conv_tx, kegg_conv_progress_rx) = mpsc::channel();
+        let (_result_tx, result_rx) = mpsc::channel();
+        app.organisms.state = OrganismsLoadState::Loaded {
+            organisms: vec![],
+            fetched_at: Utc::now(),
+        };
+        app.state = AppState::Stage3EnrichRunning {
+            payload,
+            phase: Stage3Phase::PubChem,
+            pubchem_progress_rx,
+            kegg_conv_progress_rx,
+            result_rx,
+            pubchem_completed: 0,
+            pubchem_total: 0,
+            kegg_conv_completed: 0,
+            kegg_conv_total: 0,
+            run_handle,
+        };
+        app
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! Unit tests for `SessionSettings` / `SessionCache` defaults, named
@@ -3415,6 +3593,7 @@ mod tests {
             funnel: CoverageFunnel::default(),
             cpd_to_names: std::collections::HashMap::new(),
             module_retention: None,
+            target_species: None,
             mode_partition: None,
             dedup_reports: vec![],
             pubchem_time_span: None,
@@ -3562,6 +3741,160 @@ mod tests {
         assert!(!needs_nav_confirm(&coverage_running(a.clone())));
         assert!(!needs_nav_confirm(&coverage_result_state(true)));
         assert!(!needs_nav_confirm(&AppState::Stage0ChooseAnalysis));
+    }
+
+    /// A `Stage3EnrichResult` whose enrichment output is identifiable, so a test
+    /// can assert the RUN survived rather than only that the variant did.
+    fn marked_result_state(universe_size: usize) -> AppState {
+        let mut st = stage3_result_state();
+        if let AppState::Stage3EnrichResult {
+            enrichment_result, ..
+        } = &mut st
+        {
+            enrichment_result.universe_size = universe_size;
+        }
+        st
+    }
+
+    fn surviving_universe_size(state: &AppState) -> Option<usize> {
+        match state {
+            AppState::Stage3EnrichResult {
+                enrichment_result, ..
+            } => Some(enrichment_result.universe_size),
+            _ => None,
+        }
+    }
+
+    /// The minimum `DamResult` `build_stage3_run_inputs` can work with — it
+    /// indexes `dam_results[0]` unconditionally, so the happy-path tests below
+    /// cannot use the empty vec the refusal tests rely on.
+    fn one_dam_result() -> DamResult {
+        DamResult {
+            method: DamMethod::Student,
+            numerator: "A".into(),
+            denominator: "B".into(),
+            features: vec![],
+            skipped: 0,
+            fdr_method: FdrMethod::BenjaminiHochberg,
+            dedup_report: None,
+        }
+    }
+
+    fn result_state_with_dam(universe_size: usize) -> AppState {
+        let mut st = marked_result_state(universe_size);
+        if let AppState::Stage3EnrichResult { dam_results, .. } = &mut st {
+            *dam_results = vec![one_dam_result()];
+        }
+        st
+    }
+
+    /// The two controls do NOT share a precondition, and this pins the
+    /// asymmetry that an earlier draft of this change got wrong.
+    ///
+    /// A retired species clears `settings.kegg_species` and leaves
+    /// `cache.species_kegg` intact. The catalogue refresh is keyed by the
+    /// selection, so it must refuse. A re-run reads the catalogue, so it must
+    /// still proceed. Collapsing both onto one predicate would disable a control
+    /// that works.
+    #[test]
+    fn pathway_rerun_still_proceeds_when_only_the_selection_was_cleared() {
+        let mut app = test_app();
+        app.settings.analysis_mode = AnalysisMode::Pathway;
+        app.settings.kegg_species = None;
+        app.cache.species_kegg = Some(crate::kegg::SpeciesKegg {
+            code: "ath".into(),
+            fetched_at: chrono::Utc::now(),
+            pathways: vec![],
+        });
+        app.state = result_state_with_dam(555);
+
+        crate::ui::stage3_result::rerun(&mut app);
+
+        assert!(
+            matches!(app.state, AppState::Stage3EnrichRunning { .. }),
+            "a re-run whose catalogue is present must still start; only the \
+             catalogue refresh is keyed by the selection"
+        );
+    }
+
+    /// The guard must change only the refusal path.
+    #[test]
+    fn a_valid_target_still_transitions_the_catalogue_refresh() {
+        let mut app = test_app();
+        app.settings.analysis_mode = AnalysisMode::Module;
+        app.settings.organism_group_level = Some(2);
+        app.settings.organism_group = Some("Plants".into());
+        app.cache.group_org_codes = Some(std::collections::HashSet::from(["ath".to_string()]));
+        app.state = result_state_with_dam(1);
+
+        crate::ui::stage3_result::refresh_catalogue_via_setup(&mut app);
+
+        let (_, modules_fetch) =
+            setup_fetch_slots(&app.state).expect("it must land on a setup screen");
+        assert!(
+            modules_fetch.is_some(),
+            "a valid target must still transition and start the force re-fetch"
+        );
+    }
+
+    /// The catalogue refresh must not discard the run when it cannot proceed.
+    ///
+    /// `refresh_catalogue_via_setup` replaces `Stage3EnrichResult` and only then
+    /// asks whether a fetch can start. With the Module target cleared — reachable
+    /// when a confirmed organism-list refresh finds the Group retired — the answer
+    /// is no, and by then the enrichment result, funnel and dot-plot texture are
+    /// already gone, with no route back.
+    #[test]
+    fn a_refused_catalogue_refresh_keeps_the_enrichment_result() {
+        let mut app = test_app();
+        app.settings.analysis_mode = AnalysisMode::Module;
+        // The state a retired Group leaves behind: catalogue present, target gone.
+        app.settings.organism_group = None;
+        app.settings.organism_group_level = None;
+        app.cache.group_org_codes = None;
+        app.state = marked_result_state(4242);
+
+        crate::ui::stage3_result::refresh_catalogue_via_setup(&mut app);
+
+        assert_eq!(
+            surviving_universe_size(&app.state),
+            Some(4242),
+            "the completed run must survive a refusal — it cannot be recovered"
+        );
+    }
+
+    /// The same for the Pathway catalogue refresh, whose precondition is the
+    /// species SELECTION (`settings.kegg_species`), not the cached catalogue.
+    #[test]
+    fn a_refused_pathway_catalogue_refresh_keeps_the_enrichment_result() {
+        let mut app = test_app();
+        app.settings.analysis_mode = AnalysisMode::Pathway;
+        app.settings.kegg_species = None;
+        app.state = marked_result_state(777);
+
+        crate::ui::stage3_result::refresh_catalogue_via_setup(&mut app);
+
+        assert_eq!(surviving_universe_size(&app.state), Some(777));
+    }
+
+    /// `rerun` has the same ordering defect, and additionally reports a cause it
+    /// has not established: the KEGG cache is present, the target selection is not.
+    #[test]
+    fn a_refused_rerun_keeps_the_enrichment_result() {
+        let mut app = test_app();
+        app.settings.analysis_mode = AnalysisMode::Module;
+        app.settings.organism_group = None;
+        app.settings.organism_group_level = None;
+        app.cache.group_org_codes = None;
+        app.state = marked_result_state(99);
+
+        crate::ui::stage3_result::rerun(&mut app);
+
+        assert_eq!(
+            surviving_universe_size(&app.state),
+            Some(99),
+            "a re-run that cannot assemble a payload must not consume the result"
+        );
     }
 
     /// Regression: a modules-fetch terminal event must clear the slot on the
@@ -4161,5 +4494,90 @@ mod tests {
             app.organisms.state,
             OrganismsLoadState::Loaded { .. }
         ));
+    }
+
+    // ── fix-organism-refresh-request-flag ─────────────────────────────
+
+    /// One frame of the app's dialog handling, driven through the seam
+    /// `App::update` uses — `eframe::Frame` has no public constructor, so this
+    /// is as close to a real frame as a test can get.
+    fn run_frame(app: &mut App) {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            app.drain_frame_dialogs(ctx);
+        });
+    }
+
+    /// T1-A — the `Refresh KEGG organism list` button renders on five variants
+    /// but the drain lived in two `show` functions. On the running screen the
+    /// request was recorded and nothing took it.
+    #[test]
+    fn the_roster_refresh_request_is_honoured_on_a_screen_no_show_fn_handles() {
+        let mut app = test_support::app_on_enrich_running(RunningPayload::Coverage);
+        app.log_ui.organisms_refresh_requested = true;
+
+        run_frame(&mut app);
+
+        assert!(
+            app.log_ui.organisms_refresh_confirm_open,
+            "the confirm must open on the screen the click was made on"
+        );
+    }
+
+    /// T1-B — the ghost. An unhandled flag survived the frame and fired on the
+    /// next screen that did drain it, with no user action there.
+    #[test]
+    fn an_unanswered_roster_request_cannot_survive_into_a_later_screen() {
+        let mut app = test_support::app_on_enrich_running(RunningPayload::Enrichment(vec![]));
+        app.log_ui.organisms_refresh_requested = true;
+
+        run_frame(&mut app);
+        assert!(
+            !app.log_ui.organisms_refresh_requested,
+            "an unconditional drain cannot leave the flag set"
+        );
+
+        // The user answers, then navigates. With the flag already taken there
+        // is nothing left to honour, so no confirm can open on the next screen
+        // without a click behind it — which is the ghost this change removes.
+        app.log_ui.organisms_refresh_confirm_open = false;
+        app.state = AppState::Stage0ChooseAnalysis;
+        run_frame(&mut app);
+        assert!(!app.log_ui.organisms_refresh_confirm_open);
+    }
+
+    /// The other half of the lifetime rule (D2): unanswered, the confirm
+    /// follows the user rather than vanishing — which is what makes an
+    /// unconditional render safe.
+    #[test]
+    fn an_open_roster_confirm_survives_navigation() {
+        let mut app = test_support::app_on_enrich_running(RunningPayload::Coverage);
+        app.log_ui.organisms_refresh_requested = true;
+        run_frame(&mut app);
+        assert!(app.log_ui.organisms_refresh_confirm_open);
+
+        // The run finishes onto a screen the old design would have handed the
+        // dialog off to — or dropped it on.
+        app.state = AppState::Stage0ChooseAnalysis;
+        run_frame(&mut app);
+        assert!(
+            app.log_ui.organisms_refresh_confirm_open,
+            "an unanswered confirm must not disappear when the screen changes"
+        );
+    }
+
+    /// T1-C — the confirm follows the user until answered, and
+    /// `start_new_round` is the one thing that answers it for them.
+    #[test]
+    fn start_new_round_closes_an_open_roster_confirm() {
+        let mut app = test_app();
+        app.log_ui.organisms_refresh_confirm_open = true;
+
+        app.start_new_round();
+
+        assert!(
+            !app.log_ui.organisms_refresh_confirm_open,
+            "a half-answered dialog must not survive a session reset"
+        );
     }
 }
