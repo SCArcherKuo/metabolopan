@@ -100,12 +100,14 @@ logs/
 # ============================================================
 # Runtime-generated CSV exports from manual GUI testing.
 # `data/MS-DIAL-output-example.txt` and `data/metadata-example.csv`
-# are example INPUTS (committed); `dam.csv`, `all_results.csv`, and
-# `enrichment.csv` are runtime OUTPUTS that users download and rerun.
+# are example INPUTS (committed); `dam.csv`, `all_results.csv`,
+# `enrichment.csv` and `enrichment_all_results.csv` are runtime OUTPUTS
+# that users download and rerun.
 # ============================================================
 /data/dam.csv
 /data/all_results.csv
 /data/enrichment.csv
+/data/enrichment_all_results.csv
 
 # Per-session bug-report bundles downloaded from the GUI's
 # [Download bug report…] button. Personal diagnostic snapshots —

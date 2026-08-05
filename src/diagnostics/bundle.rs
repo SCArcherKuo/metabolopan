@@ -692,7 +692,7 @@ mod tests {
             kegg_conv_time_span: None,
             dual_mode_breakdown: None,
             funnel: Default::default(),
-            dotplot_tex: None,
+            dotplot: None,
             rendering: false,
             render_rx: None,
             refresh_state: RefreshState::Idle,

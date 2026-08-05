@@ -1,8 +1,8 @@
 # 使用手冊
 
-軟體版本：metabolopan v1.5.0
+軟體版本：metabolopan v1.6.0
 
-更新日期：2026-08-03
+更新日期：2026-08-05
 
 本手冊記錄本軟體在數值上的運作方式——演算法、預設門檻值、以及與常見替代做法的差異——讓你能在論文或報告中為它產生的每一個數字辯護。
 在發表任何依賴本軟體的結果之前，請先閱讀一次本手冊。
@@ -626,8 +626,8 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
 
 這三個控制項位於*結果*畫面上，讓你能在看過資料後迭代調整圖形，無須走回設定畫面。
 
-- **Enrichment FDR threshold**（預設 `0.05`）。
-- **Minimum hit count**（FDR 後的顯示過濾器；預設 `1`）。
+- **顯著性門檻**（預設 `0.05`）。套用校正時控制項標示為 `Enrichment FDR threshold`，在 `No correction` 下標示為 `Enrichment p-value threshold`——它命名的是這個界限所比較的那個量。
+- **Minimum hit count**（依命中數過濾顯示；預設 `1`）。與另外兩個一樣，移動它會**丟棄畫面上的圖**，下一次 `Draw dot plot` 會以新值重繪——不需要重跑。
   控制點圖顯示上限的 Top N 輸入欄位也位於此畫面，讓你可以在看過資料後再迭代調整，無須回到設定畫面。
 - **Top N pathways**（預設 `20`）。
 
@@ -659,7 +659,7 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
    這個取捨是對稱的：較低的 `min_entry_size` 會檢定更多路徑，但會擴大多重檢定家族 `m`。
 
    > **注意：** `m_p`（此處）與超幾何的 `m` 參數都使用交集的**集合**基數：在某個 KEGG 條目的 COMPOUND 區塊中列出多次的化合物只計**一次**，而非按出現次數計。
-   > 這個 `min_entry_size` 旋鈕與 *Minimum hit count* **正交**：前者是**縮減 `m` 的 FDR 前條目過濾器**；*Minimum hit count* 則是**不改變 p 值的 FDR 後顯示過濾器**。
+   > 這個 `min_entry_size` 旋鈕與 *Minimum hit count* **正交**：前者在**檢定之前**丟棄條目（因而在套用校正時縮減 `m` 分母）；*Minimum hit count* 只是把列從圖中隱藏，不改變任何 p 值。
 
 6. **逐路徑超幾何檢定。** 對每條通過條目大小過濾而存活的路徑 `p`，以
    `m_p = |unique(pathway.compounds) ∩ universe|`（該路徑落在可量測母體內之唯一 cpd ID 的集合基數——單一 COMPOUND 區塊內的重複 cpd ID 不會膨脹 `m_p`）以及
@@ -673,18 +673,19 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
      `> 1` 代表過度代表（命中數多於機率預期）、`= 1` 恰如預期、`< 1` 代表代表不足。
      它是點圖的 **X 軸**，也是匯出 CSV 的 `Expected` / `EnrichmentRatio` 兩欄；它**只是效應量、不含顯著性**——一個只含單一化合物的條目（`m_p = 1`）靠一次幸運命中就能得到很大的 fold enrichment，這正是為什麼選取依 FDR 而非 fold enrichment（step 9）、以及為什麼存在 `min_entry_size` 前置過濾（step 5）的原因。
      邊緣情況：當 `expected_p = 0`（該條目中沒有可量測化合物）時，比值為未定義——內部為 `NaN`，在 CSV 中寫成**空白**儲存格。
-7. **使用者所選的 FDR 校正**，透過第三階段設定畫面的獨立單選按鈕（預設為 Benjamini–Yekutieli 程序；Benjamini–Hochberg 程序只需一鍵切換；`None` 作為第三個選項，僅供探索性執行使用，見下文）。
+7. **使用者所選的 FDR 校正**，透過第三階段設定畫面的獨立單選按鈕（預設為 Benjamini–Yekutieli 程序；Benjamini–Hochberg 程序只需一鍵切換；`No correction` 作為第三個選項，僅供探索性執行使用，見下文）。
    此單選按鈕刻意與第二階段的選擇相互獨立：兩個階段有不同的相依性樣態，許多使用者會合理地想要第二階段 BH（火山圖的跨工具再現性）+ 第三階段 BY（對共享化合物條目採保守 ORA）。
    對路徑／模組 ORA 我們**預設為 BY**：路徑大量共用化合物（糖解作用 ↔ TCA 共用 G6P、丙酮酸等），因此 BH 底層的獨立性假設被違反。多數生物學工具預設為 BH；若你需要可跨工具比較的 q 值，請把單選按鈕切到 BH。
    BY 在相依情況下較為保守；預期校正後的 p 值會一律較高（較不顯著）。
-   `None` 完全跳過多重檢定校正——結果表與 CSV 中的 `fdr` 欄位會原封不動地攜帶原始 p 值。
+   `No correction` 完全跳過多重檢定校正——被帶下去的顯著性數值就是未經調整的原始 p 值。
+   既然沒有任何東西被調整過，這樣的執行所匯出的 CSV 就**不含 `FDR` 欄**，只帶 `PValue`：一個 `FDR` 欄會逐位元重複 `PValue`，而那個名字沒有任何校正掙來。
 
-   > **⚠ 警告：** 請**僅**將 `None` **用於探索性排序**，絕不可用於已發表的顯著性主張；在典型的 KEGG 路徑目錄上（約 300 條路徑受檢定），你純粹靠機率就會在 `p < 0.05` 預期約 15 個偽陽性。
+   > **⚠ 警告：** 請**僅**將 `No correction` **用於探索性排序**，絕不可用於已發表的顯著性主張；在典型的 KEGG 路徑目錄上（約 300 條路徑受檢定），你純粹靠機率就會在 `p < 0.05` 預期約 15 個偽陽性。
 
-   第二階段 DAM 單選按鈕**不**提供 `None`——約 13 k 個特徵的原始 p 會淹沒結果集；攜帶 `dam_fdr_method=NoCorrection` 的手工快照會防禦性地被強制改回 BH，並附帶一個 `tracing::warn!` 事件。
+   第二階段 DAM 單選按鈕**不**提供 `No correction`——約 13 k 個特徵的原始 p 會淹沒結果集；攜帶 `dam_fdr_method=NoCorrection` 的手工快照會防禦性地被強制改回 BH，並附帶一個 `tracing::warn!` 事件。
 
-   **色階。** 每個標記的填色將 `-log10(FDR)`（`None` 時為原始 `-log10(p)`）編碼於 ColorBrewer **YlOrRd** 9 階漸層上——所顯示之最不顯著條目（位於顯示門檻的 FDR）為最淡的黃色，加深至最顯著者的深紅色；點與色標圖例共用單一個 `-log10` 跨距，因此相同顏色在兩者間代表相同的顯著性。
-   目前作用的方法會記錄於點圖的色標標題（`-log10(FDR (BH))` / `-log10(FDR (BY))` / `None` 時為 `-log10(p-value)`——外層包裝被去除，因為軸上的值「就是」原始 p、而非 q），並記錄於匯出之富集分析 CSV 開頭的 `# FDR: BH` / `# FDR: BY` / `# FDR: None` 行。
+   **色階。** 每個標記的填色將 `-log10(FDR)`（`No correction` 時為原始 `-log10(p)`）編碼於 ColorBrewer **YlOrRd** 9 階漸層上——所顯示之最不顯著條目（位於顯示門檻的 FDR）為最淡的黃色，加深至最顯著者的深紅色；點與色標圖例共用單一個 `-log10` 跨距，因此相同顏色在兩者間代表相同的顯著性。
+   目前作用的方法會記錄於點圖的色標標題（`-log10(FDR (BH))` / `-log10(FDR (BY))` / `No correction` 時為 `-log10(p-value)`——外層包裝被去除，因為軸上的值「就是」原始 p、而非 q），並記錄於匯出之富集分析 CSV 開頭的 `# FDR: BH` / `# FDR: BY` / `# FDR: NoCorrection` 行。
    CSV 還攜帶額外的自我說明註解行，記錄該次執行所用的門檻：`# MinEntrySize: N`（FDR 前的條目大小過濾），以及在模組模式下 `# MinGroupOverlap: N`（Group 重疊門檻）。
    點圖本身在 X 軸下方還附帶一個四行的純文字註解區塊，讓審閱者僅憑圖即可重建 FDR 家族：
 
@@ -697,11 +698,14 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
 
    （當那些方法作用時，最後一行會讀作 `… Benjamini–Hochberg (BH)`，或 `raw p-value (no FDR correction)`。）
    `N` / `K` / `m` 等符號刻意完整拼出而非縮寫；受檢定數 `<m>` 是抵達 BH/BY 的條目數，也是每個原始 p 值被乘上的除數。
+   **本段中關於 `m`、以及關於過濾器跑在 FDR 之前或之後的一切，描述的都是選了 BH 或 BY 的執行。** 在 `No correction` 下沒有執行任何調整，因此不存在一個可供過濾器「之前」或「之後」定位的校正階段，也沒有 `m` 分母——條目大小過濾仍會在檢定前丟棄小條目、命中數過濾仍會隱藏列，但兩者都不再相對於一個並未發生的校正而定位。
    `m` 分母等於**通過 FDR 前 `min_entry_size` 過濾**（step 5）的路徑數——即 `m = entries.len() − entries_dropped_by_min_entry_size`。
    協調器層級的 Group 過濾（模組模式）在更早的一層套用；到 FDR 執行時，`m` 已反映了這兩道過濾。
-8. **顯示過濾（FDR 後）。** 一個使用者控制的 `min_hit_count`（預設 1）會把命中數較少的路徑從點圖與 CSV 中隱藏。
-   這是一個*顯示*過濾器——`m` 已在所有存活條目上計算完畢，因此不論此設定為何，FDR 值都是誠實的。
-   與 step 5 的 `min_entry_size` 不同：那一個是**縮減 `m` 的 FDR 前條目過濾器**；這一個是**不改變 p 值的 FDR 後顯示過濾器**。
+8. **依命中數過濾顯示。** 一個使用者控制的 `min_hit_count`（預設 1）會把命中數較少的路徑從點圖中隱藏。
+   它不會改變任何 p 值或 q 值——在選了 BH 或 BY 時，`m` 已在所有存活條目上計算完畢，因此不論此設定為何，校正後的值都是誠實的。
+   與 step 5 的 `min_entry_size` 不同：那一個在**檢定之前**丟棄條目、因而縮減 `m`；這一個只是把列從圖中隱藏。
+   它在繪圖時被評估，因此改動它會丟棄當前的圖，下一次 `Draw dot plot` 會以新值重繪。不需要重跑：這道過濾在校正套用**之後**才被查詢，因此它動不了 `m`，也改不了任何一個 p 值。
+   **它會影響哪一個 CSV 下載，取決於按鈕。** `Download enrichment results (CSV)` 寫出圖所繪製的那些列，因此這道過濾與顯著性門檻都會套用於它；`Download all results (CSV)` 寫出每一個存活的條目，兩者都不套用。`Top N` 兩個檔案都不會到達——它限制的是坐標軸能放下幾列，那不是某一列自身的性質。
 9. **點圖的「選取」與「排序」——兩種不同的依據。** 點圖以**刻意不同的準則**選擇*要繪製哪些*條目以及*如何*把它們堆疊在 Y 軸上：
    - **選取（哪些條目出現）依統計顯著性。** 在通過 `fdr < threshold` 與 `min_hit_count` 過濾（step 7–8）的條目中，圖保留 **FDR 最低的 Top N**（`top_n`，預設 20，可在結果畫面調整）。
      因此所顯示的條目永遠是*最顯著*的那些——它們**絕不**依富集倍數選取。
@@ -714,8 +718,8 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
 
    實務上的後果：當顯著條目多於 `top_n` 時，被省略的是**最不顯著**（FDR 最高）的那些——*而非*富集倍數最小的。
    顯著性把關「是否納入」；效應量只負責排列已納入者。
-   匯出的 CSV 與此無關：它列出每個存活條目並依 FDR 由小到大排序，附完整（未截斷）的名稱。
-10. **點圖畫布高度。** 匯出圖的高度會自動配合實際顯示的列數——`clamp(min(top_n, displayed) × 0.3 + 1.0, 2.0, 40)` 英吋——並在你每次 Draw / Re-draw 時**重新計算**。
+   **`Top N` 兩個 CSV 都不會到達。** `Download all results (CSV)` 列出每個存活條目並依 FDR 由小到大排序，附完整（未截斷）的名稱；`Download enrichment results (CSV)` 列出圖所繪製的那些列，但在這道上限**之前**——因此它是圖所顯示內容的超集，恰好多出被 `Top N` 截掉的那些列。
+10. **點圖畫布高度。** 匯出圖的高度會自動配合實際顯示的列數——`clamp(min(top_n, displayed) × 0.3 + 1.0, 2.0, 40)` 英吋——並在你每次繪圖時**重新計算**。
     因此若某次執行在你最初的 FDR 門檻下不顯著，而你在結果畫面放寬門檻並重繪，畫布會增大以容納新顯現的列，而非把它們塞進一張矮圖中（那會截斷 Y 軸標籤）。
     編輯 **Height (in)** 欄位會把它變成手動覆寫，並一直維持到下一次富集分析執行／重跑重置自動配合為止。
 
@@ -724,10 +728,12 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
 11. **匯出點圖（PNG 大小 + DPI）。** `Width (in)` / `Height (in)` / `DPI` 控制項與所見即所得保證的運作方式與火山圖完全相同——共用的 `pixels = round(inches × DPI)`、`pHYs` 物理尺寸、夾限、以及與預覽相同的渲染機制，描述於第二階段的[7. 將圖匯出為 PNG](#7-exporting-the-figure-as-png)。
     點圖特有的事實是：
     - 匯出預設為 `3.5 × 7.0 in @ 300 DPI`（`7.0` 是預設 `top_n = 20` 的自動配合高度）。
-    - **Height** 自動配合所顯示的列數，並在每次 Draw / Re-draw 時重新計算，除非你覆寫它（上述第 10 項），而 `Width` 與 `DPI` 是你設定的普通數值。
+    - **Height** 自動配合所顯示的列數，並在每次繪圖時重新計算，除非你覆寫它（上述第 10 項），而 `Width` 與 `DPI` 是你設定的普通數值。
     - 字型以 `Width × DPI` 為準，因此改變 `Width` 或 `DPI` 會重新縮放文字；改變 `Height` 則不會。
 
-    預覽是你上次 `Draw dot plot` / `Re-draw dot plot` 所得的影像；在改變任何尺寸（或 `Top N`、FDR 門檻、最小命中過濾）之後，請點擊 `Re-draw dot plot`，使它與下載將產生的結果相符。
+    預覽與顯示過濾器的行為，和第二階段的火山圖完全一致，理由也一樣：**改變 `Top N`、顯著性門檻或 `Minimum hit count` 會清空預覽**（按鈕回到 `Draw dot plot`），因此畫面上的圖永遠與它旁邊的控制項相符。**改變匯出尺寸則不會**——所以在調整 `Width` / `Height` / `DPI` 之後，請點擊 `Re-draw dot plot`，使預覽與下載將產生的結果相符。
+
+    `Download dot plot PNG` 不受這些影響：它是依當前的值重新算繪，而不是讀取預覽，因此即使預覽區是空的，它仍會寫出正確的圖。
 
 <a id="module-mode"></a>
 ### 模組模式（Module mode）
@@ -780,7 +786,7 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
   它的存在是為了完整性——例如「任何原核生物」的比較研究——但多數分析會受益於 Level 2（6 個候選）或 Level 3（數十個候選）以取得更細的範圍界定。
 - **`min_group_overlap` 是一個研究旋鈕。** 預設 `1`（寬鬆的 ∃-重疊）適合探索性工作。
   對於論文，請考慮測試一個較高的門檻以確保穩健性——一個 Group（例如「Animals」）中數百個生物裡只有一個擁有的模組，即使它通過了預設過濾，對該分析框架而言在生物學上仍是邊緣的。
-- **模組 CSV 欄名與路徑模式 CSV 一致。** 兩種模式都匯出相同的標頭：`EntryID,EntryName,Hits,Total,Expected,EnrichmentRatio,PValue,FDR,HitKeggIDs`。
+- **模組 CSV 欄名與路徑模式 CSV 一致。** 兩種模式都匯出相同的標頭：`EntryID,EntryName,Hits,Total,Expected,EnrichmentRatio,PValue,FDR,HitKeggIDs`。分析模式從不改變它；唯一會改變它的是校正方法——`No correction` 下 `FDR` 欄會被省略。
   （`Expected` 與 `EnrichmentRatio` 的定義見上方逐路徑超幾何步驟：`EnrichmentRatio` 即 fold enrichment = 觀測／期望。）
   在模組模式中，`EntryID` 欄攜帶 `M00001` 式的模組 ID；在路徑模式中則攜帶 `<species_code><pathway_number>` 形式的 ID（例如 `gmx00010`）。
 
@@ -789,7 +795,7 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
 
 當你完成某份資料集、想重新開始時，**Start a new analysis** 會清除一切；相對地，步進器的 **Input** 步驟則保留你的設定與快取，讓你能重跑*同一份*資料集。
 
-當你完成一次富集分析、想分析另一份資料集——或從頭重跑整個流程——時，第三階段 **Enrichment Result** 畫面會在 `[Download enrichment results CSV]` 下方獨立一行提供一個 **Start a new analysis** 按鈕。
+當你完成一次富集分析、想分析另一份資料集——或從頭重跑整個流程——時，第三階段 **Enrichment Result** 畫面會在 `[Download all results (CSV)]`——三個下載中的最後一個——下方獨立一行提供一個 **Start a new analysis** 按鈕。
 按下它會開啟一個確認對話框，警告目前的 DAM / 富集分析結果、以及任何尚未下載的圖或 CSV 都將遺失。
 按下 **Start over** 後，應用程式會把每個參數重置為其預設值、清除已載入的 MS-DIAL `.txt` / metadata `.csv` 以及記憶體中的 KEGG 資料，並把你帶回第一階段——*而不會*重新執行啟動時的生物清單載入。
 （磁碟上的 KEGG 快取會留存，因此事後重新取得相同物種或模組會是快速的快取命中。）
@@ -928,7 +934,7 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
 
 前面幾行在一次分析中是固定的，不會變動。
 最後三行跟隨篩選控制項，並在你拖動控制項後的**下一幀**更新，因為 Data 分頁的繪製順序在控制項之前。
-點圖的註解條又是另一回事：它報告的是你上一次按下 `Draw dot plot` 時的篩選值，而不是當前值。
+點圖的註解條則永遠與它們一致，因為一張圖不可能活得比它所描述的值更久：移動任何一個過濾器都會丟棄該圖，所以你當下看到的註解條，就是以當前設定值繪製的。
 
 當硬性下限為 `1` 時，`With compound list:` 與 `Entry size >= 1:` 必然相等——一個條目「至少有一個化合物」與「有化合物清單」是同一件事。
 兩行仍然都會顯示：一個什麼都沒濾掉的漏斗階段本身就是有用的資訊，而長度會隨設定改變的鏈更難閱讀。
@@ -954,6 +960,9 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
 沒有參考線，是因為沒有虛無期望可標記。
 所畫出的列正是表格顯示的那些列、順序也相同——兩者來自同一條篩選鏈。
 註記帶（annotation strip）記錄模式與目標、偵測到的化合物數、顯示了整份目錄中的多少個條目、目前生效的篩選值、一份精簡的群組紀錄，以及 `Descriptive coverage — no statistical test` 這一行。
+
+**圖是按需求繪製的，而且在你移動任何過濾器時被丟棄。** 進入畫面時顯示的是 `Click "Draw dot plot" to render the plot.` 而不是一張圖——算繪需要數秒，而一次分析恰好結束在哪組值上，未必是你想要的那組。畫出之後，改變 `Minimum entry size`、`Minimum hit count`、`Sort by` 或 `Top N`——包括點擊可排序的欄位標題——都會再次清空它，因此圖永遠不會與它旁邊那個隨著你拖曳而即時更新的表格互相矛盾。算繪進行中時按鈕會被停用，旁邊會出現 `Rendering…` 指示。
+`Download dot plot PNG` 不受這些影響：它是依當前的篩選值重新算繪，而不是讀取預覽，因此即使預覽區是空的，它仍會寫出正確的圖。
 
 <a id="csv-export"></a>
 ### CSV 匯出（CSV export）
@@ -1161,8 +1170,8 @@ Foreground — significant features (active direction)
 4. 第三階段設定：挑選一個 KEGG 物種（路徑模式）或 Level + 生物群組（模組模式）；行內進度列會串流 KEGG 擷取進度。
    完成後，點擊 `Run Enrichment`。
 5. 第三階段結果：結果面板會顯示分解區塊；因衝突被排除的 cpd ID 會以 INFO 等級出現在日誌中。
-   若想在點圖上少一些或多一些列，可行內調整 Top N，再點擊 `Re-draw dot plot`。
-   點圖會保留 Top N 個*最顯著*的條目，並依*富集倍數*堆疊（最大者在最上方）；畫布高度會在每次重繪時重新貼合所顯示的列數（見上方「點圖的選取 vs 排序」）。
+   若想在點圖上少一些或多一些列，可行內調整 Top N，再點擊 `Draw dot plot`（改動它會清空先前的圖）。
+   點圖會保留 Top N 個*最顯著*的條目，並依*富集倍數*堆疊（最大者在最上方）；畫布高度會在每次繪圖時重新貼合所顯示的列數（見上方「點圖的選取 vs 排序」）。
 
 <a id="caches-and-provenance"></a>
 ## 快取與來源（Caches and provenance）
@@ -1191,14 +1200,14 @@ Foreground — significant features (active direction)
 
 快取新鮮度——**沒有過期門檻**。
 所有 KEGG 快取都不會過期：不論年代多久，已快取的條目都會被回傳，且應用程式絕不會自行默默重新擷取。
-取而代之的是底部面板 **Data** 分頁的 `Cache data` 區塊（位於 Enrichment Analysis + Enrichment Result 畫面）會中立地呈現擷取時間，把刷新的決定留給你：
+取而代之的是底部面板 **Data** 分頁的 `Cache data` 區塊——它出現在第三階段設定之後的每一個畫面上，兩條路線皆然：Enrichment Analysis、執行中畫面、Enrichment Result，以及覆蓋率路線的 Setup 與 Coverage 畫面——會中立地呈現擷取時間，把刷新的決定留給你：
 
-- 逐物種路徑快取：顯示 `KEGG pathways (<code>): <ts>`（在設定與結果畫面皆有）；經由 `Refresh KEGG pathway cache` 按鈕重新擷取。
+- 逐物種路徑快取：顯示 `KEGG pathways (<code>): <ts>`（凡該區塊出現且已載入物種目錄之處皆有）；經由 `Refresh KEGG pathway cache` 按鈕重新擷取。
 - 模組條目：顯示一個 `KEGG modules fetched date: <oldest> -> <newest>` 跨度；warm-fetch 的決定取決於快取鍵的成員資格。
   經由 `Refresh KEGG module cache` 按鈕重新擷取。
 - 在 Enrichment **Result** 畫面上，目錄刷新按鈕（模組 / 路徑）會導回設定畫面，在那裡執行重新擷取（其進度列位於該處）；PubChem / KEGG-conv 的刷新則透過一個確認對話框就地執行。
 - 生物名冊（`organisms.json`）：啟動時載入一次（快取優先：不論年代多久，磁碟上的副本永遠勝出），可在應用程式內透過 Data 分頁 `Cache data` 區塊中的 `Refresh KEGG organism list` 按鈕刷新。
-  該按鈕會就地重新擷取 `/list/organism` 而無需重新啟動；或者，從快取目錄刪除 `organisms.json` 並重新啟動以強制冷擷取。
+  該按鈕會就地重新擷取名冊而無需重新啟動，來源是 KEGG 的 BRITE 階層（`GET /get/br:br08601`）——它過去呼叫的 `/list/organism` 端點已被 KEGG 停用；或者，從快取目錄刪除 `organisms.json` 並重新啟動以強制冷擷取。
   （`Refresh KEGG pathway cache` 按鈕是分開的——它只重新擷取所選物種的「路徑→化合物」對應，而非生物名冊。）
 
 <a id="saving-and-loading-session-settings-reproducibility"></a>
@@ -1216,7 +1225,7 @@ Data 分頁中的兩個按鈕——**[Save settings…]** 與 **[Load settings�
 
 一份美化排版（pretty-printed）的 JSON，包含：
 
-- `schema_version`（目前為 `2`——磁碟上的 schema 基準）、`app_version`、`saved_at`（UTC）、一個初始為 `""` 的 `user_note` 欄——你可以用任何文字編輯器打開檔案並填入它。
+- `schema_version`（目前為 `3`——磁碟上的 schema 基準）、`app_version`、`saved_at`（UTC）、一個初始為 `""` 的 `user_note` 欄——你可以用任何文字編輯器打開檔案並填入它。
 - `input_files` — 對於你在儲存時已載入的每個 MS-DIAL `.txt` 與中繼資料 `.csv`：該檔的 basename + 其 SHA-256。
   **僅雜湊——絕不包含你的原始資料。** 這讓未來的 Load 能偵測到你的輸入是否已偏離當初製作快照所依據的版本。
 - `settings` — 從第一階段到第三階段的每一項參數（分析模式、物種 / 生物群組、比較群組、DAM 方法、正規化、FDR 方法、門檻、匯出尺寸、富集方向 / FDR / top-N）。
@@ -1225,12 +1234,12 @@ Data 分頁中的兩個按鈕——**[Save settings…]** 與 **[Load settings�
 ### 完整檔案，逐欄位（The full file, field by field）
 
 一個完整的範例（分析進行到一半時取的單模式快照）。外層欄位已於上方說明；下表記載 `settings` 之下的每一個鍵。
-此範例顯示了被填入的選用欄位——`null` 是它們的預設（見下表）。
+此範例展示的是一個填好的工作階段，因此多數值就是真實執行會帶的值；其中留為 `null` 的可空欄位是「未設定」而非「缺少」，那同時也是它們的預設（見下表）。
 
 ```json
 {
-  "schema_version": 1,
-  "app_version": "1.5.0",
+  "schema_version": 3,
+  "app_version": "1.6.0",
   "saved_at": "2026-06-04T09:15:22Z",
   "user_note": "",
   "input_files": [
@@ -1238,6 +1247,7 @@ Data 分頁中的兩個按鈕——**[Save settings…]** 與 **[Load settings�
     { "role": "metadata", "name": "metadata-example.csv",       "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08" }
   ],
   "settings": {
+    "analysis_route": "DamEnrichment",
     "analysis_mode": "Pathway",
     "kegg_species": "hsa",
     "organism_group_level": null,
@@ -1248,6 +1258,7 @@ Data 分頁中的兩個按鈕——**[Save settings…]** 與 **[Load settings�
     "dam_method": "Student",
     "drop_unknown": true,
     "dedup_enabled": true,
+    "dedup_rt_tolerance_min": 0.1,
     "normalization": "None",
     "metadata_column": null,
     "pqn_reference": "AllSamples",
@@ -1268,12 +1279,16 @@ Data 分頁中的兩個按鈕——**[Save settings…]** 與 **[Load settings�
     "enrichment_fdr_method": "BenjaminiYekutieli",
     "stage3_export_width_in": 3.5,
     "stage3_export_height_in": 7.0,
-    "stage3_export_dpi": 300
+    "stage3_export_dpi": 300,
+    "coverage_min_entry_size": 3,
+    "coverage_sort_key": "Coverage",
+    "coverage_selected_groups": null,
+    "coverage_presence_threshold": 0.5
   }
 }
 ```
 
-外層：`schema_version` 必須為 `2`（其他值在 Load 時會被拒絕）；`app_version` / `saved_at` 為提示性資訊；`user_note` 是你可手動編輯的自由文字；每個 `input_files` 條目是 `role`（`positive` / `negative` / `metadata`）+ 檔案 basename + SHA-256（僅雜湊——絕不含原始資料）。
+外層：`schema_version` 必須為 `3`（其他值在 Load 時會被拒絕）；`app_version` / `saved_at` 為提示性資訊；`user_note` 是你可手動編輯的自由文字；每個 `input_files` 條目是 `role`（`positive` / `negative` / `metadata`）+ 檔案 basename + SHA-256（僅雜湊——絕不含原始資料）。
 
 > **注意：** 少數鍵使用*物件變體*（object-variant）語法——值不是裸字串，而是一個攜帶資料的小物件，例如中繼資料正規化的 `{"Metadata":{"column":"<name>"}}`、或逐群組 PQN 參考的 `{"Group":"<name>"}`。外層鍵（`Metadata`、`Group`）為變體命名；內層物件持有其參數。
 
@@ -1281,6 +1296,7 @@ Data 分頁中的兩個按鈕——**[Save settings…]** 與 **[Load settings�
 
 | Key | JSON type / allowed values | Default | UI control | 意義與限制 |
 | --- | --- | --- | --- | --- |
+| `analysis_route` | `"DamEnrichment"` \| `"KeggCoverage"` | `"DamEnrichment"` | **Choose your analysis** 路線卡片（步驟列之前） | 本次工作階段執行哪一條路線：DAM＋富集分析管線，或 KEGG 覆蓋率調查。 |
 | `analysis_mode` | `"Pathway"` \| `"Module"` | `"Pathway"` | **Analysis Mode** 單選按鈕（第三階段設定） | 第三階段 ORA 目錄：逐物種路徑 vs 逐 Group 模組。 |
 | `kegg_species` | string \| `null` | `null` | KEGG 物種選擇器（第三階段設定，路徑模式） | 路徑模式用的 KEGG 生物代碼（例如 `"hsa"`）。 |
 | `organism_group_level` | `1`–`3` \| `null` | `null` | Level 單選按鈕（第三階段設定，模組模式） | KEGG 生物階層層級（模組模式）。 |
@@ -1296,7 +1312,7 @@ Data 分頁中的兩個按鈕——**[Save settings…]** 與 **[Load settings�
 | `metadata_column` | string \| `null` | `null` | Metadata-column ComboBox（第二階段設定，Metadata 正規化） | `Metadata` 正規化所用的欄。若在目前資料中不是數值中繼資料欄，Load 時重設為 `null`。 |
 | `pqn_reference` | `"AllSamples"` \| `{"Group":"<name>"}` | `"AllSamples"` | PQN reference 單選按鈕（第二階段設定，PQN 正規化） | PQN 參考光譜（只在 `normalization` 為 `Pqn` 時有意義）。 |
 | `pqn_reference_group` | string \| `null` | `null` | PQN reference-group ComboBox（第二階段設定） | 當 `pqn_reference` 為 `{"Group":…}` 時的 Group 名稱。若不存在於目前的中繼資料中，Load 時重設為 `null`。 |
-| `log_transform` | `true` \| `false` | `true` | **Log transformation** 切換（第二階段設定） | 在 Welch/Student 之前套用 arcsinh（BM 會忽略它）。當手動編輯的 v1 檔缺少此鍵時，預設為 `true`。 |
+| `log_transform` | `true` \| `false` | `true` | **Log transformation** 切換（第二階段設定） | 在 Welch/Student 之前套用 arcsinh（BM 會忽略它）。當手動編輯的檔案缺少此鍵時，預設為 `true`。 |
 | `dam_fdr_method` | `"BenjaminiHochberg"` \| `"BenjaminiYekutieli"` | `"BenjaminiHochberg"` | 第二階段 FDR 單選按鈕（第二階段設定） | 第二階段 FDR。`"NoCorrection"` 在 **Load 時會被強制轉為 BH**（第二階段絕不暴露 None）。 |
 | `fc_threshold` | `1.0`–`1024.0` | `2.0` | Fold-change 門檻（第二階段結果） | 火山圖／CSV 的倍數變化截斷（使用 `\|log2(FC)\| > log2(value)`）。 |
 | `fdr_threshold` | `0.0001`–`1.0` | `0.05` | FDR 門檻（第二階段結果） | 火山圖／CSV 的 q 值截斷。 |
@@ -1306,15 +1322,19 @@ Data 分頁中的兩個按鈕——**[Save settings…]** 與 **[Load settings�
 | `stage2_export_dpi` | `72`–`1200` | `300` | **DPI** 欄位（第二階段結果） | 火山圖 PNG 解析度。 |
 | `direction` | `"Up"` \| `"Down"` \| `"Both"` | `"Both"` | **Include DAM features with direction** 單選按鈕（第三階段設定） | 哪些 DAM 特徵組成 ORA 前景（UI：Up only / Down only / Both）。 |
 | `top_n` | `1`–`100` | `20` | **Top N pathways** 輸入（第三階段結果） | 點圖上繪製的最大條目數。 |
-| `enrichment_fdr_threshold` | `0.0001`–`1.0` | `0.05` | **Enrichment FDR threshold**（第三階段結果） | ORA 顯示的顯著性截斷。 |
-| `min_hit_count` | `1`–`10` | `1` | **Minimum hit count**（第三階段結果） | FDR 後的顯示過濾：隱藏命中數較少的條目。 |
-| `min_entry_size` | `1`–`20` | `1` | **Minimum number of compounds detected in a pathway/module**（第三階段設定） | FDR 前的條目過濾：捨棄母體化合物數少於此值的條目。當手動編輯的 v1 檔缺少此鍵時，預設為 `1`。 |
+| `enrichment_fdr_threshold` | `0.0001`–`1.0` | `0.05` | **Enrichment FDR threshold** / **Enrichment p-value threshold**（第三階段結果） | ORA 顯示的顯著性截斷。控制項的標籤跟隨校正方法；鍵名不變。 |
+| `min_hit_count` | `1`–`10` | `1` | **Minimum hit count**（第三階段結果） | 把命中數較少的條目從圖中隱藏。即時：改動它會丟棄圖，下一次繪圖才套用。會篩選 `Download enrichment results (CSV)`；**不**篩選 `Download all results (CSV)`。 |
+| `min_entry_size` | `1`–`20` | `1` | **Minimum number of compounds detected in a pathway/module**（第三階段設定） | 檢定前的條目過濾：捨棄母體化合物數少於此值的條目。當手動編輯的檔案缺少此鍵時，預設為 `1`。 |
 | `enrichment_fdr_method` | `"BenjaminiHochberg"` \| `"BenjaminiYekutieli"` \| `"NoCorrection"` | `"BenjaminiYekutieli"` | **FDR correction** 單選按鈕（第三階段設定） | 第三階段 FDR（預設 BY——ORA 條目共享化合物）。此處允許 `"NoCorrection"`（與第二階段不同）。 |
 | `stage3_export_width_in` | `1.0`–`40.0` | `3.5` | **Width (in)** 欄位（第三階段結果） | 點圖 PNG 寬度（英吋）。 |
 | `stage3_export_height_in` | `1.0`–`40.0` | `7.0` | **Height (in)** 欄位（第三階段結果） | 點圖 PNG 高度（英吋）；除非被覆寫，否則自動貼合列數（見第三階段路徑模式之 *11. Exporting the dot plot*）。 |
 | `stage3_export_dpi` | `72`–`1200` | `300` | **DPI** 欄位（第三階段結果） | 點圖 PNG 解析度。 |
+| `coverage_presence_threshold` | `0.0`–`1.0` | `0.5` | **Detected in ≥ N % of a group's samples** 欄位（覆蓋率設定） | 覆蓋率路線：當某一組中有此比例的樣本帶有有限且為正的原始強度時，該特徵才算在該組被偵測到。以分數儲存；控制項以百分比顯示。 |
+| `coverage_selected_groups` | 組名陣列 \| `null` | `null` | 若所指名的任一組不存在於目前的中繼資料中，會在 Load 時重設為 `null`。**Sample groups** 多選（覆蓋率設定） | 覆蓋率路線：存在性篩選要跑過哪些組。`null` 表示沒有提供 metadata `.csv`，因此所有特徵都納入。 |
+| `coverage_min_entry_size` | `1`–`200` | `3` | **Minimum entry size** 控制項（覆蓋率結果） | 覆蓋率路線：捨棄在 KEGG 中化合物數少於此值的條目。硬性下限為 `1`，因此零化合物條目永遠不會顯示。與 `min_entry_size` 不同，後者是富集分析路線的 FDR 前過濾。 |
+| `coverage_sort_key` | `"Coverage"` \| `"Hits"` \| `"EntrySize"` \| `"EntryId"` | `"Coverage"` | **Sort by** 選擇器（覆蓋率結果） | 覆蓋率路線：結果表格的排序鍵，與可點擊的欄標題共用。應用程式提供 `Coverage` 與 `Hits`；另外兩個可正確載入與排序，但目前不能在 UI 中選取。 |
 
-**這些範圍是應用程式內的控制項上限，而非檔案的硬性限制。** 手動編輯成超出所列範圍的值會照寫載入，只在你下次於應用程式中碰觸該控制項時才會被夾限；匯出尺寸還會額外被夾限，使 `round(inches × DPI)` 在算繪時每軸維持在 `64–20000` px 內。拼錯或多餘的鍵在 Load 時會被拒絕（檔案必須恰好包含這些鍵），任何非 `1` 的 `schema_version` 亦然。上述四個依賴輸入的欄位是唯一會在 Load 時被重設的欄位。
+**這些範圍是應用程式內的控制項上限，而非檔案的硬性限制。** 手動編輯成超出所列範圍的值會照寫載入，只在你下次於應用程式中碰觸該控制項時才會被夾限；匯出尺寸還會額外被夾限，使 `round(inches × DPI)` 在算繪時每軸維持在 `64–20000` px 內。檢查有多嚴格，取決於鍵位於哪一層。在**外層**——`schema_version`、`app_version`、`saved_at`、`user_note`、`input_files`、`settings`——拼錯或多餘的鍵會在 Load 時被拒絕，任何非 `3` 的 `schema_version` 亦然。在 `settings` 之內，無法辨識的鍵會被**靜默忽略**，因此那裡的錯字不會導致載入失敗，只是不會生效。而 `settings` 內*缺少*某個鍵，對上表大多數欄位會被拒絕；只有列出預設值的那八個會回退到預設（`log_transform`、`min_entry_size`、`dedup_rt_tolerance_min`、`analysis_route`、`coverage_min_entry_size`、`coverage_sort_key`、`coverage_selected_groups`、`coverage_presence_threshold`）。上述五個依賴輸入的欄位是唯一會在 Load 時被重設的欄位。
 
 <a id="when-is-each-button-available"></a>
 ### 各按鈕何時可用（When is each button available）
@@ -1335,7 +1355,7 @@ Data 分頁中的兩個按鈕——**[Save settings…]** 與 **[Load settings�
    - 設定的單行摘要（分析模式、DAM 方法 + FDR、正規化、富集方向 + FDR + top-N）。
    - **雜湊不符**——若你目前載入的任一輸入檔的 SHA-256 與快照不同，會列在此處。
      若你選擇繼續，設定仍會套用，但你會被警告輸入已偏移。
-   - **欄位重設**——若快照指名了一個分子 / 分母組、一個中繼資料欄、或一個 PQN 參考群組，而它不存在於你目前載入的中繼資料中，這些欄位會被列出並在套用時重設為 `None`。
+   - **欄位重設**——若快照指名了一個分子 / 分母組、一個中繼資料欄、一個 PQN 參考群組、或一個覆蓋率樣本組，而它不存在於你目前載入的中繼資料中，這些欄位會被列出並在套用時重設為 `None`。
      你會需要在第二階段設定中重新挑選它們。
      （此區段只在你於 Load 時已載入中繼資料時出現；若你在上傳中繼資料前就 Load，則安全網改為第二階段設定的關卡——見下一段。）
 3. 點擊 **Apply settings** 以覆寫你目前的設定，或 **Cancel** 以丟棄。
@@ -1357,9 +1377,9 @@ Data 分頁中的兩個按鈕——**[Save settings…]** 與 **[Load settings�
 - 微調單一門檻而無需從應用程式重新儲存。
 - 移除 `input_files` 區塊以分享一份「僅設定」的快照（Load 能處理空的 `input_files` 陣列——雜湊檢查會被略過）。
 
-把 `schema_version` 手動編輯成非 `1` 的數字、或破壞 JSON 語法，會在 Load 時浮現一則明確的錯誤 toast（例如
-*"This settings file uses schema version 2; this app expects version 1."* 或 *"Settings file is not valid JSON (line 7 column 15) …"*）。
-任何攜帶非 `1` 之 `schema_version` 的快照都會被拒絕——請從你目前的設定重新儲存，以產生一份 v1 快照。
+把 `schema_version` 手動編輯成非 `3` 的數字、或破壞 JSON 語法，會在 Load 時浮現一則明確的錯誤 toast（例如
+*"This settings file uses schema version 2; this app expects version 3. The file was likely saved by a different app version."* 或 *"Settings file is not valid JSON (line 7 column 15) …"*）。
+任何攜帶非 `3` 之 `schema_version` 的快照都會被拒絕——請從你目前的設定重新儲存，以產生一份 v3 快照。
 
 <a id="reporting-bugs"></a>
 ## 回報問題（Reporting bugs）

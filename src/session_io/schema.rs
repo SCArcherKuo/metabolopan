@@ -29,8 +29,13 @@ use crate::app::SessionSettings;
 /// `SnapshotError::UnsupportedSchemaVersion { found, expected }` with
 /// `expected` read from this constant, so a bump needs no message edit and
 /// MUST NOT introduce a hard-coded version literal. What does hard-code the
-/// version is the spec scenarios in `session-settings-io` and `app-shell`;
-/// `openspec validate` cannot detect a missed one.
+/// version is spec prose in `session-settings-io` and `app-shell` — in
+/// requirement BODY text as well as in scenarios, which is why a bump must
+/// find those sites by grepping the outgoing number rather than by working
+/// through a list. `openspec validate` cannot detect a missed one. The
+/// "tracked invariant" requirement in `session-settings-io` carries the
+/// search procedure and the rule for telling a live literal from a
+/// historical one.
 pub const SCHEMA_VERSION: u32 = 3;
 
 /// Top-level shape of a saved settings JSON file.

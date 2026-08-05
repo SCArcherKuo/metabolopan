@@ -1,5 +1,6 @@
 //! Over-representation analysis (ORA): per-entry hypergeometric test +
-//! user-selected FDR correction (BY default for Stage 3 ORA; BH/None opt-in) over all entries.
+//! user-selected FDR correction (BY default for Stage 3 ORA; BH or no correction
+//! opt-in) over all entries.
 //! An "entry" is a `KeggCompoundSet` — either a KEGG pathway (pathway
 //! mode) or a KEGG module (module mode); the math is identical for both.
 
@@ -23,7 +24,7 @@ use crate::kegg::KeggCompoundSet;
 ///   (short-circuit to avoid undefined CDF arguments). Otherwise
 ///   `1 - HypergeometricCDF(k_p - 1; N, M_p, K)`.
 ///
-/// `fdr_method` selects the FDR correction (BY default for Stage 3 ORA; BH/None opt-in). The
+/// `fdr_method` selects the FDR correction (BY default for Stage 3 ORA; BH or no correction opt-in). The
 /// chosen method is corrected over ALL entries' p-values (including those
 /// that short-circuited to 1.0) and recorded on `EnrichmentResult.fdr_method`.
 /// BY is the more conservative choice when entries share compounds, which is
@@ -177,24 +178,20 @@ pub fn run_ora(
     let p_vec: Vec<f64> = pre.iter().map(|r| r.p_value).collect();
     let fdr_vec = adjust_pvalues(&p_vec, fdr_method);
 
-    // Materialise rows with FDR + displayed flag, then sort.
+    // Materialise rows with FDR, then sort.
     let mut rows: Vec<EnrichmentRow> = pre
         .drain(..)
         .zip(fdr_vec)
-        .map(|(r, fdr)| {
-            let displayed = r.hits >= min_hit_count;
-            EnrichmentRow {
-                entry_id: r.entry_id,
-                entry_name: r.entry_name,
-                hits: r.hits,
-                total: r.total,
-                expected: r.expected,
-                enrichment_ratio: r.enrichment_ratio,
-                p_value: r.p_value,
-                fdr,
-                hit_kegg_ids: r.hit_kegg_ids,
-                displayed,
-            }
+        .map(|(r, fdr)| EnrichmentRow {
+            entry_id: r.entry_id,
+            entry_name: r.entry_name,
+            hits: r.hits,
+            total: r.total,
+            expected: r.expected,
+            enrichment_ratio: r.enrichment_ratio,
+            p_value: r.p_value,
+            fdr,
+            hit_kegg_ids: r.hit_kegg_ids,
         })
         .collect();
 
@@ -405,42 +402,24 @@ mod tests {
         assert_eq!(result.rows[2].entry_id, "z1");
     }
 
+    /// `min_hit_count` is inert inside `run_ora`: passing different values
+    /// returns identical rows, p-values and adjusted values.
+    ///
+    /// It used to set a per-row `displayed` flag here, which froze a display
+    /// filter to the moment of the run. The filter now lives with the
+    /// consumers that draw and count; `run_ora` only records the value on the
+    /// result as provenance. This test pins the inertness by CALLING TWICE —
+    /// an earlier version asserted properties of the fixture and would have
+    /// passed for any argument.
     #[test]
-    fn min_hit_count_post_fdr_display_filter() {
-        let universe = make_set(["A", "B", "C", "D", "E"]);
+    fn min_hit_count_does_not_affect_run_ora_output() {
+        let universe = make_set(["A", "B", "C", "D"]);
         let dam_cpd = make_set(["A", "B"]);
         let entries = vec![
-            entry("p1", "Path 1", &["A", "B"]),
-            entry("p2", "Path 2", &["A"]),
+            entry("p1", "Path 1", &["A", "B", "C"]), // 2 hits
+            entry("p2", "Path 2", &["D"]),           // 0 hits
         ];
-        let result = run_ora(
-            &universe,
-            &dam_cpd,
-            &entries,
-            2,
-            EnrichmentDirection::Both,
-            FdrMethod::BenjaminiYekutieli,
-            1,
-        );
-        // p1 has 2 hits → displayed; p2 has 1 hit → NOT displayed.
-        let p1 = result.rows.iter().find(|r| r.entry_id == "p1").unwrap();
-        let p2 = result.rows.iter().find(|r| r.entry_id == "p2").unwrap();
-        assert!(p1.displayed);
-        assert!(!p2.displayed);
-        // Both rows still emitted with FDR values.
-        assert!(p1.fdr.is_finite());
-        assert!(p2.fdr.is_finite());
-    }
-
-    #[test]
-    fn default_min_hit_one_displays_everything_with_hits() {
-        let universe = make_set(["A", "B"]);
-        let dam_cpd = make_set(["A"]);
-        let entries = vec![
-            entry("p1", "Path 1", &["A"]),
-            entry("p2", "Path 2", &["B"]), // 0 hits
-        ];
-        let result = run_ora(
+        let loose = run_ora(
             &universe,
             &dam_cpd,
             &entries,
@@ -449,10 +428,25 @@ mod tests {
             FdrMethod::BenjaminiYekutieli,
             1,
         );
-        let p1 = result.rows.iter().find(|r| r.entry_id == "p1").unwrap();
-        let p2 = result.rows.iter().find(|r| r.entry_id == "p2").unwrap();
-        assert!(p1.displayed);
-        assert!(!p2.displayed); // 0 hits never displayed.
+        let strict = run_ora(
+            &universe,
+            &dam_cpd,
+            &entries,
+            99,
+            EnrichmentDirection::Both,
+            FdrMethod::BenjaminiYekutieli,
+            1,
+        );
+        assert_eq!(loose.rows.len(), strict.rows.len());
+        for (a, b) in loose.rows.iter().zip(&strict.rows) {
+            assert_eq!(a.entry_id, b.entry_id);
+            assert_eq!(a.hits, b.hits);
+            assert_eq!(a.p_value, b.p_value);
+            assert_eq!(a.fdr, b.fdr);
+        }
+        // Only the provenance record differs.
+        assert_eq!(loose.min_hit_count, 1);
+        assert_eq!(strict.min_hit_count, 99);
     }
 
     #[test]

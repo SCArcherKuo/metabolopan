@@ -1,8 +1,8 @@
 # User Manual
 
-Software version: metabolopan v1.5.0
+Software version: metabolopan v1.6.0
 
-Update date: 2026-08-03
+Update date: 2026-08-05
 
 This manual documents what the software does numerically — algorithms, default thresholds, deviations from common alternatives — so you can defend any number it produces in a paper or report.
 Read this once before publishing results that depend on the software.
@@ -24,7 +24,7 @@ This manual is written on **two tracks** so it works whether you just want to ru
 
 Other callouts you will see: `> **Note:**` (clarifications, or where this software differs from standard tools), `> **⚠ Warning:**` (data-entry errors and fail-fast conditions), and `> **Example:**` (worked numbers and intuition).
 
-**Three reading paths:**
+**Four reading paths:**
 
 - **(a) Just running an analysis.** Read the leads of [Stage 1 — Input parsing](#stage-1--input-parsing), [Stage 2 — Normalization, Deduplication & DAM](#stage-2--normalization-deduplication--dam), [Stage 3 — Enrichment (over-representation analysis)](#stage-3--enrichment-over-representation-analysis), and the [Worked example](#worked-example).
 - **(b) Defending numbers in a paper.** Read the method subsections ([DAM](#differentially-accumulated-metabolites-dam) test methods 3a–3c), [Multiple-testing correction (FDR)](#4-multiple-testing-correction), [Missing values vs true zeros](#missing-values-nan-vs-true-zeros-00), and [Key references](#key-references).
@@ -604,8 +604,8 @@ The Stage 3 setup screen is where the user picks:
 
 These three controls live on the *result* screen so you can iterate on the figure after seeing the data, without walking back to setup.
 
-- **Enrichment FDR threshold** (default `0.05`).
-- **Minimum hit count** (post-FDR display filter; default `1`).
+- **Significance threshold** (default `0.05`). The control is labelled `Enrichment FDR threshold` when a correction is applied, and `Enrichment p-value threshold` under `No correction` — it names the quantity the cutoff is compared against.
+- **Minimum hit count** (a display filter on hit count; default `1`). Like the other two, moving it **discards the figure on screen** and the next `Draw dot plot` renders one at the new value — no re-run needed.
   The Top N input that controls the dot plot's display cap lives on the screen so you can iterate on it after seeing the data, without coming back to setup.
 - **Top N pathways** (default `20`).
 
@@ -636,7 +636,7 @@ The pipeline is:
    The trade-off is symmetric: a lower `min_entry_size` tests more pathways but enlarges the multiple-testing family `m`.
 
    > **Note:** Both `m_p` (here) and the hypergeometric `m` parameter use the **set** cardinality of the intersection: a compound listed more than once in a KEGG entry's COMPOUND block is counted **once**, not per-occurrence.
-   > This `min_entry_size` knob is **orthogonal** to *Minimum hit count*: this one is a **pre-FDR ENTRY filter** that shrinks `m`; *Minimum hit count* is a **post-FDR DISPLAY filter** that doesn't change p-values.
+   > This `min_entry_size` knob is **orthogonal** to *Minimum hit count*: this one drops entries **before the test** (and so shrinks the `m` denominator when a correction is applied); *Minimum hit count* only hides rows from the figure and changes no p-value.
 
 6. **Per-pathway hypergeometric test.** For each pathway `p` surviving the entry-size filter, with
    `m_p = |unique(pathway.compounds) ∩ universe|` (set cardinality of the
@@ -651,18 +651,19 @@ The pipeline is:
      `> 1` means over-represented (more hits than chance predicts), `= 1` exactly as expected, `< 1` under-represented.
      It is the dot plot's **X axis** and the `Expected` / `EnrichmentRatio` columns of the exported CSV, and it is **effect size only, carrying no significance** — a one-compound entry (`m_p = 1`) can post a large fold enrichment off a single lucky hit, which is exactly why selection is by FDR rather than fold enrichment (step 9) and why the `min_entry_size` pre-filter (step 5) exists.
      Edge case: when `expected_p = 0` (no measurable compounds in the entry) the ratio is undefined — `NaN` internally, written as an **empty** cell in the CSV.
-7. **User-selected FDR correction** via the Stage 3 setup screen's independent radio (default Benjamini–Yekutieli procedure; Benjamini–Hochberg procedure one click away; `None` as a third option for exploratory runs only, see below).
+7. **User-selected FDR correction** via the Stage 3 setup screen's independent radio (default Benjamini–Yekutieli procedure; Benjamini–Hochberg procedure one click away; `No correction` as a third option for exploratory runs only, see below).
    The radio is independent of the Stage 2 choice on purpose: the two stages have different dependence profiles, and users will reasonably want Stage 2 BH (cross-tool reproducibility on the volcano) + Stage 3 BY (conservative ORA on shared-compound entries).
    For pathway/module ORA we **default to BY**: pathways share compounds heavily (glycolysis ↔ TCA share G6P, pyruvate, etc.), so the independence assumption underlying BH is violated. Most biology tools default to BH; switch the radio to BH if you need cross-tool-comparable q-values.
    BY is more conservative under dependence; expect uniformly higher (less significant) adjusted p-values.
-   `None` skips multiple-testing correction entirely — the `fdr` field in the result table and CSV carries the raw p-value verbatim.
+   `No correction` skips multiple-testing correction entirely — the significance value carried through is the raw p-value, unchanged.
+   Because nothing was adjusted, the exported CSV omits its `FDR` column for such a run and carries `PValue` alone: an `FDR` column would have repeated `PValue` byte-for-byte under a name no correction earned.
 
-   > **⚠ Warning:** Use `None` **only for exploratory ranking**, never for published claims of significance; on a typical KEGG pathway catalog (~300 pathways tested) you'd expect ~15 false positives at `p < 0.05` purely by chance.
+   > **⚠ Warning:** Use `No correction` **only for exploratory ranking**, never for published claims of significance; on a typical KEGG pathway catalog (~300 pathways tested) you'd expect ~15 false positives at `p < 0.05` purely by chance.
 
-   The Stage 2 DAM radio does NOT expose `None` — raw p across ~13 k features would flood the result set; a hand-crafted snapshot carrying `dam_fdr_method=NoCorrection` is defensively coerced back to BH with a `tracing::warn!` event.
+   The Stage 2 DAM radio does NOT expose `No correction` — raw p across ~13 k features would flood the result set; a hand-crafted snapshot carrying `dam_fdr_method=NoCorrection` is defensively coerced back to BH with a `tracing::warn!` event.
 
-   **Color scale.** Each marker's fill encodes `-log10(FDR)` (raw `-log10(p)` under `None`) on a ColorBrewer **YlOrRd** 9-step ramp — palest yellow for the least-significant entry shown (FDR at the displayed threshold) deepening to dark red for the most significant; the dots and the colorbar legend share a single `-log10` span, so equal colors mean equal significance across both.
-   The active method is recorded in the dot plot's colorbar title (`-log10(FDR (BH))` / `-log10(FDR (BY))` / `-log10(p-value)` for `None` — the wrapper drops because the axis values ARE raw p, not q) and in the leading `# FDR: BH` / `# FDR: BY` / `# FDR: None` line of the exported enrichment CSV.
+   **Color scale.** Each marker's fill encodes `-log10(FDR)` (raw `-log10(p)` under `No correction`) on a ColorBrewer **YlOrRd** 9-step ramp — palest yellow for the least-significant entry shown (FDR at the displayed threshold) deepening to dark red for the most significant; the dots and the colorbar legend share a single `-log10` span, so equal colors mean equal significance across both.
+   The active method is recorded in the dot plot's colorbar title (`-log10(FDR (BH))` / `-log10(FDR (BY))` / `-log10(p-value)` for `No correction` — the wrapper drops because the axis values ARE raw p, not q) and in the leading `# FDR: BH` / `# FDR: BY` / `# FDR: NoCorrection` line of the exported enrichment CSV.
    The CSV also carries additional self-documenting comment lines recording the thresholds that run used: `# MinEntrySize: N` (the pre-FDR entry-size filter) and, in Module mode, `# MinGroupOverlap: N` (the Group-overlap threshold).
    The dot plot itself also carries a four-line plain-language annotation block below the X axis so reviewers can reconstruct the FDR family from the figure alone:
 
@@ -675,11 +676,14 @@ The pipeline is:
 
    (the last line reads `… Benjamini–Hochberg (BH)`, or `raw p-value (no FDR correction)`, when those methods are active).
    The `N` / `K` / `m` symbols are deliberately spelled out rather than abbreviated; the tested count `<m>` is the number of entries that reached BH/BY and is the divisor each raw p-value was multiplied by.
+   **Everything in this paragraph about `m` and about filters running before or after FDR describes a run with BH or BY selected.** Under `No correction` no adjustment is performed, so there is no correction stage for a filter to precede or follow and no `m` denominator — the entry-size filter still drops small entries before the test, and the hit-count filter still hides rows, but neither is positioned relative to a correction that did not happen.
    The `m` denominator equals the count of pathways that **survived the pre-FDR `min_entry_size` filter** (step 5) — i.e. `m = entries.len() − entries_dropped_by_min_entry_size`.
    The orchestrator-level Group filter (module mode) is applied at an even earlier layer; `m` reflects both filters by the time FDR runs.
-8. **Display filtering (post-FDR).** A user-controlled `min_hit_count` (default 1) hides pathways with fewer hits from the dot plot and CSV.
-   This is a *display* filter — `m` was already computed over all surviving entries, so the FDR values are honest regardless of this setting.
-   Distinct from `min_entry_size` in step 5: that one is a **pre-FDR ENTRY filter** that shrinks `m`; this one is a **post-FDR DISPLAY filter** that doesn't change p-values.
+8. **Display filtering by hit count.** A user-controlled `min_hit_count` (default 1) hides pathways with fewer hits from the dot plot.
+   It never changes any p-value or q-value — with BH or BY selected, `m` was already computed over all surviving entries, so the adjusted values are honest regardless of this setting.
+   Distinct from `min_entry_size` in step 5: that one drops entries **before the test** and so shrinks `m`; this one only hides rows from the figure.
+   It is evaluated when the figure is drawn, so changing it discards the current figure and the next `Draw dot plot` renders one at the new value. No re-run is needed: the filter is consulted after the correction has been applied, so it cannot move `m` or change a single p-value.
+   **Which of the two CSV downloads it reaches depends on the button.** `Download enrichment results (CSV)` writes the rows the figure is drawn from, so this filter and the significance threshold both apply to it; `Download all results (CSV)` writes every surviving entry and neither applies. `Top N` reaches neither file — it caps how many rows fit on an axis, which is not a property of a row.
 9. **Dot plot selection vs ordering — two different bases.** The dot plot chooses *which* entries to draw and *how* to stack them on the Y axis using **deliberately different criteria**:
    - **Selection (which entries appear) is by statistical significance.** Among entries passing `fdr < threshold` and the `min_hit_count` filter (steps 7–8), the plot keeps the **Top N with the lowest FDR** (`top_n`, default 20, tunable on the result screen).
      The entries shown are therefore always the *most significant* ones — they are **never** selected by fold enrichment.
@@ -692,8 +696,8 @@ The pipeline is:
 
    The practical consequence: when more entries are significant than `top_n`, the ones omitted are the **least significant** (highest FDR) — *not* the smallest fold enrichment.
    Significance gates inclusion; effect size only arranges what got in.
-   The exported CSV is independent of this: it lists every surviving entry ordered by ascending FDR, with full (untruncated) names.
-10. **Dot plot canvas height.** The exported plot height auto-fits to the number of rows actually shown — `clamp(min(top_n, displayed) × 0.3 + 1.0, 2.0, 40)` inches — and is **recomputed every time you Draw / Re-draw**.
+   **`Top N` reaches neither CSV.** `Download all results (CSV)` lists every surviving entry ordered by ascending FDR, with full (untruncated) names; `Download enrichment results (CSV)` lists the rows the figure is drawn from *before* this cap — so it is a superset of what the plot shows, by exactly the rows `Top N` cut.
+10. **Dot plot canvas height.** The exported plot height auto-fits to the number of rows actually shown — `clamp(min(top_n, displayed) × 0.3 + 1.0, 2.0, 40)` inches — and is **recomputed every time you draw**.
     So if a run is non-significant at your initial FDR threshold and you loosen the threshold on the result screen and redraw, the canvas grows to fit the newly-revealed rows instead of cramming them into a short plot (which would truncate the Y-axis labels).
     Editing the **Height (in)** field turns it into a manual override that sticks until the next enrichment run/re-run resets the auto-fit.
 
@@ -702,10 +706,12 @@ The pipeline is:
 11. **Exporting the dot plot (PNG size + DPI).** The `Width (in)` / `Height (in)` / `DPI` controls and the what-you-see-is-what-you-get guarantee work exactly as for the volcano — the shared `pixels = round(inches × DPI)`, `pHYs` physical-size, clamp, and same-render-as-preview mechanics are described in [7. Exporting the figure as PNG](#7-exporting-the-figure-as-png) under Stage 2.
     The dot-plot-specific facts are:
     - Export defaults are `3.5 × 7.0 in @ 300 DPI` (the `7.0` is the auto-fit height for the default `top_n = 20`).
-    - **Height** auto-fits to the displayed-row count and is recomputed on each Draw / Re-draw unless you override it (item 10 above), while `Width` and `DPI` are plain values you set.
+    - **Height** auto-fits to the displayed-row count and is recomputed on each draw unless you override it (item 10 above), while `Width` and `DPI` are plain values you set.
     - Fonts key off `Width × DPI`, so changing `Width` or `DPI` rescales the text; changing `Height` does not.
 
-    The preview is the image from your last `Draw dot plot` / `Re-draw dot plot`; after changing any size (or `Top N`, FDR threshold, or min-hit filter), click `Re-draw dot plot` so it matches what a download will produce.
+    The preview and the display filters behave exactly as Stage 2's volcano does, and for the same reason: **changing `Top N`, the significance threshold or `Minimum hit count` blanks the preview** (the button reverts to `Draw dot plot`), so a figure on screen always matches the controls beside it. **Changing an export size does not** — so after adjusting `Width` / `Height` / `DPI`, click `Re-draw dot plot` to bring the preview in line with what a download will write.
+
+    `Download dot plot PNG` is unaffected either way: it re-renders from the current values rather than reading the preview, so it writes a correct figure even while the preview area is empty.
 
 ### Module mode
 
@@ -758,7 +764,7 @@ A module is included in the analysis when its KEGG `COMPLETE` block contains at 
 - **`min_group_overlap` is a research knob.** Default `1` (permissive ∃-overlap) is appropriate for exploratory work.
   For papers, consider testing a higher threshold to ensure robustness — a module that only one of the hundreds of organisms in a Group (e.g.
   "Animals") possesses is biologically marginal for that analytic frame even if it survives the default filter.
-- **Module CSV column names match pathway-mode CSV.** Both modes export the same header: `EntryID,EntryName,Hits,Total,Expected,EnrichmentRatio,PValue,FDR,HitKeggIDs`.
+- **Module CSV column names match pathway-mode CSV.** Both modes export the same header: `EntryID,EntryName,Hits,Total,Expected,EnrichmentRatio,PValue,FDR,HitKeggIDs`. The analysis mode never varies it; the only thing that does is the correction method, which omits the `FDR` column under `No correction`.
   (`Expected` and `EnrichmentRatio` are defined under the per-pathway hypergeometric step above: `EnrichmentRatio` is fold enrichment = observed / expected.)
   In module mode the `EntryID` column carries `M00001`-style module IDs; in pathway mode it carries `<species_code><pathway_number>` IDs (e.g.
   `gmx00010`).
@@ -767,7 +773,7 @@ A module is included in the analysis when its KEGG `COMPLETE` block contains at 
 
 When you're done with one dataset and want to begin fresh, **Start a new analysis** wipes everything; the stepper's **Input** step, by contrast, keeps your settings and caches so you can re-run the *same* dataset.
 
-When you finish an enrichment run and want to analyze a different dataset — or re-run the whole pipeline from scratch — the Stage 3 **Enrichment Result** screen offers a **Start a new analysis** button on its own line below `[Download enrichment results CSV]`.
+When you finish an enrichment run and want to analyze a different dataset — or re-run the whole pipeline from scratch — the Stage 3 **Enrichment Result** screen offers a **Start a new analysis** button on its own line below `[Download all results (CSV)]`, the last of the three downloads.
 Clicking it opens a confirmation dialog warning that the current DAM / enrichment results and any un-downloaded plots or CSV will be lost.
 On **Start over** the app resets every parameter to its default, clears the loaded MS-DIAL `.txt` / metadata `.csv` and the in-memory KEGG data, and returns you to Stage 1 — *without* re-running the startup organism-list load.
 (The on-disk KEGG cache survives, so re-fetching the same species or modules afterward is a fast cache hit.)
@@ -900,7 +906,7 @@ The last three lines are cumulative — an entry removed by the size floor is no
 
 The first lines are fixed for a run and never move.
 The last three follow the filter controls and update **one frame after** you drag a control, because the Data tab is drawn before the controls are.
-The dot plot's annotation strip is different again: it reports the filter values from the last time you pressed `Draw dot plot`, not the current ones.
+The dot plot's annotation strip always agrees with them, because a figure cannot outlive the values it describes: moving any filter discards the plot, so the strip you are looking at was drawn at the values currently set.
 
 At the hard minimum of `1`, `With compound list:` and `Entry size >= 1:` are necessarily equal — an entry has at least one compound exactly when it has a compound list at all.
 Both lines are still shown: a funnel stage that drops nothing is itself worth knowing, and a chain whose length changes with a setting is harder to read.
@@ -925,6 +931,9 @@ Marker size stays **entry size** in both, because it is the denominator behind b
 There is no reference line because there is no null expectation to mark.
 The rows drawn are exactly the rows the table shows, in the same order — both come from the same filter chain.
 The annotation strip records the mode and target, the detected compound count, how many entries are displayed out of the whole catalog, the active filter values, a compact group record, and the line `Descriptive coverage — no statistical test`.
+
+**The plot is drawn on request and discarded when you move a filter.** The screen arrives showing `Click "Draw dot plot" to render the plot.` rather than a figure — a render takes seconds and the values a run happens to end on may not be the ones you want. Once drawn, changing `Minimum entry size`, `Minimum hit count`, `Sort by` or `Top N` — including by clicking a sortable column header — blanks it again, so the figure can never disagree with the table beside it, which updates as you drag. While a render is running the button is disabled and a `Rendering…` indicator sits beside it.
+`Download dot plot PNG` is unaffected by any of this: it re-renders from the current filter values rather than reading the preview, so it writes a correct figure even when the preview area is empty.
 
 ### CSV export
 
@@ -1123,7 +1132,7 @@ Using the `data/double-mode/` fixtures (8 Treatment + 8 Control + 3 QC biosample
 4. Stage 3 setup: pick a KEGG species (Pathway mode) or Level + organism Group (Module mode); the inline progress strip streams the KEGG fetch.
    After it completes, click `Run Enrichment`.
 5. Stage 3 result: the result panel shows the breakdown block; conflict-excluded cpd IDs appear in the log at INFO.
-   Adjust Top N inline if you want fewer/more rows on the dot plot, then click `Re-draw dot plot`.
+   Adjust Top N inline if you want fewer/more rows on the dot plot, then click `Draw dot plot` (changing it blanks the previous figure).
    The dot plot keeps the Top N *most significant* entries and stacks them by *fold enrichment* (largest on top); the canvas height re-fits to the rows shown on each redraw (see "Dot plot selection vs ordering" above).
 
 ## Caches and provenance
@@ -1152,14 +1161,14 @@ The Stage 3 result screen surfaces this as a time span (`PubChem CIDs fetched da
 
 Cache freshness — **no staleness thresholds**.
 None of the KEGG caches expire: a cached entry is always returned regardless of age, and the app never silently re-fetches on its own.
-Instead the bottom-panel **Data** tab's `Cache data` block (on the Enrichment Analysis + Enrichment Result screens) surfaces fetch times neutrally and leaves the refresh decision to you:
+Instead the bottom-panel **Data** tab's `Cache data` block — which appears on every screen from Stage 3 setup onward, on both routes: Enrichment Analysis, the running screen, Enrichment Result, and the coverage route's Setup and Coverage screens — surfaces fetch times neutrally and leaves the refresh decision to you:
 
-- Per-species pathway cache: shows `KEGG pathways (<code>): <ts>` (on both the setup and result screens); re-fetch via the `Refresh KEGG pathway cache` button.
+- Per-species pathway cache: shows `KEGG pathways (<code>): <ts>` (wherever the block appears and a species catalog is loaded); re-fetch via the `Refresh KEGG pathway cache` button.
 - Module entries: shows a `KEGG modules fetched date: <oldest> -> <newest>` span; the warm-fetch decision is cache-key membership.
   Re-fetch via the `Refresh KEGG module cache` button.
 - On the Enrichment **Result** screen the catalog-refresh button (module / pathway) navigates back to the Setup screen to run the re-fetch there (where its progress strip lives); the PubChem / KEGG-conv refreshes run in place via a confirmation modal.
 - Organism list (`organisms.json`): loaded once at startup (cache-first: an on-disk copy always wins regardless of age), refreshable in-app via the `Refresh KEGG organism list` button in the Data tab's `Cache data` block.
-  That button re-fetches `/list/organism` in place without a relaunch; alternatively, delete `organisms.json` from the cache directory and relaunch to force a cold fetch.
+  That button re-fetches the roster in place without a relaunch, from KEGG's BRITE hierarchy (`GET /get/br:br08601`) — the `/list/organism` endpoint it used to call was retired by KEGG; alternatively, delete `organisms.json` from the cache directory and relaunch to force a cold fetch.
   (The `Refresh KEGG pathway cache` button is separate — it refetches only the selected species' pathway→compound map, not the organism roster.)
 
 ## Saving and loading session settings (reproducibility)
@@ -1175,7 +1184,7 @@ The intent is reproducibility: if you (or a collaborator) re-run with the same s
 
 A pretty-printed JSON containing:
 
-- `schema_version` (currently `2` — the on-disk schema baseline), `app_version`, `saved_at` (UTC), a `user_note` field initially `""` — you can open the file in any text editor and fill it in.
+- `schema_version` (currently `3` — the on-disk schema baseline), `app_version`, `saved_at` (UTC), a `user_note` field initially `""` — you can open the file in any text editor and fill it in.
 - `input_files` — for each MS-DIAL `.txt` and the metadata `.csv` you had loaded at save time: the file's basename + its SHA-256.
   **Hashes only — your raw data is never included.** This lets a future Load detect when your inputs have drifted from what the snapshot was made against.
 - `settings` — every parameter from Stage 1 through Stage 3 (analysis mode, species / organism group, comparison groups, DAM method, normalization, FDR method, thresholds, export sizes, enrichment direction / FDR / Top N).
@@ -1183,12 +1192,12 @@ A pretty-printed JSON containing:
 ### The full file, field by field
 
 A complete example (a single-mode snapshot taken mid-analysis). The envelope fields are described above; the table documents every key under `settings`.
-The example shows the optional fields populated — `null` is their default (see the table).
+The example shows a filled-in session, so most values are the ones a real run would carry; the nullable fields it leaves as `null` are unset rather than absent, which is also their default (see the table).
 
 ```json
 {
-  "schema_version": 1,
-  "app_version": "1.5.0",
+  "schema_version": 3,
+  "app_version": "1.6.0",
   "saved_at": "2026-06-04T09:15:22Z",
   "user_note": "",
   "input_files": [
@@ -1196,6 +1205,7 @@ The example shows the optional fields populated — `null` is their default (see
     { "role": "metadata", "name": "metadata-example.csv",       "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08" }
   ],
   "settings": {
+    "analysis_route": "DamEnrichment",
     "analysis_mode": "Pathway",
     "kegg_species": "hsa",
     "organism_group_level": null,
@@ -1206,6 +1216,7 @@ The example shows the optional fields populated — `null` is their default (see
     "dam_method": "Student",
     "drop_unknown": true,
     "dedup_enabled": true,
+    "dedup_rt_tolerance_min": 0.1,
     "normalization": "None",
     "metadata_column": null,
     "pqn_reference": "AllSamples",
@@ -1226,12 +1237,16 @@ The example shows the optional fields populated — `null` is their default (see
     "enrichment_fdr_method": "BenjaminiYekutieli",
     "stage3_export_width_in": 3.5,
     "stage3_export_height_in": 7.0,
-    "stage3_export_dpi": 300
+    "stage3_export_dpi": 300,
+    "coverage_min_entry_size": 3,
+    "coverage_sort_key": "Coverage",
+    "coverage_selected_groups": null,
+    "coverage_presence_threshold": 0.5
   }
 }
 ```
 
-Envelope: `schema_version` must be `2` (other values are rejected on Load); `app_version` / `saved_at` are informational; `user_note` is free text you may hand-edit; each `input_files` entry is `role` (`positive` / `negative` / `metadata`) + file basename + SHA-256 (hashes only — never raw data).
+Envelope: `schema_version` must be `3` (other values are rejected on Load); `app_version` / `saved_at` are informational; `user_note` is free text you may hand-edit; each `input_files` entry is `role` (`positive` / `negative` / `metadata`) + file basename + SHA-256 (hashes only — never raw data).
 
 > **Note:** A few keys use an *object-variant* syntax — instead of a bare string, the value is a small object carrying data, e.g. `{"Metadata":{"column":"<name>"}}` for metadata normalization or `{"Group":"<name>"}` for a per-group PQN reference. The outer key (`Metadata`, `Group`) names the variant; the inner object holds its parameter.
 
@@ -1239,6 +1254,7 @@ Every key under `settings`. The **UI control** column maps each key to the scree
 
 | Key | JSON type / allowed values | Default | UI control | Meaning & constraints |
 | --- | --- | --- | --- | --- |
+| `analysis_route` | `"DamEnrichment"` \| `"KeggCoverage"` | `"DamEnrichment"` | **Choose your analysis** route cards (pre-stepper) | Which route the session runs: the DAM + enrichment pipeline, or the KEGG coverage survey. |
 | `analysis_mode` | `"Pathway"` \| `"Module"` | `"Pathway"` | **Analysis Mode** radio (Stage 3 setup) | Stage 3 ORA catalog: per-species pathways vs per-Group modules. |
 | `kegg_species` | string \| `null` | `null` | KEGG species selector (Stage 3 setup, Pathway mode) | KEGG organism code (e.g. `"hsa"`) for Pathway mode. |
 | `organism_group_level` | `1`–`3` \| `null` | `null` | Level radio (Stage 3 setup, Module mode) | KEGG organism hierarchy level (Module mode). |
@@ -1254,7 +1270,7 @@ Every key under `settings`. The **UI control** column maps each key to the scree
 | `metadata_column` | string \| `null` | `null` | Metadata-column ComboBox (Stage 2 setup, Metadata normalization) | Column used by `Metadata` normalization. Reset to `null` on Load if not a numeric metadata column in current data. |
 | `pqn_reference` | `"AllSamples"` \| `{"Group":"<name>"}` | `"AllSamples"` | PQN reference radio (Stage 2 setup, PQN normalization) | PQN reference spectrum (only meaningful when `normalization` is `Pqn`). |
 | `pqn_reference_group` | string \| `null` | `null` | PQN reference-group ComboBox (Stage 2 setup) | Group name when `pqn_reference` is `{"Group":…}`. Reset to `null` on Load if absent from current metadata. |
-| `log_transform` | `true` \| `false` | `true` | **Log transformation** toggle (Stage 2 setup) | Apply arcsinh before Welch/Student (BM ignores it). Defaults to `true` when the key is absent from a hand-edited v1 file. |
+| `log_transform` | `true` \| `false` | `true` | **Log transformation** toggle (Stage 2 setup) | Apply arcsinh before Welch/Student (BM ignores it). Defaults to `true` when the key is absent from a hand-edited file. |
 | `dam_fdr_method` | `"BenjaminiHochberg"` \| `"BenjaminiYekutieli"` | `"BenjaminiHochberg"` | Stage 2 FDR radio (Stage 2 setup) | Stage 2 FDR. `"NoCorrection"` is **coerced to BH on Load** (Stage 2 never exposes None). |
 | `fc_threshold` | `1.0`–`1024.0` | `2.0` | Fold-change threshold (Stage 2 result) | Volcano/CSV fold-change cutoff (uses `\|log2(FC)\| > log2(value)`). |
 | `fdr_threshold` | `0.0001`–`1.0` | `0.05` | FDR threshold (Stage 2 result) | Volcano/CSV q-value cutoff. |
@@ -1264,15 +1280,19 @@ Every key under `settings`. The **UI control** column maps each key to the scree
 | `stage2_export_dpi` | `72`–`1200` | `300` | **DPI** field (Stage 2 result) | Volcano PNG resolution. |
 | `direction` | `"Up"` \| `"Down"` \| `"Both"` | `"Both"` | **Include DAM features with direction** radio (Stage 3 setup) | Which DAM features form the ORA foreground (UI: Up only / Down only / Both). |
 | `top_n` | `1`–`100` | `20` | **Top N pathways** input (Stage 3 result) | Max entries drawn on the dot plot. |
-| `enrichment_fdr_threshold` | `0.0001`–`1.0` | `0.05` | **Enrichment FDR threshold** (Stage 3 result) | ORA display significance cutoff. |
-| `min_hit_count` | `1`–`10` | `1` | **Minimum hit count** (Stage 3 result) | Post-FDR display filter: hide entries with fewer hits. |
-| `min_entry_size` | `1`–`20` | `1` | **Minimum number of compounds detected in a pathway/module** (Stage 3 setup) | Pre-FDR entry filter: drop entries with fewer than this many universe compounds. Defaults to `1` when the key is absent from a hand-edited v1 file. |
+| `enrichment_fdr_threshold` | `0.0001`–`1.0` | `0.05` | **Enrichment FDR threshold** / **Enrichment p-value threshold** (Stage 3 result) | ORA display significance cutoff. The control's label follows the correction method; the key name does not change. |
+| `min_hit_count` | `1`–`10` | `1` | **Minimum hit count** (Stage 3 result) | Hides entries with fewer hits from the plot. Live: changing it discards the figure, and the next draw applies it. Filters `Download enrichment results (CSV)`; does **not** filter `Download all results (CSV)`. |
+| `min_entry_size` | `1`–`20` | `1` | **Minimum number of compounds detected in a pathway/module** (Stage 3 setup) | Pre-test entry filter: drop entries with fewer than this many universe compounds. Defaults to `1` when the key is absent from a hand-edited file. |
 | `enrichment_fdr_method` | `"BenjaminiHochberg"` \| `"BenjaminiYekutieli"` \| `"NoCorrection"` | `"BenjaminiYekutieli"` | **FDR correction** radio (Stage 3 setup) | Stage 3 FDR (defaults BY — ORA entries share compounds). `"NoCorrection"` is allowed here (unlike Stage 2). |
 | `stage3_export_width_in` | `1.0`–`40.0` | `3.5` | **Width (in)** field (Stage 3 result) | Dot-plot PNG width (inches). |
 | `stage3_export_height_in` | `1.0`–`40.0` | `7.0` | **Height (in)** field (Stage 3 result) | Dot-plot PNG height (inches); auto-fits to the row count unless overridden (see *11. Exporting the dot plot* under Stage 3 Pathway mode). |
 | `stage3_export_dpi` | `72`–`1200` | `300` | **DPI** field (Stage 3 result) | Dot-plot PNG resolution. |
+| `coverage_presence_threshold` | `0.0`–`1.0` | `0.5` | **Detected in ≥ N % of a group's samples** field (Coverage Setup) | Coverage route: a feature counts as detected in a group when this fraction of that group's samples carry a finite, positive raw intensity. Stored as a fraction; the control shows a percentage. |
+| `coverage_selected_groups` | array of group names \| `null` | `null` | **Sample groups** multi-select (Coverage Setup) | Reset to `null` on Load if any named group is absent from current metadata. Coverage route: which groups the presence filter runs over. `null` means no metadata `.csv` was supplied, so every feature is included. |
+| `coverage_min_entry_size` | `1`–`200` | `3` | **Minimum entry size** control (Coverage result) | Coverage route: drop entries with fewer compounds in KEGG than this. Hard minimum `1`, so a zero-compound entry can never be shown. Distinct from `min_entry_size`, which is the enrichment route's pre-FDR filter. |
+| `coverage_sort_key` | `"Coverage"` \| `"Hits"` \| `"EntrySize"` \| `"EntryId"` | `"Coverage"` | **Sort by** selector (Coverage result) | Coverage route: the results-table sort key, shared with the clickable column headers. The app offers `Coverage` and `Hits`; the other two load and sort correctly but are not currently selectable in the UI. |
 
-**Ranges are the in-app control limits, not hard file limits.** A hand-edited value outside a listed range loads as written and is only clamped the next time you touch that control in the app; export sizes are additionally clamped so `round(inches × DPI)` stays within `64–20000` px per axis at render. Misspelled or extra keys are rejected on Load (the file must contain exactly these keys), as is any `schema_version` other than `1`. The four input-dependent fields above are the only ones reset on Load.
+**Ranges are the in-app control limits, not hard file limits.** A hand-edited value outside a listed range loads as written and is only clamped the next time you touch that control in the app; export sizes are additionally clamped so `round(inches × DPI)` stays within `64–20000` px per axis at render. How strictly the file is checked depends on where a key sits. At the **envelope** level — `schema_version`, `app_version`, `saved_at`, `user_note`, `input_files`, `settings` — a misspelled or extra key is rejected on Load, as is any `schema_version` other than `3`. Inside `settings` an unrecognized key is **silently ignored**, so a typo there does not fail the load; it simply has no effect. A *missing* key inside `settings` is rejected for most of the fields above, and falls back to the default for the eight that list one (`log_transform`, `min_entry_size`, `dedup_rt_tolerance_min`, `analysis_route`, `coverage_min_entry_size`, `coverage_sort_key`, `coverage_selected_groups`, `coverage_presence_threshold`). The five input-dependent fields above are the only ones reset on Load.
 
 ### When is each button available
 
@@ -1291,7 +1311,7 @@ Every key under `settings`. The **UI control** column maps each key to the scree
    - A one-line summary of the settings (analysis mode, DAM method + FDR, normalization, enrichment direction + FDR + Top N).
    - **Hash mismatches** — if any of your currently-loaded input files have a different SHA-256 from the snapshot's, they're listed here.
      The settings still apply if you continue, but you're warned that the inputs have drifted.
-   - **Field resets** — if the snapshot named a numerator / denominator group, a metadata column, or a PQN reference group that doesn't exist in the metadata you currently have loaded, those fields are listed and reset to `None` on apply.
+   - **Field resets** — if the snapshot named a numerator / denominator group, a metadata column, a PQN reference group, or a coverage sample group that doesn't exist in the metadata you currently have loaded, those fields are listed and reset to `None` on apply.
      You'll need to re-pick them at Stage 2 setup.
      (This section only appears when you have metadata loaded at Load time; if you Load before uploading metadata, the safety net is the Stage 2 setup gate instead — see next paragraph.)
 3. Click **Apply settings** to overwrite your current settings, or **Cancel** to discard.
@@ -1311,9 +1331,9 @@ You can:
 - Tweak a single threshold without re-saving from the app.
 - Strip the `input_files` block to share a "settings only" snapshot (Load handles an empty `input_files` array — hash check is skipped).
 
-Hand-editing the `schema_version` to a number other than `1`, or breaking the JSON syntax, surfaces a clear error toast on Load (e.g.
-*"This settings file uses schema version 2; this app expects version 1."* or *"Settings file is not valid JSON (line 7 column 15) …"*).
-Any snapshot carrying a `schema_version` other than `1` is rejected — re-save from your current setup to produce a v1 snapshot.
+Hand-editing the `schema_version` to a number other than `3`, or breaking the JSON syntax, surfaces a clear error toast on Load (e.g.
+*"This settings file uses schema version 2; this app expects version 3. The file was likely saved by a different app version."* or *"Settings file is not valid JSON (line 7 column 15) …"*).
+Any snapshot carrying a `schema_version` other than `3` is rejected — re-save from your current setup to produce a v3 snapshot.
 
 ## Reporting bugs
 

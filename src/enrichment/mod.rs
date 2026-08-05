@@ -10,6 +10,6 @@ pub mod ora;
 pub mod types;
 
 pub use crate::dam::fdr::FdrMethod;
-pub use export::{export_csv, export_csv_with_mode};
+pub use export::{RowSelection, export_csv, export_csv_with_mode};
 pub use ora::run_ora;
 pub use types::{EnrichmentDirection, EnrichmentResult, EnrichmentRow};

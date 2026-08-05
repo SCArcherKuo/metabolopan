@@ -1,7 +1,8 @@
 //! Stage 3 setup screen. Controls: Analysis Mode toggle, species/group
-//! selector, inline KEGG fetch progress, direction selector, top N,
-//! enrichment FDR threshold, FDR correction radio, minimum hit count,
-//! Run Enrichment button.
+//! selector, inline KEGG fetch progress, direction selector, minimum entry
+//! size, FDR correction radio, Run Enrichment button. (Top N, the significance
+//! threshold and minimum hit count live on the Stage 3 RESULT screen — they
+//! were relocated by `add-bottom-panel-data-tab`.)
 //!
 //! Per `reorder-gui-and-move-mode-to-stage3` the Mode toggle and the
 //! mode-specific selector both live on this screen (no longer Stage 1),
@@ -89,26 +90,39 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                     .speed(1)
                     .range(1..=20),
             )
-            .on_hover_text(
-                "Drop pathways/modules with fewer than N measurable compounds before FDR. \
-                 Reduces multiple-testing penalty.",
-            );
+            // Method-dependent: under `NoCorrection` there is no FDR stage for
+            // the drop to precede and no multiple-testing penalty to reduce, so
+            // both sentences would be false. Read from SETTINGS here — this
+            // screen describes the run the user is about to start, the
+            // complement of the result screen's method-from-the-run rule.
+            .on_hover_text(match settings.enrichment_fdr_method {
+                crate::dam::fdr::FdrMethod::NoCorrection => {
+                    "Drop pathways/modules with fewer than N measurable compounds \
+                     before the significance test."
+                }
+                _ => {
+                    "Drop pathways/modules with fewer than N measurable compounds before FDR. \
+                     Reduces multiple-testing penalty."
+                }
+            });
         });
         ui.add_space(8.0);
 
         // `Enrichment FDR threshold` + `Minimum hit count` moved to the Stage 3
         // result screen (`add-bottom-panel-data-tab`) so they can be tuned and
         // re-applied without navigating back. The FDR correction *method* stays
-        // here (it changes how q-values are computed, not just the display cut).
+        // here: it decides which significance quantity the run produces, not
+        // just where the display cut falls.
 
         // FDR correction radio. Independent of Stage 2's choice (per add-bh-fdr D3).
-        // `None` is exposed here ONLY (Stage 2 setup hides it; an adversarial
-        // snapshot is defensively coerced back to BH in `apply_snapshot`).
-        // Stage 3 exposes the `None` (NoCorrection) variant → `include_none = true`.
+        // `No correction` is exposed here ONLY (Stage 2 setup hides it; an
+        // adversarial snapshot is defensively coerced back to BH in
+        // `apply_snapshot`).
+        // Stage 3 exposes the `NoCorrection` variant → `include_none = true`.
         crate::ui::widgets::fdr_method_radios(ui, &mut settings.enrichment_fdr_method, true);
         ui.label(
             RichText::new(
-                "None skips multiple-testing correction entirely — exploratory only, not for publication.",
+                "No correction skips multiple-testing correction entirely — exploratory only, not for publication.",
             )
             .small()
             .color(theme::TEXT),

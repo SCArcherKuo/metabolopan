@@ -28,15 +28,24 @@ pub struct DotplotOpts {
     pub height_px: u32,
     pub fdr_threshold: f64,
     pub top_n: usize,
-    /// FDR method that produced `result.rows[*].fdr`. Affects only the
-    /// colorbar title (`-log10(FDR (BH))` / `-log10(FDR (BY))`) and the
-    /// annotation-strip `FDR: BH` / `FDR: BY` token; does NOT alter
-    /// marker geometry, the colorbar gradient, axes, or any other pixel.
+    /// Live display filter on hit count, read from settings at draw time — NOT
+    /// from the result. Storing it per-row froze this filter to the run while
+    /// the threshold and `top_n` stayed live; see the `enrichment-dot-plot` spec.
+    pub min_hit_count: usize,
+    /// Correction method that produced `result.rows[*].fdr`. Affects only the
+    /// chrome: the colorbar title (`-log10(FDR (BH))` / `-log10(FDR (BY))` /
+    /// `-log10(p-value)`), the annotation strip's `Significance:` line, and the
+    /// empty-state placeholder's metric noun. Does NOT alter marker geometry,
+    /// the colorbar gradient, axes, or any other pixel.
+    ///
+    /// Callers MUST pass `result.fdr_method` — the method that fed the
+    /// `run_ora` call which produced the result being plotted — never a live
+    /// setting, which describes the NEXT run.
     pub fdr_method: crate::dam::fdr::FdrMethod,
     /// Singular lowercase noun for the entity being enriched
     /// (`"pathway"` in pathway mode, `"module"` in module mode). Drives
     /// the Y-axis title (`KEGG <entry_label>`) and the empty-state
-    /// placeholder (`No <entry_label>s passed FDR < ...`); previously
+    /// placeholder (`No <entry_label>s passed <metric> < ...`); previously
     /// hardcoded to "pathways" which read as a factual error in module-
     /// mode publications. Callers obtain this via
     /// `AnalysisMode::entry_label_singular`.
@@ -121,7 +130,8 @@ pub fn render_dotplot(result: &EnrichmentResult, opts: &DotplotOpts) -> Result<V
     // Rows the dot plot draws, ordered top-to-bottom: the most-significant
     // `top_n` are selected, then arranged by descending fold enrichment so the
     // largest-fold-enrichment entry sits at the top of the y axis.
-    let filtered = select_and_order_rows(result, opts.fdr_threshold, opts.top_n);
+    let filtered =
+        select_and_order_rows(result, opts.fdr_threshold, opts.min_hit_count, opts.top_n);
 
     // -log10 colour-mapping span. Computed ONCE so chart dots and the
     // legend colorbar use the same normalisation — without this they
@@ -136,7 +146,13 @@ pub fn render_dotplot(result: &EnrichmentResult, opts: &DotplotOpts) -> Result<V
         let (chart_area, legend_area) = root.split_horizontally(chart_w_boundary);
 
         if filtered.is_empty() {
-            draw_empty_placeholder(&chart_area, opts.entry_label, opts.fdr_threshold, scale)?;
+            draw_empty_placeholder(
+                &chart_area,
+                opts.entry_label,
+                opts.fdr_method,
+                opts.fdr_threshold,
+                scale,
+            )?;
         } else {
             draw_chart(
                 &chart_area,
@@ -148,7 +164,7 @@ pub fn render_dotplot(result: &EnrichmentResult, opts: &DotplotOpts) -> Result<V
             )?;
         }
         draw_legend(&legend_area, &filtered, opts, nl_threshold, max_nl, scale)?;
-        draw_annotation_strip(&root, result, opts.entry_label, scale)?;
+        draw_annotation_strip(&root, result, opts.min_hit_count, opts.entry_label, scale)?;
 
         root.present().map_err(|e| anyhow!("present: {e:?}"))?;
     }
@@ -171,7 +187,7 @@ pub fn export_dotplot_png(
 ///
 /// Selection (significance) is unchanged from the ORA sort: rows arrive
 /// FDR-ascending from `enrichment::ora`, so filtering on
-/// `displayed && fdr < threshold` and truncating to `top_n` keeps the
+/// `hits >= min_hit_count && fdr < threshold` and truncating to `top_n` keeps the
 /// **most significant** `top_n` entries. The kept rows are then re-ordered for
 /// DISPLAY by descending fold enrichment (`enrichment_ratio`) so the entry with
 /// the largest fold enrichment sits at the top of the y axis — matching the
@@ -184,12 +200,13 @@ pub fn export_dotplot_png(
 fn select_and_order_rows(
     result: &EnrichmentResult,
     fdr_threshold: f64,
+    min_hit_count: usize,
     top_n: usize,
 ) -> Vec<&crate::enrichment::types::EnrichmentRow> {
     let mut rows: Vec<&crate::enrichment::types::EnrichmentRow> = result
         .rows
         .iter()
-        .filter(|r| r.displayed && r.fdr < fdr_threshold)
+        .filter(|r| r.hits >= min_hit_count && r.fdr < fdr_threshold)
         .collect();
     if rows.len() > top_n {
         rows.truncate(top_n);
@@ -374,6 +391,7 @@ where
 fn draw_empty_placeholder<DB: DrawingBackend>(
     area: &DrawingArea<DB, plotters::coord::Shift>,
     entry_label: &str,
+    method: crate::dam::fdr::FdrMethod,
     fdr_threshold: f64,
     scale: f64,
 ) -> Result<()>
@@ -383,7 +401,7 @@ where
     let sp = |v: f64| common::sp(v, scale);
     let su = |v: f64| common::su(v, scale);
     let (w, h) = area.dim_in_pixel();
-    let text = empty_placeholder_text(entry_label, fdr_threshold);
+    let text = empty_placeholder_text(entry_label, method, fdr_threshold);
     area.draw_text(
         &text,
         &("sans-serif", su(TITLE_FONT)).into_font().color(&BLACK),
@@ -519,6 +537,7 @@ where
 fn draw_annotation_strip<DB: DrawingBackend>(
     root: &DrawingArea<DB, plotters::coord::Shift>,
     result: &EnrichmentResult,
+    min_hit_count: usize,
     entry_label: &str,
     scale: f64,
 ) -> Result<()>
@@ -528,7 +547,7 @@ where
     let sp = |v: f64| common::sp(v, scale);
     let su = |v: f64| common::su(v, scale);
 
-    let lines = build_strip(result, entry_label);
+    let lines = build_strip(result, min_hit_count, entry_label);
     let (_, rh) = root.dim_in_pixel();
     let font = ("sans-serif", su(LABEL_FONT)).into_font().color(&BLACK);
     let line_h = sp(LINE_HEIGHT_PX_BASE);
@@ -551,7 +570,7 @@ where
 /// entry count (`= result.rows.len()`, the BH/BY divisor) stays auditable
 /// from the figure alone. Never calls `FdrMethod::short_label()`, which is
 /// shared by the volcano strip / CSV export / UI radios.
-fn build_strip(result: &EnrichmentResult, entry_label: &str) -> Vec<String> {
+fn build_strip(result: &EnrichmentResult, min_hit_count: usize, entry_label: &str) -> Vec<String> {
     // Line 1 — background universe (the measurable, KEGG-mapped metabolome).
     let line1 = format!(
         "Background universe = {} compounds measured and mapped to KEGG",
@@ -594,8 +613,8 @@ fn build_strip(result: &EnrichmentResult, entry_label: &str) -> Vec<String> {
             result.min_entry_size
         ));
     }
-    if result.min_hit_count > 1 {
-        line3.push_str(&format!("; ≥ {} hits required", result.min_hit_count));
+    if min_hit_count > 1 {
+        line3.push_str(&format!("; ≥ {min_hit_count} hits required"));
     }
 
     // Line 4 — significance basis, in plain language (built locally; never
@@ -718,8 +737,17 @@ fn fdr_to_color(fdr: f64, nl_threshold: f64, max_nl: f64) -> RGBColor {
 
 /// Empty-state placeholder text. Pluralises the entity by appending "s"
 /// — both supported labels ("pathway" / "module") pluralise regularly.
-fn empty_placeholder_text(entry_label: &str, fdr_threshold: f64) -> String {
-    format!("No {entry_label}s passed FDR < {fdr_threshold}")
+///
+/// Names the significance quantity by the method that produced it: this string
+/// is drawn INTO the exported PNG, so under `NoCorrection` it must not carry a
+/// correction the figure did not have.
+fn empty_placeholder_text(
+    entry_label: &str,
+    method: crate::dam::fdr::FdrMethod,
+    fdr_threshold: f64,
+) -> String {
+    let metric = method.metric_label();
+    format!("No {entry_label}s passed {metric} < {fdr_threshold}")
 }
 
 /// Y-axis title: sentence case, matches the X-axis "Enrichment ratio"
@@ -767,7 +795,6 @@ mod tests {
             p_value: fdr / 2.0,
             fdr,
             hit_kegg_ids: vec![],
-            displayed: true,
         }
     }
 
@@ -818,7 +845,7 @@ mod tests {
             sample_row("p1", "P1", 3, 5.0, 0.002),
             sample_row("p2", "P2", 3, 3.0, 0.003),
         ]);
-        let ids: Vec<&str> = select_and_order_rows(&result, 0.05, 10)
+        let ids: Vec<&str> = select_and_order_rows(&result, 0.05, 1, 10)
             .iter()
             .map(|r| r.entry_id.as_str())
             .collect();
@@ -833,7 +860,7 @@ mod tests {
             sample_row("pZ", "PZ", 3, 4.0, 0.001), // same ratio + fdr → entry_id breaks
             sample_row("pM", "PM", 3, 4.0, 0.002), // same ratio, higher fdr → sorts last
         ]);
-        let ids: Vec<&str> = select_and_order_rows(&result, 0.05, 10)
+        let ids: Vec<&str> = select_and_order_rows(&result, 0.05, 1, 10)
             .iter()
             .map(|r| r.entry_id.as_str())
             .collect();
@@ -852,7 +879,7 @@ mod tests {
             sample_row("p3", "P3", 3, 9.0, 0.004),
             sample_row("p4", "P4", 3, 9.5, 0.005),
         ]);
-        let ids: Vec<&str> = select_and_order_rows(&result, 0.05, 3)
+        let ids: Vec<&str> = select_and_order_rows(&result, 0.05, 1, 3)
             .iter()
             .map(|r| r.entry_id.as_str())
             .collect();
@@ -867,6 +894,7 @@ mod tests {
             width_px: 400,
             height_px: 400,
             fdr_threshold: 0.05,
+            min_hit_count: 1,
             top_n: 10,
             fdr_method: crate::dam::fdr::FdrMethod::BenjaminiYekutieli,
             entry_label: "pathway",
@@ -897,6 +925,7 @@ mod tests {
             width_px: 400,
             height_px: 300,
             fdr_threshold: 0.05,
+            min_hit_count: 1,
             top_n: 10,
             fdr_method: crate::dam::fdr::FdrMethod::BenjaminiYekutieli,
             entry_label: "pathway",
@@ -915,7 +944,7 @@ mod tests {
         // sample_result: universe=100, dam_cpd=20, direction Both,
         // min_entry_size=1, dropped=0, min_hit=1, method BY.
         let r = sample_result(5);
-        let lines = build_strip(&r, "pathway");
+        let lines = build_strip(&r, 1, "pathway");
         assert_eq!(lines.len(), 4, "got: {lines:?}");
         assert_eq!(
             lines[0],
@@ -935,7 +964,7 @@ mod tests {
 
     #[test]
     fn build_strip_drops_the_n_k_m_symbols() {
-        let joined = build_strip(&sample_result(5), "pathway").join("\n");
+        let joined = build_strip(&sample_result(5), 1, "pathway").join("\n");
         assert!(!joined.contains("N="), "{joined}");
         assert!(!joined.contains("K="), "{joined}");
         assert!(!joined.contains("m:"), "{joined}");
@@ -946,10 +975,15 @@ mod tests {
     fn build_strip_no_correction_significance_is_self_explanatory() {
         let mut r = sample_result(3);
         r.fdr_method = crate::dam::fdr::FdrMethod::NoCorrection;
-        let lines = build_strip(&r, "pathway");
+        let lines = build_strip(&r, 1, "pathway");
         assert_eq!(lines[3], "Significance: raw p-value (no FDR correction)");
-        // The cryptic bare form must be gone.
-        assert!(!lines.join("\n").contains("FDR: None"));
+        // The cryptic bare method token must be gone in EITHER spelling — the
+        // pre-rename `FDR: None` and the post-rename `FDR: NoCorrection`. The
+        // strip builds its wording locally and never calls `short_label()`, and
+        // this is what keeps that true.
+        let joined = lines.join("\n");
+        assert!(!joined.contains("FDR: None"));
+        assert!(!joined.contains("FDR: NoCorrection"));
     }
 
     #[test]
@@ -959,7 +993,7 @@ mod tests {
         // En-dash U+2013, copied from the spec — an ASCII hyphen would
         // silently never match.
         assert_eq!(
-            build_strip(&r, "pathway")[3],
+            build_strip(&r, 1, "pathway")[3],
             "Significance: FDR-adjusted, Benjamini–Hochberg (BH)"
         );
     }
@@ -968,19 +1002,19 @@ mod tests {
     fn build_strip_direction_phrases_are_plain_language() {
         let mut up = sample_result(1);
         up.direction = EnrichmentDirection::Up;
-        assert!(build_strip(&up, "pathway")[1].ends_with("(increased)"));
+        assert!(build_strip(&up, 1, "pathway")[1].ends_with("(increased)"));
 
         let mut down = sample_result(1);
         down.direction = EnrichmentDirection::Down;
-        assert!(build_strip(&down, "pathway")[1].ends_with("(decreased)"));
+        assert!(build_strip(&down, 1, "pathway")[1].ends_with("(decreased)"));
 
         let both = sample_result(1);
-        assert!(build_strip(&both, "pathway")[1].ends_with("(both directions)"));
+        assert!(build_strip(&both, 1, "pathway")[1].ends_with("(both directions)"));
     }
 
     #[test]
     fn build_strip_module_mode_uses_module_entity_word() {
-        let lines = build_strip(&sample_result(4), "module");
+        let lines = build_strip(&sample_result(4), 1, "module");
         assert!(
             lines[2].starts_with("Modules tested ="),
             "got: {}",
@@ -994,7 +1028,7 @@ mod tests {
         r.min_entry_size = 3;
         r.entries_dropped_by_min_entry_size = 7; // 5 tested + 7 dropped = 12
         assert_eq!(
-            build_strip(&r, "pathway")[2],
+            build_strip(&r, 1, "pathway")[2],
             "Pathways tested = 5 of 12  ·  7 skipped (< 3 compounds each)"
         );
     }
@@ -1005,7 +1039,7 @@ mod tests {
         r.min_entry_size = 3;
         r.entries_dropped_by_min_entry_size = 0;
         assert_eq!(
-            build_strip(&r, "pathway")[2],
+            build_strip(&r, 1, "pathway")[2],
             "Pathways tested = 5  ·  each pathway needs ≥ 3 compounds"
         );
     }
@@ -1015,22 +1049,24 @@ mod tests {
         let mut r = sample_result(5);
         r.min_entry_size = 3;
         r.entries_dropped_by_min_entry_size = 0;
-        r.min_hit_count = 3;
-        // Ordering is locked: min_entry clause first, hits clause last.
+        // The hits clause reports the LIVE `min_hit_count` the figure was drawn
+        // with, not whatever the run started from — the filter is applied at
+        // draw time, so the strip must describe the same value.
         assert_eq!(
-            build_strip(&r, "pathway")[2],
+            build_strip(&r, 3, "pathway")[2],
             "Pathways tested = 5  ·  each pathway needs ≥ 3 compounds; ≥ 3 hits required"
         );
     }
 
     #[test]
     fn build_strip_min_hit_clause_only_when_above_one() {
-        let mut r = sample_result(5);
-        r.min_hit_count = 3;
+        let r = sample_result(5);
         assert_eq!(
-            build_strip(&r, "pathway")[2],
+            build_strip(&r, 3, "pathway")[2],
             "Pathways tested = 5; ≥ 3 hits required"
         );
+        // At 1 (the default, i.e. no filtering) the clause is omitted entirely.
+        assert_eq!(build_strip(&r, 1, "pathway")[2], "Pathways tested = 5");
     }
 
     #[test]
@@ -1040,6 +1076,7 @@ mod tests {
             width_px: 200,
             height_px: 200,
             fdr_threshold: 0.05,
+            min_hit_count: 1,
             top_n: 10,
             fdr_method: crate::dam::fdr::FdrMethod::BenjaminiYekutieli,
             entry_label: "pathway",
@@ -1146,12 +1183,26 @@ mod tests {
     #[test]
     fn empty_placeholder_text_pluralises_entry_label() {
         assert_eq!(
-            empty_placeholder_text("pathway", 0.05),
+            empty_placeholder_text(
+                "pathway",
+                crate::dam::fdr::FdrMethod::BenjaminiYekutieli,
+                0.05
+            ),
             "No pathways passed FDR < 0.05"
         );
         assert_eq!(
-            empty_placeholder_text("module", 0.05),
+            empty_placeholder_text(
+                "module",
+                crate::dam::fdr::FdrMethod::BenjaminiHochberg,
+                0.05
+            ),
             "No modules passed FDR < 0.05"
+        );
+        // The metric noun follows the method — this string is drawn into the
+        // exported PNG, so an uncorrected run must not claim an FDR.
+        assert_eq!(
+            empty_placeholder_text("pathway", crate::dam::fdr::FdrMethod::NoCorrection, 0.05),
+            "No pathways passed p-value < 0.05"
         );
     }
 

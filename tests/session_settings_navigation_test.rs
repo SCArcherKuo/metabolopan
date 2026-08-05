@@ -310,7 +310,7 @@ async fn session_inputs_csv_path_survives_post_stage1_state_transitions() {
         kegg_conv_time_span: None,
         dual_mode_breakdown: None,
         funnel: Default::default(),
-        dotplot_tex: None,
+        dotplot: None,
         rendering: false,
         render_rx: None,
         refresh_state: metabolopan::app::RefreshState::Idle,

@@ -825,7 +825,7 @@ impl CoverageRunOutput {
             dedup_reports: self.dedup_reports,
             pubchem_time_span: self.pubchem_time_span,
             kegg_conv_time_span: self.kegg_conv_time_span,
-            dotplot_tex: None,
+            dotplot: None,
             rendering: false,
             render_rx: None,
             confirming_new_round: false,

@@ -357,7 +357,7 @@ pub(crate) fn save_dialog(
 }
 
 /// The (FdrMethod, label) options for [`fdr_method_radios`], in render order.
-/// BH + BY always; the `None (raw p-values)` (`NoCorrection`) variant only when
+/// BH + BY always; the `No correction (raw p-values)` (`NoCorrection`) variant only when
 /// `include_none` — Stage 3 setup exposes it, Stage 2 setup hides it. Split out
 /// as a pure fn so the gating + verbatim label strings are unit-testable.
 fn fdr_radio_options(include_none: bool) -> Vec<(FdrMethod, &'static str)> {
@@ -372,14 +372,14 @@ fn fdr_radio_options(include_none: bool) -> Vec<(FdrMethod, &'static str)> {
         ),
     ];
     if include_none {
-        options.push((FdrMethod::NoCorrection, "None (raw p-values)"));
+        options.push((FdrMethod::NoCorrection, "No correction (raw p-values)"));
     }
     options
 }
 
 /// The shared **FDR-method radio group** — a `FDR correction:` label plus the
 /// BH and BY radios (verbatim label strings), and — only when `include_none` —
-/// the `None (raw p-values)` radio (`FdrMethod::NoCorrection`). Stage 2 setup
+/// the `No correction (raw p-values)` radio (`FdrMethod::NoCorrection`). Stage 2 setup
 /// calls it with `include_none = false` (the `None` variant is Stage-3-only);
 /// Stage 3 setup with `include_none = true`. The per-screen grey sub-hint below
 /// the radios stays at the call site (the two hint texts differ).
@@ -542,11 +542,18 @@ mod tests {
         assert_eq!(export_pixels(40.0, 40.0, 1200), (20_000, 20_000));
     }
 
-    /// `fdr_radio_options` gates the `NoCorrection` (`None`) variant on
-    /// `include_none` and keeps the BH/BY/None label strings verbatim — the
-    /// contract the CSV / plot-strip captions depend on staying in sync.
+    /// `fdr_radio_options` gates the `NoCorrection` variant on `include_none`
+    /// and pins all three captions verbatim, so the BH/BY pair cannot drift
+    /// between the Stage 2 and Stage 3 screens.
+    ///
+    /// These captions are NOT the strings any exporter reads — the CSV tag line
+    /// renders `FdrMethod::short_label()` and the dot-plot annotation strip
+    /// builds its wording locally. The third radio is where the two visibly
+    /// differ: its caption is `No correction (raw p-values)`, its short label is
+    /// `NoCorrection`. An earlier version of this comment called the captions a
+    /// contract the exporters depend on; they never were.
     #[test]
-    fn fdr_radio_options_gates_none_and_keeps_labels() {
+    fn fdr_radio_options_pins_captions_and_gates_no_correction() {
         let without = fdr_radio_options(false);
         assert_eq!(without.len(), 2);
         assert!(
@@ -559,7 +566,7 @@ mod tests {
         // Verbatim label strings.
         assert_eq!(without[0].1, "Benjamini–Hochberg (BH) procedure");
         assert_eq!(without[1].1, "Benjamini–Yekutieli (BY) procedure");
-        assert_eq!(with[2].1, "None (raw p-values)");
+        assert_eq!(with[2].1, "No correction (raw p-values)");
     }
 
     /// `png_export_size_controls` renders without panicking (smoke), reusing the

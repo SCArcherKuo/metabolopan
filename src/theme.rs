@@ -90,8 +90,9 @@ pub const HEADING: Color32 = Color32::from_rgb(26, 26, 25);
 pub const TEXT: Color32 = Color32::from_rgb(45, 44, 42);
 
 /// `#5C5A56` 淡墨灰 (Washed Ink) — secondary copy, captions, **dates &
-/// timestamps** (the `Cached … ago` line and PubChem/KEGG-conv/modules
-/// fetched-date spans), Line-tab unselected label; log pane DEBUG. ~5.5:1.
+/// timestamps** (the catalogue, PubChem and KEGG-conv fetched-date lines in
+/// the Data tab's `Cache data` block), Line-tab unselected label; log pane
+/// DEBUG. ~5.5:1.
 /// Renamed from `TEXT_MUTED`.
 pub const TEXT_SECONDARY: Color32 = Color32::from_rgb(92, 90, 86);
 

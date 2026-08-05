@@ -134,6 +134,14 @@ impl AnalysisPayload {
 /// for the table of reset/clear API surfaces.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionSettings {
+    // ── Route ──
+    /// Which route the session is on — the FIRST thing the user picks, on the
+    /// pre-stepper route chooser, and therefore first here so a saved snapshot
+    /// reads in the order the user filled it in. Written only by the route
+    /// chooser, the Stage 1 escape, and a snapshot apply (see [`AnalysisRoute`]).
+    #[serde(default = "default_analysis_route")]
+    pub analysis_route: AnalysisRoute,
+
     // ── Stage 1 / mode-related ──
     pub analysis_mode: AnalysisMode,
     pub kegg_species: Option<String>,
@@ -193,11 +201,7 @@ pub struct SessionSettings {
     pub stage3_export_height_in: f64,
     pub stage3_export_dpi: u32,
 
-    // ── Analysis route + KEGG coverage route ──
-    /// Which route the session is on. Written only by the route chooser, the
-    /// Stage 1 escape, and a snapshot apply (see [`AnalysisRoute`]).
-    #[serde(default = "default_analysis_route")]
-    pub analysis_route: AnalysisRoute,
+    // ── KEGG coverage route ──
     /// Coverage-route minimum entry size. Deliberately NOT a reuse of
     /// `min_entry_size`: ORA's hypergeometric test already penalises small
     /// entries, whereas a raw coverage percentage does not, so the two carry
@@ -337,10 +341,11 @@ pub(crate) fn clamp_rt_tolerance(v: f64) -> f64 {
 /// tall band of whitespace. Only sets the initial value at result-entry; the
 /// result-screen Height field remains a user override.
 ///
-/// `pub(crate)` so the Stage 3 result UI can re-fit the height on each
-/// "Re-draw dot plot" against the live displayed-row count (the display
-/// filters — Enrichment FDR threshold / Min hit count / Top N — change the
-/// row count without a re-run, so the run-entry autosize alone goes stale).
+/// `pub(crate)` so the Stage 3 result UI can re-fit the height on each draw
+/// against the live displayed-row count (the display filters — the significance
+/// threshold, min hit count and Top N — all change the row count without a
+/// re-run, so the run-entry autosize alone goes stale; each of them also
+/// discards the held figure, so the two sizings are never on screen together).
 pub(crate) fn stage3_autosize_height_in(top_n: usize, displayed_rows: usize) -> f64 {
     let effective = top_n.min(displayed_rows).max(1);
     // Lower clamp 2.0 (was 1.5): the dot plot now scales fonts/elements by the
@@ -689,9 +694,13 @@ pub enum AppState {
         /// Provenance funnel counts (InChIKey → CID → KEGG-cpd, detected +
         /// foreground) surfaced by the Data tab (`add-bottom-panel-data-tab`).
         funnel: Stage3Funnel,
-        dotplot_tex: Option<egui::TextureHandle>,
+        /// The rendered dot plot, bound to the display filters it depicts. The
+        /// texture is never held apart from those values: a filter change
+        /// discards the pair, and a render that finishes after one is dropped
+        /// rather than installed.
+        dotplot: Option<DrawnPlot<EnrichDisplayFilters>>,
         rendering: bool,
-        render_rx: Option<mpsc::Receiver<Result<DotplotRender, String>>>,
+        render_rx: Option<mpsc::Receiver<Result<DotplotRenderOf<EnrichDisplayFilters>, String>>>,
         refresh_state: RefreshState,
         /// Variant-internal "Start a new analysis?" confirmation flag.
         /// `true` while the loss-warning modal is open; set by the
@@ -784,9 +793,13 @@ pub enum AppState {
         dedup_reports: Vec<crate::dedup::DedupReport>,
         pubchem_time_span: Option<(DateTime<Utc>, DateTime<Utc>, usize)>,
         kegg_conv_time_span: Option<(DateTime<Utc>, DateTime<Utc>, usize)>,
-        dotplot_tex: Option<egui::TextureHandle>,
+        /// The rendered dot plot bound to its filters, same shape and same
+        /// contract as `Stage3EnrichResult`'s — only the filter tuple differs.
+        dotplot: Option<DrawnPlot<crate::coverage::DisplayFilters>>,
         rendering: bool,
-        render_rx: Option<mpsc::Receiver<Result<DotplotRender, String>>>,
+        render_rx: Option<
+            mpsc::Receiver<Result<DotplotRenderOf<crate::coverage::DisplayFilters>, String>>,
+        >,
         /// Variant-internal `Start a new analysis?` confirmation flag; NOT part
         /// of the App-level modal mutual-exclusion family, exactly as on the
         /// enrichment result screen.
@@ -1212,7 +1225,7 @@ pub struct Stage3RunOutput {
 impl Stage3RunOutput {
     /// Consume the orchestrator output into a fully-populated
     /// `AppState::Stage3EnrichResult` for the given `dam_results`. The five
-    /// result-screen runtime fields start fresh (`dotplot_tex: None`,
+    /// result-screen runtime fields start fresh (`dotplot: None`,
     /// `rendering: false`, `render_rx: None`, `refresh_state: Idle`,
     /// `confirming_new_round: false`). Replaces the manual field-by-field splat
     /// at the `handle_stage3_terminal` success arm.
@@ -1227,7 +1240,7 @@ impl Stage3RunOutput {
             kegg_conv_time_span: self.kegg_conv_time_span,
             dual_mode_breakdown: self.dual_mode_breakdown,
             funnel: self.funnel,
-            dotplot_tex: None,
+            dotplot: None,
             rendering: false,
             render_rx: None,
             refresh_state: RefreshState::Idle,
@@ -1292,6 +1305,27 @@ impl SessionSettings {
             min_entry_size: self.coverage_min_entry_size.max(MIN_COVERAGE_ENTRY_SIZE),
             min_hit_count: self.min_hit_count,
             sort_key: self.coverage_sort_key,
+            top_n: self.top_n,
+        }
+    }
+
+    /// The enrichment result screen's live display filters.
+    ///
+    /// The counterpart of `coverage_display_filters` above. Both exist so that
+    /// "what the screen is currently showing" is ONE value rather than a triple
+    /// re-assembled at each consumer — the dot-plot invalidation compares it
+    /// against the values a texture was rendered from, and disagreement between
+    /// two independent re-derivations is exactly what that comparison could not
+    /// then detect.
+    ///
+    /// Note the ASYMMETRY with the coverage tuple: this one carries the
+    /// significance threshold and no entry-size floor, that one the reverse.
+    /// The coverage route performs no statistical test and has no threshold to
+    /// record.
+    pub fn enrichment_display_filters(&self) -> EnrichDisplayFilters {
+        EnrichDisplayFilters {
+            fdr_threshold: self.enrichment_fdr_threshold,
+            min_hit_count: self.min_hit_count,
             top_n: self.top_n,
         }
     }
@@ -1397,6 +1431,54 @@ pub struct CoverageFunnel {
 
 /// Dot plot render channel payload: RGBA buffer plus its dimensions.
 pub type DotplotRender = (Vec<u8>, u32, u32);
+
+/// A finished render together with the display filters it was rendered FROM.
+///
+/// The pair travels from the render task to the install site so a render that
+/// completes after a filter moved can be recognised and dropped rather than
+/// installed. The filter controls are deliberately left enabled during a render,
+/// so this case is reachable on both result screens — and when it happens there
+/// is no texture on screen for the ordinary invalidation to clear.
+pub type DotplotRenderOf<F> = (DotplotRender, F);
+
+/// A rendered dot plot, bound to the display-filter values it depicts.
+///
+/// The texture is never held alone. `filters` is unreachable except through the
+/// texture and is dropped with it, so the two cannot come apart — which is the
+/// whole point: a screen that could update one without the other is the defect
+/// this type exists to prevent. Invalidation takes the entire `Option` to
+/// `None`.
+///
+/// This is NOT a settings mirror. A mirrored setting tracks the user; `filters`
+/// is frozen at render time precisely so it can be caught disagreeing with them.
+/// See the `app-shell` capability's state-machine requirement.
+/// `egui::TextureHandle` is not `Debug`, so neither is this — the same reason
+/// `AppState` itself is not, and why the diagnostics bundle renders the state by
+/// hand rather than deriving.
+#[derive(Clone)]
+pub struct DrawnPlot<F> {
+    pub(crate) tex: egui::TextureHandle,
+    /// The display-filter values this texture was rendered from.
+    pub(crate) filters: F,
+}
+
+/// The enrichment result screen's live display filters.
+///
+/// The counterpart of `crate::coverage::DisplayFilters` on the other route.
+/// Named rather than left as a bare tuple because the same triple is re-derived
+/// independently by the auto-size helper and by the renderer, and a named
+/// accessor is what stops a fourth derivation from disagreeing.
+///
+/// `f64` denies `Eq`, so this derives `PartialEq` only — sufficient, the values
+/// being compared for exact equality against a copy of themselves.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EnrichDisplayFilters {
+    /// Compared against `EnrichmentRow.fdr`; labelled `FDR` or `p-value` by the
+    /// run's correction method.
+    pub fdr_threshold: f64,
+    pub min_hit_count: usize,
+    pub top_n: usize,
+}
 
 /// Helper for transitions returning to `Stage1Input` from a downstream
 /// state: derive the slot-radio fields from a loaded `ion_tables` so the
@@ -2915,12 +2997,16 @@ impl App {
                     .enrichment_result
                     .rows
                     .iter()
-                    .filter(|r| r.fdr < self.settings.enrichment_fdr_threshold && r.displayed)
+                    .filter(|r| {
+                        r.fdr < self.settings.enrichment_fdr_threshold
+                            && r.hits >= self.settings.min_hit_count
+                    })
                     .count();
                 info!(
                     universe = out.mapped_universe.len(),
                     mapped_features = out.feature_to_cpds.len(),
-                    fdr_method = ?self.settings.enrichment_fdr_method,
+                    // The method that produced this run, not the live setting.
+                    fdr_method = ?out.enrichment_result.fdr_method,
                     sig_pathways = displayed,
                     "Stage 3 Run complete"
                 );
@@ -3041,7 +3127,7 @@ pub(crate) mod test_support {
             dedup_reports: vec![],
             pubchem_time_span: None,
             kegg_conv_time_span: None,
-            dotplot_tex: None,
+            dotplot: None,
             rendering: false,
             render_rx: None,
             confirming_new_round: false,
@@ -3388,7 +3474,7 @@ mod tests {
             kegg_conv_time_span: None,
             dual_mode_breakdown: None,
             funnel: Stage3Funnel::default(),
-            dotplot_tex: None,
+            dotplot: None,
             rendering: false,
             render_rx: None,
             refresh_state: RefreshState::Idle,
@@ -3598,7 +3684,7 @@ mod tests {
             dedup_reports: vec![],
             pubchem_time_span: None,
             kegg_conv_time_span: None,
-            dotplot_tex: None,
+            dotplot: None,
             rendering,
             render_rx: None,
             confirming_new_round: false,

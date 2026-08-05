@@ -29,12 +29,33 @@ pub enum FdrMethod {
 }
 
 impl FdrMethod {
-    /// Short label used in plot annotation strips and CSV `# FDR:` tags.
+    /// Short label used in CSV `# FDR:` tags and the settings-summary line.
+    ///
+    /// `NoCorrection` renders as `NoCorrection`, matching the value serde
+    /// writes for this variant in a saved session, so an exported CSV and a
+    /// settings file name the choice with the same word. It was `None`, which
+    /// is the one method word that reads as *absent* rather than as a named
+    /// choice — a hazard wherever it is read without the radio in view.
     pub fn short_label(self) -> &'static str {
         match self {
             FdrMethod::BenjaminiHochberg => "BH",
             FdrMethod::BenjaminiYekutieli => "BY",
-            FdrMethod::NoCorrection => "None",
+            FdrMethod::NoCorrection => "NoCorrection",
+        }
+    }
+
+    /// The noun for the significance QUANTITY this method produces.
+    ///
+    /// BH and BY produce q-values, which this project names `FDR` throughout
+    /// (the term both manuals use almost exclusively). `NoCorrection` produces
+    /// no second quantity at all — the value is the raw p-value — so a string
+    /// that names it must say `p-value`. Distinct from [`Self::short_label`],
+    /// which names the method CHOICE: a control labelled "FDR correction: none"
+    /// is true, a column headed `FDR` holding an uncorrected p-value is not.
+    pub fn metric_label(self) -> &'static str {
+        match self {
+            FdrMethod::BenjaminiHochberg | FdrMethod::BenjaminiYekutieli => "FDR",
+            FdrMethod::NoCorrection => "p-value",
         }
     }
 }
@@ -252,7 +273,16 @@ mod tests {
     fn fdr_method_short_labels() {
         assert_eq!(FdrMethod::BenjaminiHochberg.short_label(), "BH");
         assert_eq!(FdrMethod::BenjaminiYekutieli.short_label(), "BY");
-        assert_eq!(FdrMethod::NoCorrection.short_label(), "None");
+        assert_eq!(FdrMethod::NoCorrection.short_label(), "NoCorrection");
+    }
+
+    #[test]
+    fn fdr_method_metric_labels() {
+        // The quantity, not the choice: BH/BY produce q-values (named FDR
+        // project-wide), NoCorrection produces a raw p-value.
+        assert_eq!(FdrMethod::BenjaminiHochberg.metric_label(), "FDR");
+        assert_eq!(FdrMethod::BenjaminiYekutieli.metric_label(), "FDR");
+        assert_eq!(FdrMethod::NoCorrection.metric_label(), "p-value");
     }
 
     #[test]

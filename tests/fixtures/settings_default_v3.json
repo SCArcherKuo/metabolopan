@@ -5,6 +5,7 @@
   "user_note": "",
   "input_files": [],
   "settings": {
+    "analysis_route": "DamEnrichment",
     "analysis_mode": "Pathway",
     "kegg_species": null,
     "organism_group_level": null,
@@ -37,7 +38,6 @@
     "stage3_export_width_in": 3.5,
     "stage3_export_height_in": 7.0,
     "stage3_export_dpi": 300,
-    "analysis_route": "DamEnrichment",
     "coverage_min_entry_size": 3,
     "coverage_sort_key": "Coverage",
     "coverage_selected_groups": null,

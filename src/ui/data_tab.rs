@@ -241,6 +241,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                         ui,
                         settings.analysis_mode,
                         settings.enrichment_fdr_threshold,
+                        settings.min_hit_count,
                         settings.kegg_species.as_deref(),
                         module_retention.as_ref(),
                         enrichment_result,
@@ -1023,6 +1024,7 @@ fn render_enrichment_result_block(
     ui: &mut egui::Ui,
     mode: AnalysisMode,
     fdr_threshold: f64,
+    min_hit_count: usize,
     species: Option<&str>,
     module_retention: Option<&ModuleRetention>,
     result: &EnrichmentResult,
@@ -1120,10 +1122,15 @@ fn render_enrichment_result_block(
     let sig = result
         .rows
         .iter()
-        .filter(|r| r.fdr < fdr_threshold && r.displayed)
+        .filter(|r| r.fdr < fdr_threshold && r.hits >= min_hit_count)
         .count();
+    // The metric noun follows the RUN's method, from the same helper the Stage 3
+    // result screen uses — the two panels report the same count against the same
+    // threshold and are visible in sequence, so they must never name it
+    // differently. `result.fdr_method`, not `settings.enrichment_fdr_method`.
+    let metric = result.fdr_method.metric_label();
     ui.label(format!(
-        "Significant {entry_noun}: {sig} (FDR < {fdr_threshold})"
+        "Significant {entry_noun}: {sig} ({metric} < {fdr_threshold})"
     ));
 
     // Dual-mode K-source hint.

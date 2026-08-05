@@ -221,7 +221,7 @@ async fn module_mode_filters_modules_by_group_overlap() {
 
     // ── CSV header uses Track-A-renamed columns; leading `# FDR: …` tag is line 0 ──
     let mut buf = Vec::new();
-    export_csv(&mut buf, &output.enrichment_result, false).expect("export csv");
+    export_csv(&mut buf, &output.enrichment_result).expect("export csv");
     let s = String::from_utf8(buf).unwrap();
     let lines: Vec<&str> = s.lines().collect();
     assert!(

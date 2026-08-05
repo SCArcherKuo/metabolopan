@@ -15,7 +15,7 @@ use egui::RichText;
 use std::sync::mpsc;
 use tracing::{error, info};
 
-use crate::app::{AnalysisMode, App, AppState, CoverageFunnel};
+use crate::app::{AnalysisMode, App, AppState, CoverageFunnel, DrawnPlot};
 use crate::coverage::{CoverageResult, CoverageRow, CoverageSortKey, displayed_rows};
 use crate::plot::{CoverageDotplotOpts, export_coverage_dotplot_png, render_coverage_dotplot};
 use crate::theme;
@@ -55,22 +55,25 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
             funnel,
             rendering,
             confirming_new_round,
-            dotplot_tex,
+            dotplot,
             ..
         } => Some((
             coverage_result.clone(),
             *funnel,
             *rendering,
             *confirming_new_round,
-            dotplot_tex.clone(),
+            dotplot.clone(),
         )),
         _ => None,
     };
-    let Some((result, funnel, rendering, confirming_new_round, dotplot_tex)) = snap else {
+    let Some((result, funnel, rendering, confirming_new_round, drawn)) = snap else {
         return;
     };
 
     let mut action = Action::None;
+    // Whether the held figure still describes the live filter values. Read again
+    // after the body to perform the discard, exactly as `action` is.
+    let mut texture_is_live = false;
     let mut new_w_in = app.settings.stage3_export_width_in;
     let mut new_h_in = app.settings.stage3_export_height_in;
     let mut new_dpi = app.settings.stage3_export_dpi;
@@ -90,7 +93,10 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
             ui.add_space(10.0);
 
             // Recomputed AFTER the filter controls so a change lands on the
-            // same frame the user made it, not the next one.
+            // same frame the user made it, not the next one. Note this value
+            // predates `render_table`, which holds the SECOND sort-key writer —
+            // the invalidation comparison below must therefore re-read the
+            // filters rather than reuse this.
             let filters = app.settings.coverage_display_filters();
             let rows = displayed_rows(&result, filters);
             render_table(ui, app, &rows);
@@ -99,8 +105,11 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
             // ── Dot plot + exports ──
             //
             // Every one of these is disabled while a render is in flight; the
-            // filter controls above are deliberately NOT, because they mutate
-            // settings only and the next render picks up the new values.
+            // filter controls above are deliberately NOT — freezing four inputs
+            // for seconds to protect a figure the user has just said they no
+            // longer want is the worse trade. The cost is that moving one now
+            // DOOMS the render in flight: the finished figure describes values
+            // the user has moved past, so `drain_render` drops it.
             crate::ui::widgets::png_export_size_controls(
                 ui,
                 &mut new_w_in,
@@ -109,14 +118,41 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
             );
             // The label matches the enrichment result screen byte-for-byte: two
             // screens with the same function must not use different words.
-            if primary_button(ui, "Draw dot plot", !rendering).clicked() {
-                action = Action::Redraw;
-            }
-            if let Some(tex) = dotplot_tex.as_ref() {
-                let size = tex.size_vec2();
+            ui.horizontal(|ui| {
+                if primary_button(ui, "Draw dot plot", !rendering).clicked() {
+                    action = Action::Redraw;
+                }
+                // This screen reported a seconds-long render nowhere, and got
+                // away with it only because the previous figure stayed on the
+                // canvas. Invalidation removes the previous figure.
+                if rendering {
+                    ui.spinner();
+                    ui.label("Rendering…");
+                }
+            });
+            // The comparison RE-READS the filters rather than reusing `filters`
+            // above: that value is taken before `render_table`, and the
+            // clickable column headers write the sort key from INSIDE the table.
+            // Reusing it would discard on a `Sort by` change and not on a header
+            // click — precisely the split this rule exists to deny.
+            texture_is_live = drawn
+                .as_ref()
+                .is_some_and(|d| d.filters == app.settings.coverage_display_filters());
+            if texture_is_live && let Some(plot) = drawn.as_ref() {
+                let size = plot.tex.size_vec2();
                 let avail = ui.available_width().max(1.0);
                 let scale = (avail / size.x).min(1.0);
-                ui.add(egui::Image::new(tex).fit_to_exact_size(size * scale));
+                ui.add(egui::Image::new(&plot.tex).fit_to_exact_size(size * scale));
+            } else if !rendering {
+                // The same prompt the enrichment screen shows, so a discarded
+                // figure reads as an invitation rather than as blank space. Not
+                // rendered mid-render: it would invite a click on a button the
+                // render has disabled, and the spinner above is the feedback.
+                ui.label(
+                    RichText::new("Click \"Draw dot plot\" to render the plot.")
+                        .small()
+                        .color(theme::TEXT),
+                );
             }
             ui.add_space(6.0);
             if ui
@@ -188,6 +224,17 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
     app.settings.stage3_export_width_in = new_w_in;
     app.settings.stage3_export_height_in = new_h_in;
     app.settings.stage3_export_dpi = new_dpi;
+
+    // Invalidation. The comparison was made above the preview so the discard
+    // lands on the frame the user acts; the texture is dropped here, once the
+    // body's borrows have ended. `DrawnPlot` binds the texture to its filters,
+    // so this takes both.
+    if !texture_is_live
+        && let AppState::Stage3CoverageResult { dotplot, .. } = &mut app.state
+        && dotplot.take().is_some()
+    {
+        info!("display filter changed; coverage dot plot texture discarded");
+    }
 
     match action {
         Action::None => {}
@@ -332,6 +379,9 @@ fn spawn_render(app: &mut App) {
     );
     let opts = build_opts(app, w_px, h_px);
 
+    // The filters this render is launched with, so a render that completes after
+    // the user has moved past it can be recognised and dropped.
+    let filters = app.settings.coverage_display_filters();
     let AppState::Stage3CoverageResult {
         coverage_result,
         rendering,
@@ -342,7 +392,9 @@ fn spawn_render(app: &mut App) {
         return;
     };
     let result_clone = coverage_result.clone();
-    let (tx, rx) = mpsc::channel::<Result<crate::app::DotplotRender, String>>();
+    let (tx, rx) = mpsc::channel::<
+        Result<crate::app::DotplotRenderOf<crate::coverage::DisplayFilters>, String>,
+    >();
     *render_rx = Some(rx);
     *rendering = true;
     info!(
@@ -355,7 +407,7 @@ fn spawn_render(app: &mut App) {
             .await
             .map_err(|e| e.to_string())
             .and_then(|res| res.map_err(|e| e.to_string()))
-            .map(|buf| (buf, w_px, h_px));
+            .map(|buf| ((buf, w_px, h_px), filters));
         let _ = tx.send(r);
     });
 }
@@ -385,11 +437,20 @@ fn drain_render(app: &mut App, ctx: &egui::Context) {
             }
         }
     };
-    let Some((buf, w, h)) = r else { return };
+    let Some(((buf, w, h), filters)) = r else {
+        return;
+    };
+    // A render that finished after a filter moved describes values the user has
+    // already left, and there is no texture on screen for the frame body's
+    // comparison to reach. Drop it rather than install it.
+    if filters != app.settings.coverage_display_filters() {
+        info!("display filter changed during render; finished coverage dot plot discarded");
+        return;
+    }
     let img = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &buf);
-    let handle = ctx.load_texture("coverage_dotplot", img, egui::TextureOptions::LINEAR);
-    if let AppState::Stage3CoverageResult { dotplot_tex, .. } = &mut app.state {
-        *dotplot_tex = Some(handle);
+    let tex = ctx.load_texture("coverage_dotplot", img, egui::TextureOptions::LINEAR);
+    if let AppState::Stage3CoverageResult { dotplot, .. } = &mut app.state {
+        *dotplot = Some(DrawnPlot { tex, filters });
         info!(
             width_px = w,
             height_px = h,
@@ -514,8 +575,11 @@ fn thousands(n: usize) -> String {
     out
 }
 
-/// The four live display filters. All write settings only; the next render
-/// picks them up, so they stay enabled even while a plot render is in flight.
+/// The four live display filters. They stay enabled even while a plot render is
+/// in flight — freezing four inputs for seconds to protect a figure the user has
+/// just said they no longer want is the worse trade. Moving one discards the
+/// held figure, and DOOMS a render in flight: `drain_render` drops a figure that
+/// arrives describing values the user has moved past.
 ///
 /// Laid out **in the order the filters run** — entry size, hit count, sort,
 /// then the `Top N` cap — which is also the order the Data tab's entry chain
@@ -868,5 +932,76 @@ mod tests {
             "2 / Plants",
             "Module mode reads module_retention, which the clearing never touches"
         );
+    }
+}
+
+#[cfg(test)]
+mod invalidation_tests {
+    use crate::app::SessionSettings;
+    use crate::coverage::CoverageSortKey;
+
+    #[test]
+    fn every_one_of_the_four_filters_invalidates() {
+        let base = SessionSettings::default();
+        let drawn = base.coverage_display_filters();
+        assert_eq!(drawn, base.coverage_display_filters(), "unchanged is live");
+
+        let mut s = base.clone();
+        s.coverage_min_entry_size = base.coverage_min_entry_size + 5;
+        assert_ne!(drawn, s.coverage_display_filters());
+
+        let mut s = base.clone();
+        s.min_hit_count = base.min_hit_count + 1;
+        assert_ne!(drawn, s.coverage_display_filters());
+
+        let mut s = base.clone();
+        s.top_n = base.top_n + 1;
+        assert_ne!(drawn, s.coverage_display_filters());
+
+        let mut s = base.clone();
+        s.coverage_sort_key = CoverageSortKey::Hits;
+        assert_ne!(drawn, s.coverage_display_filters());
+    }
+
+    #[test]
+    fn a_column_header_sort_invalidates_exactly_as_the_selector_does() {
+        // The sort key has TWO writers — the `Sort by` selector and the
+        // clickable column headers — and the header one runs INSIDE
+        // `render_table`, downstream of the `displayed_rows` call. Because the
+        // comparison is against recorded VALUES rather than sited at one
+        // writer, both paths land the same discard. A write-back comparison at
+        // the filter block would have passed the selector and failed the header.
+        let base = SessionSettings::default();
+        let drawn = base.coverage_display_filters();
+
+        let mut via_selector = base.clone();
+        via_selector.coverage_sort_key = CoverageSortKey::Hits;
+
+        let mut via_header = base.clone();
+        via_header.coverage_sort_key = CoverageSortKey::Hits;
+
+        assert_ne!(drawn, via_selector.coverage_display_filters());
+        assert_eq!(
+            via_selector.coverage_display_filters(),
+            via_header.coverage_display_filters(),
+            "one field, two writers, one comparison"
+        );
+    }
+
+    #[test]
+    fn the_entry_size_floor_is_clamped_before_it_is_recorded() {
+        // `coverage_display_filters` restates the load-boundary clamp at the
+        // point of use, so a texture drawn at a below-floor setting records the
+        // CLAMPED value — and a later change that clamps to the same value does
+        // not spuriously invalidate.
+        let a = SessionSettings {
+            coverage_min_entry_size: 0,
+            ..Default::default()
+        };
+        let b = SessionSettings {
+            coverage_min_entry_size: 1,
+            ..Default::default()
+        };
+        assert_eq!(a.coverage_display_filters(), b.coverage_display_filters());
     }
 }

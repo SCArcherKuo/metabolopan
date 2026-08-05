@@ -63,9 +63,11 @@ pub fn show(
             }
         }
         // The pathway re-fetch action is the `[Refresh KEGG pathway cache]`
-        // button rendered by the caller below the "Cached … ago" line, so it
-        // sits adjacent to the cache-age it replaces (not an icon next to the
-        // picker).
+        // button, which this widget neither renders nor owns: the Data tab
+        // renders it under the catalogue fetched-date line in its `Cache data`
+        // block and drains a request flag into `handle_species_refresh`. Not
+        // an icon next to the picker, and not adjacent to this widget at all —
+        // both moved out of the setup body. See `data-summary-panel`.
     });
 
     if state.picker_open {

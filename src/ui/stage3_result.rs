@@ -5,8 +5,10 @@ use egui::RichText;
 use std::sync::mpsc;
 use tracing::{error, info, warn};
 
-use crate::app::{AnalysisMode, App, AppState, RefreshState, Stage3RunOutput};
-use crate::enrichment::export_csv_with_mode;
+use crate::app::{
+    AnalysisMode, App, AppState, DrawnPlot, EnrichDisplayFilters, RefreshState, Stage3RunOutput,
+};
+use crate::enrichment::{RowSelection, export_csv_with_mode};
 use crate::plot::{DotplotOpts, export_dotplot_png, render_dotplot};
 use crate::pubchem::PubchemClient;
 use crate::stage3::run_stage3;
@@ -17,7 +19,10 @@ enum Action {
     None,
     Redraw,
     DownloadPng,
-    DownloadCsv,
+    /// `Download enrichment results (CSV)` — the rows the figure is drawn from.
+    DownloadFigureCsv,
+    /// `Download all results (CSV)` — every surviving row.
+    DownloadAllCsv,
     ConfirmRefreshPubchem,
     ConfirmRefreshKegg,
     CancelRefresh,
@@ -31,54 +36,123 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
     drain_refresh(app);
     drain_cache_actions(app);
 
-    // Snapshot read-only fields we need to render.
-    let snap = match &app.state {
+    // Snapshot read-only fields we need to render. Built by a pure function so
+    // the run-vs-settings sourcing rule below is assertable without egui — see
+    // the `stage3-ui` result-screen requirement.
+    let snap = result_snap(&app.state, &app.settings);
+    let Some(snap) = snap else {
+        return;
+    };
+    show_inner(ui, app, snap);
+}
+
+/// Build the render snapshot from a result state.
+///
+/// **Method from the run, threshold from the controls.** `fdr_method` is read
+/// from `EnrichmentResult`, the method that produced the numbers on display;
+/// `fdr_threshold` is read from settings, because it is a live display filter
+/// the user tunes on this screen. Sourcing the method from settings would let a
+/// label describe an export it does not match — the exporter reads the result.
+/// See the `stage3-ui` capability spec.
+fn result_snap(state: &AppState, settings: &crate::app::SessionSettings) -> Option<ResultSnap> {
+    match state {
         AppState::Stage3EnrichResult {
             dam_results,
             enrichment_result,
             feature_to_cpds,
             refresh_state,
             rendering,
-            dotplot_tex,
+            dotplot,
             confirming_new_round,
             height_user_overridden,
             ..
         } => {
-            let mode = app.settings.analysis_mode;
-            let enrichment_fdr_threshold = app.settings.enrichment_fdr_threshold;
+            let mode = settings.analysis_mode;
+            let enrichment_fdr_threshold = settings.enrichment_fdr_threshold;
             // Identity, cache freshness, the Refresh / Re-run buttons, and the
             // provenance counts all moved to the bottom-panel Data tab
             // (`data-summary-panel`). The result body keeps only the
             // display-filter inputs, export size, draw, preview, and downloads.
             Some(ResultSnap {
                 mode,
-                significant_pathways: enrichment_result
-                    .rows
-                    .iter()
-                    .filter(|r| r.fdr < enrichment_fdr_threshold && r.displayed)
-                    .count(),
                 // Scope counts for the refresh-confirmation modal copy.
                 dam_features_total: dam_results.iter().map(|d| d.features.len()).sum(),
                 mapped_features: feature_to_cpds.len(),
-                export_w_in: app.settings.stage3_export_width_in,
-                export_h_in: app.settings.stage3_export_height_in,
-                export_dpi: app.settings.stage3_export_dpi,
-                top_n: app.settings.top_n,
+                export_w_in: settings.stage3_export_width_in,
+                export_h_in: settings.stage3_export_height_in,
+                export_dpi: settings.stage3_export_dpi,
+                top_n: settings.top_n,
                 fdr_threshold: enrichment_fdr_threshold,
-                min_hit_count: app.settings.min_hit_count,
+                // Method from the RUN, threshold from the controls.
+                fdr_method: enrichment_result.fdr_method,
+                min_hit_count: settings.min_hit_count,
                 refresh_state_kind: refresh_state_kind(refresh_state),
                 confirming_new_round: *confirming_new_round,
                 rendering: *rendering,
-                has_texture: dotplot_tex.is_some(),
+                drawn_filters: dotplot.as_ref().map(|d| d.filters),
                 height_user_overridden: *height_user_overridden,
             })
         }
         _ => None,
-    };
-    let Some(snap) = snap else {
-        return;
-    };
+    }
+}
 
+/// Label for the significance-threshold DragValue.
+///
+/// Names the quantity the threshold is compared against, so it follows the
+/// method that produced that quantity. Under `NoCorrection` the value compared
+/// is a raw p-value; calling it an FDR would assert a correction that was not
+/// performed. See the `stage3-ui` capability spec.
+fn threshold_label(method: crate::dam::fdr::FdrMethod) -> String {
+    format!("Enrichment {} threshold:", method.metric_label())
+}
+
+/// Hover text for the `Minimum hit count` DragValue.
+///
+/// The `after FDR` clause is DROPPED under `NoCorrection`, not re-pointed at
+/// another stage: there is no FDR stage for the filter to follow, and naming a
+/// different one would assert a second thing that did not happen.
+fn min_hit_tooltip(method: crate::dam::fdr::FdrMethod) -> &'static str {
+    match method {
+        crate::dam::fdr::FdrMethod::NoCorrection => {
+            "Hide pathways/modules with fewer than N hits. \
+             Display-only; does not change p-values."
+        }
+        _ => {
+            "Hide pathways/modules with fewer than N hits after FDR. \
+             Display-only; does not change p-values."
+        }
+    }
+}
+
+/// **The one predicate.** Whether the held texture still describes the live
+/// filter values — `None` meaning no texture is held, which is never live.
+///
+/// Three things read it: the draw button's label, the decision to blit, and the
+/// not-yet-drawn prompt (which is templated FROM the label). They must read it
+/// from one place; deriving any of them from raw texture-PRESENCE instead puts
+/// `Click "Re-draw dot plot" to render the plot.` beside an empty preview on the
+/// discard frame, offering to re-draw a figure that is no longer there.
+fn texture_is_live(drawn: Option<EnrichDisplayFilters>, live: EnrichDisplayFilters) -> bool {
+    drawn == Some(live)
+}
+
+/// The draw button's label, from the one predicate above.
+fn draw_button_label(texture_is_live: bool) -> &'static str {
+    if texture_is_live {
+        "Re-draw dot plot"
+    } else {
+        "Draw dot plot"
+    }
+}
+
+/// The not-yet-drawn prompt, templated from the button's label so the two can
+/// never name different buttons.
+fn not_yet_drawn_prompt(button_label: &str) -> String {
+    format!("Click \"{button_label}\" to render the plot.")
+}
+
+fn show_inner(ui: &mut egui::Ui, app: &mut App, snap: ResultSnap) {
     let mut new_w_in = snap.export_w_in;
     let mut new_h_in = snap.export_h_in;
     let mut new_dpi = snap.export_dpi;
@@ -86,10 +160,14 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
     let mut new_fdr_threshold = snap.fdr_threshold;
     let mut new_min_hit_count = snap.min_hit_count;
     let mut action = Action::None;
+    // Whether the held texture still describes the live filter values. Computed
+    // inside the body, once, above the draw button; read again after the body to
+    // perform the discard. Declared here because the body is a closure, exactly
+    // as `action` is.
+    let mut texture_is_live = false;
 
     let refresh_inflight = !matches!(snap.refresh_state_kind, RefreshKind::Idle);
     let busy = refresh_inflight || snap.rendering;
-    let nothing_to_plot = snap.significant_pathways == 0;
 
     egui::ScrollArea::both()
         .auto_shrink([false, false])
@@ -116,13 +194,19 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
             // this fn) feeds into the existing confirm-modal / re-run flow, so
             // the modal + `RefreshState` machinery below is unchanged.
 
-            // Enrichment FDR threshold + Minimum hit count — relocated from
-            // Stage 3 setup (`add-bottom-panel-data-tab`). Both are display
-            // filters: editing them + clicking "Re-draw dot plot" re-applies the
-            // cutoff without re-spawning the orchestrator.
+            // Significance threshold + Minimum hit count — relocated from
+            // Stage 3 setup (`add-bottom-panel-data-tab`). Both are live display
+            // filters: editing either DISCARDS the figure, and the next
+            // `Draw dot plot` re-applies it without re-spawning the
+            // orchestrator. Both reach one of the two CSV downloads — the
+            // filtered one, whose definition is the figure's row set — and
+            // neither reaches the other (see the `enrichment-ora` capability).
+            // The threshold's label names the quantity it is compared against,
+            // so it follows the RUN's method (`snap.fdr_method`), never
+            // `app.settings.enrichment_fdr_method`.
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                ui.label("Enrichment FDR threshold:");
+                ui.label(threshold_label(snap.fdr_method));
                 ui.add(
                     egui::DragValue::new(&mut new_fdr_threshold)
                         .speed(0.001)
@@ -136,10 +220,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                         .speed(1)
                         .range(1..=10),
                 )
-                .on_hover_text(
-                    "Hide pathways/modules with fewer than N hits after FDR. \
-                     Display-only; does not change p-values.",
-                );
+                .on_hover_text(min_hit_tooltip(snap.fdr_method));
             });
 
             // Top N input — moved from Stage 3 setup to Stage 3 result so
@@ -167,13 +248,38 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
             // inputs above. `export_pixels` is still used by the render + PNG
             // export sites.
 
-            ui.add_space(8.0);
-            let button_label = if snap.has_texture {
-                "Re-draw dot plot"
-            } else {
-                "Draw dot plot"
+            // ── The one comparison ──
+            //
+            // Every display filter this frame has been edited into the `new_*`
+            // locals above; the write-back to `app.settings` happens BELOW the
+            // preview, so `app.settings` still holds last frame's values here.
+            // Comparing against the locals is what makes the discard land on
+            // the SAME frame as the change, matching the coverage screen, whose
+            // controls write settings directly above its preview.
+            //
+            // THREE things read the result — the button label, the decision to
+            // blit, and the not-yet-drawn prompt, which is templated FROM the
+            // label. They must read it from one place. Deriving the label from
+            // raw texture-PRESENCE instead would put `Click "Re-draw dot plot"
+            // to render the plot.` beside an empty preview on the discard
+            // frame, offering to re-draw a figure that is no longer there: the
+            // texture is still `Some` until the dispatch block below clears it.
+            let live_filters = EnrichDisplayFilters {
+                fdr_threshold: new_fdr_threshold,
+                min_hit_count: new_min_hit_count,
+                top_n: new_top_n,
             };
-            let can_draw = !busy && !nothing_to_plot;
+            texture_is_live = self::texture_is_live(snap.drawn_filters, live_filters);
+
+            ui.add_space(8.0);
+            let button_label = draw_button_label(texture_is_live);
+            // Always drawable. The empty case is not a UI state: the renderer
+            // draws its own "No <entry>s passed …" placeholder INTO the image, which
+            // is what the PNG export carries too. Gating the button on a live
+            // emptiness check made the screen react to one control change (the
+            // one that reaches zero) and ignore every other, and trapped the user
+            // in a state whose only advertised exit was a full re-run.
+            let can_draw = !busy;
             ui.horizontal(|ui| {
                 if crate::ui::widgets::primary_button(ui, button_label, can_draw).clicked() {
                     action = Action::Redraw;
@@ -186,28 +292,21 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
 
             ui.add_space(6.0);
             ui.label(RichText::new("Dot plot").strong().color(theme::HEADING));
-            if nothing_to_plot {
-                ui.colored_label(
-                    theme::WARNING,
-                    format!(
-                        "⚠ No pathways passed FDR < {}. Nothing to plot. Consider \
-                         loosening the enrichment FDR threshold and clicking \
-                         \"Re-run enrichment\", or download the CSV to inspect raw \
-                         FDR values.",
-                        snap.fdr_threshold
-                    ),
-                );
-            } else if snap.has_texture
+            if texture_is_live
                 && let AppState::Stage3EnrichResult {
-                    dotplot_tex: Some(tex),
+                    dotplot: Some(plot),
                     ..
                 } = &app.state
             {
-                let size = tex.size_vec2();
-                ui.add(egui::Image::new(tex).fit_to_exact_size(size));
+                let size = plot.tex.size_vec2();
+                ui.add(egui::Image::new(&plot.tex).fit_to_exact_size(size));
             } else if !snap.rendering {
+                // The third state renders NEITHER: while a render is in flight
+                // and no figure is shown, the area is empty and the progress
+                // lives beside the draw button. A prompt here would invite a
+                // click on a button that render has disabled.
                 ui.label(
-                    RichText::new(format!("Click \"{button_label}\" to render the plot."))
+                    RichText::new(not_yet_drawn_prompt(button_label))
                         .small()
                         .color(theme::TEXT),
                 );
@@ -215,19 +314,29 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
 
             ui.add_space(8.0);
             if ui
-                .add_enabled(
-                    !busy && !nothing_to_plot,
-                    egui::Button::new("Download dot plot PNG"),
-                )
+                .add_enabled(!busy, egui::Button::new("Download dot plot PNG"))
                 .clicked()
             {
                 action = Action::DownloadPng;
             }
+            // Two downloads, because one cannot mean both. This screen had a
+            // single button that meant "the filtered rows" and then meant
+            // "everything", each time silently. Same pair, and the same names,
+            // as Stage 2.
             if ui
-                .add_enabled(!busy, egui::Button::new("Download enrichment results CSV"))
+                .add_enabled(
+                    !busy,
+                    egui::Button::new("Download enrichment results (CSV)"),
+                )
                 .clicked()
             {
-                action = Action::DownloadCsv;
+                action = Action::DownloadFigureCsv;
+            }
+            if ui
+                .add_enabled(!busy, egui::Button::new("Download all results (CSV)"))
+                .clicked()
+            {
+                action = Action::DownloadAllCsv;
             }
             // Start a new analysis — discards this analysis and returns to
             // Stage 1 after a loss-warning confirmation. `!busy`-gated so it
@@ -321,18 +430,33 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
 
     // Write back export-size + top_n changes. Top N is a dot-plot
     // display cap (see plot/dotplot.rs); changing it on the result page
-    // does not require a re-run of the orchestrator — only a Re-draw
-    // dot plot, which the user triggers explicitly.
+    // does not require a re-run of the orchestrator — only a fresh
+    // `Draw dot plot`, which the user triggers explicitly.
     app.settings.stage3_export_width_in = new_w_in;
     app.settings.stage3_export_height_in = new_h_in;
     app.settings.stage3_export_dpi = new_dpi;
     app.settings.top_n = new_top_n;
-    // The relocated Enrichment FDR threshold + Minimum hit count are display
-    // filters (re-draw, not re-run) — write them back like Top N. The next
-    // Re-draw dot plot + the Data tab's significant-count both read the new
-    // values immediately.
+    // The relocated significance threshold + Minimum hit count are written back
+    // like Top N. All three are LIVE display filters on the FIGURE: the Data
+    // tab's significant-count reads them immediately, moving any of them
+    // discards the texture, and the next draw renders from them.
+    // `Download enrichment results (CSV)` reads the first two;
+    // `Download all results (CSV)` reads none of them, and `Top N` reaches
+    // neither file. No re-run — none can move `m` or any p-value.
     app.settings.enrichment_fdr_threshold = new_fdr_threshold;
     app.settings.min_hit_count = new_min_hit_count;
+
+    // Invalidation. The comparison was made above the draw button so the label,
+    // the blit and the prompt could all agree on the same frame; the texture
+    // itself is dropped here, once the borrow of `app.state` the preview held
+    // has ended. `DrawnPlot` binds the texture to its filters, so this takes
+    // both — there is no way to leave a filter record behind.
+    if !texture_is_live
+        && let AppState::Stage3EnrichResult { dotplot, .. } = &mut app.state
+        && dotplot.take().is_some()
+    {
+        info!("display filter changed; dot plot texture discarded");
+    }
 
     // A same-frame change to the Height DragValue is a manual override: from
     // here on, redraws honor the user's height instead of re-fitting it to the
@@ -357,7 +481,8 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
         Action::None => {}
         Action::Redraw => spawn_render(app),
         Action::DownloadPng => download_png(app),
-        Action::DownloadCsv => download_csv(app),
+        Action::DownloadFigureCsv => download_csv(app, CsvButton::Figure),
+        Action::DownloadAllCsv => download_csv(app, CsvButton::All),
         Action::ConfirmRefreshPubchem => start_refresh(app, true),
         Action::ConfirmRefreshKegg => start_refresh(app, false),
         Action::CancelRefresh => cancel_refresh(app),
@@ -390,9 +515,6 @@ fn refresh_state_kind(s: &RefreshState) -> RefreshKind {
 /// state without holding a borrow across the snapshot construction.
 struct ResultSnap {
     mode: AnalysisMode,
-    /// Significant entries under the live `enrichment_fdr_threshold` — drives
-    /// the "Nothing to plot" gate. The full count display moved to the Data tab.
-    significant_pathways: usize,
     /// Total DAM features across modes — scope count in the PubChem refresh
     /// confirmation modal ("(N entries scoped for this run)").
     dam_features_total: usize,
@@ -404,18 +526,32 @@ struct ResultSnap {
     /// Top N input — changing this on the result page re-targets the next
     /// "Draw / Re-draw dot plot" render.
     top_n: usize,
-    /// Enrichment FDR threshold — relocated from Stage 3 setup
-    /// (`add-bottom-panel-data-tab`). Display-significance cutoff (re-draw, not
-    /// re-run).
+    /// Significance threshold — relocated from Stage 3 setup
+    /// (`add-bottom-panel-data-tab`). A live display cutoff read from SETTINGS,
+    /// because the user tunes it on this screen (re-draw, not re-run).
     fdr_threshold: f64,
-    /// Minimum hit count — relocated from Stage 3 setup. Post-FDR display filter.
+    /// Correction method of the run being displayed, read from
+    /// `EnrichmentResult` — NOT from settings. Every significance noun on this
+    /// screen derives from it, so a label can never describe an export the run
+    /// did not produce. Pairs with `fdr_threshold` above: method from the run,
+    /// threshold from the controls.
+    fdr_method: crate::dam::fdr::FdrMethod,
+    /// Minimum hit count — relocated from Stage 3 setup. A live display filter
+    /// on hit count, re-applied on each draw. It reaches ONE of the two CSV
+    /// downloads — the filtered one, whose definition is the figure's row set —
+    /// and not the other; and it is consulted after the FDR correction, so it
+    /// moves no statistic.
     min_hit_count: usize,
     refresh_state_kind: RefreshKind,
     /// Variant-internal "Start a new analysis?" flag, mirrored here so the
     /// modal-render block (which only has `snap`) can decide whether to show.
     confirming_new_round: bool,
     rendering: bool,
-    has_texture: bool,
+    /// The display filters the currently-held texture was rendered FROM, or
+    /// `None` when no texture is held. Compared against the live values to
+    /// decide whether the figure still describes what the controls say — see
+    /// `show_inner`, which makes that comparison ONCE.
+    drawn_filters: Option<EnrichDisplayFilters>,
     /// Whether the user has hand-edited the Height field this result-state.
     /// Mirrored here so the writeback block can detect a fresh height drag
     /// (`new_h_in != export_h_in`) and latch the variant flag.
@@ -423,22 +559,26 @@ struct ResultSnap {
 }
 
 /// Count rows the dot plot will actually draw before the `top_n` truncation —
-/// the SAME predicate as `plot::dotplot` (`r.displayed && r.fdr < threshold`)
-/// and the result-screen significant-pathway count. Drives the redraw auto-fit
-/// so the canvas height tracks the rows on screen.
+/// the SAME predicate as `plot::dotplot`
+/// (`r.hits >= min_hit_count && r.fdr < threshold`) and the result-screen
+/// significant-entry count. Both filters are live: they are read from settings
+/// at draw time, so the canvas height tracks the rows actually on screen.
 fn displayed_row_count(
     rows: &[crate::enrichment::types::EnrichmentRow],
     fdr_threshold: f64,
+    min_hit_count: usize,
 ) -> usize {
     rows.iter()
-        .filter(|r| r.displayed && r.fdr < fdr_threshold)
+        .filter(|r| r.hits >= min_hit_count && r.fdr < fdr_threshold)
         .count()
 }
 
 /// Export height (inches) for the next dot-plot render. While the user has not
 /// hand-edited the Height field (`overridden == false`), re-fit it to the live
-/// displayed-row count so changing a display filter (FDR threshold / min hit /
-/// top N) and re-drawing grows or shrinks the canvas to match — fixing the
+/// displayed-row count so changing any display filter (the significance
+/// threshold, min hit count, or Top N) and re-drawing grows or
+/// shrinks the canvas to match — each of those changes now also discarding the
+/// previous figure, so the two can never be seen side by side — fixing the
 /// stale-autosize squish where rows were crammed into a height computed for the
 /// previous run's count. Once the user overrides Height, honor it verbatim.
 fn effective_dotplot_height_in(
@@ -446,21 +586,31 @@ fn effective_dotplot_height_in(
     current_height_in: f64,
     top_n: usize,
     fdr_threshold: f64,
+    min_hit_count: usize,
     rows: &[crate::enrichment::types::EnrichmentRow],
 ) -> f64 {
     if overridden {
         current_height_in
     } else {
-        crate::app::stage3_autosize_height_in(top_n, displayed_row_count(rows, fdr_threshold))
+        crate::app::stage3_autosize_height_in(
+            top_n,
+            displayed_row_count(rows, fdr_threshold, min_hit_count),
+        )
     }
 }
 
 fn spawn_render(app: &mut App) {
     let export_width_in = app.settings.stage3_export_width_in;
     let export_dpi = app.settings.stage3_export_dpi;
-    let enrichment_fdr_threshold = app.settings.enrichment_fdr_threshold;
-    let top_n = app.settings.top_n;
-    let fdr_method = app.settings.enrichment_fdr_method;
+    // The filters this render is being launched with. They travel with the
+    // finished buffer so `drain_render` can drop a render that completes after
+    // the user has moved past it — the filter controls stay enabled during a
+    // render, so that is reachable, and when it happens there is no texture on
+    // screen for the ordinary invalidation to clear.
+    let filters = app.settings.enrichment_display_filters();
+    let enrichment_fdr_threshold = filters.fdr_threshold;
+    let min_hit_count = filters.min_hit_count;
+    let top_n = filters.top_n;
     let AppState::Stage3EnrichResult {
         enrichment_result,
         rendering,
@@ -471,6 +621,10 @@ fn spawn_render(app: &mut App) {
     else {
         return;
     };
+    // Method from the RUN, not from settings — the plot's chrome must name
+    // what produced the values it draws (`enrichment-dot-plot` requires the
+    // same `FdrMethod` that fed the `run_ora` call which produced this result).
+    let fdr_method = enrichment_result.fdr_method;
     // Re-fit the export height to the rows this draw will actually show (unless
     // the user has hand-set Height), then persist it so the Height DragValue
     // reflects the fitted value next frame. This is what makes a redraw after
@@ -481,6 +635,7 @@ fn spawn_render(app: &mut App) {
         app.settings.stage3_export_height_in,
         top_n,
         enrichment_fdr_threshold,
+        min_hit_count,
         &enrichment_result.rows,
     );
     app.settings.stage3_export_height_in = export_height_in;
@@ -490,12 +645,14 @@ fn spawn_render(app: &mut App) {
         width_px: w_px,
         height_px: h_px,
         fdr_threshold: enrichment_fdr_threshold,
+        min_hit_count,
         top_n,
         fdr_method,
         entry_label: app.settings.analysis_mode.entry_label_singular(),
     };
     let result_clone = enrichment_result.clone();
-    let (tx, rx) = mpsc::channel::<Result<crate::app::DotplotRender, String>>();
+    let (tx, rx) =
+        mpsc::channel::<Result<crate::app::DotplotRenderOf<EnrichDisplayFilters>, String>>();
     *render_rx = Some(rx);
     *rendering = true;
     info!(width_px = w_px, height_px = h_px, "rendering dot plot");
@@ -504,7 +661,7 @@ fn spawn_render(app: &mut App) {
             .await
             .map_err(|e| e.to_string())
             .and_then(|res| res.map_err(|e| e.to_string()))
-            .map(|buf| (buf, w_px, h_px));
+            .map(|buf| ((buf, w_px, h_px), filters));
         let _ = tx.send(r);
     });
 }
@@ -534,11 +691,21 @@ fn drain_render(app: &mut App, ctx: &egui::Context) {
             }
         }
     };
-    let Some((buf, w, h)) = r else { return };
+    let Some(((buf, w, h), filters)) = r else {
+        return;
+    };
+    // A render that finished after a filter moved describes values the user has
+    // already left. Drop it rather than install it — the same comparison the
+    // frame body makes, at the one point where there is no texture on screen for
+    // that comparison to reach.
+    if filters != app.settings.enrichment_display_filters() {
+        info!("display filter changed during render; finished dot plot discarded");
+        return;
+    }
     let img = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &buf);
-    let handle = ctx.load_texture("dotplot", img, egui::TextureOptions::LINEAR);
-    if let AppState::Stage3EnrichResult { dotplot_tex, .. } = &mut app.state {
-        *dotplot_tex = Some(handle);
+    let tex = ctx.load_texture("dotplot", img, egui::TextureOptions::LINEAR);
+    if let AppState::Stage3EnrichResult { dotplot, .. } = &mut app.state {
+        *dotplot = Some(DrawnPlot { tex, filters });
         info!(width_px = w, height_px = h, "dot plot texture uploaded");
     }
 }
@@ -609,8 +776,8 @@ fn download_png(app: &App) {
     let export_width_in = app.settings.stage3_export_width_in;
     let export_dpi = app.settings.stage3_export_dpi;
     let enrichment_fdr_threshold = app.settings.enrichment_fdr_threshold;
+    let min_hit_count = app.settings.min_hit_count;
     let top_n = app.settings.top_n;
-    let fdr_method = app.settings.enrichment_fdr_method;
     let AppState::Stage3EnrichResult {
         enrichment_result,
         height_user_overridden,
@@ -619,15 +786,22 @@ fn download_png(app: &App) {
     else {
         return;
     };
-    // Size the export the same way the preview does, so a Download right after
-    // a filter change (without an intervening Re-draw) matches what the plot
-    // would show. `&App` is immutable here, so the fitted value is used locally
-    // and not persisted — the next Re-draw writes it back to settings.
+    // Method from the RUN, not from settings — the plot's chrome must name
+    // what produced the values it draws (`enrichment-dot-plot` requires the
+    // same `FdrMethod` that fed the `run_ora` call which produced this result).
+    let fdr_method = enrichment_result.fdr_method;
+    // Size the export the same way the preview does. A filter change discards
+    // the preview, so this button is the one route to a figure at the current
+    // values without pressing Draw first — and it must produce the figure the
+    // preview WOULD show, not the one it last did. `&App` is immutable here, so
+    // the fitted value is used locally and not persisted — the next draw writes
+    // it back to settings.
     let export_height_in = effective_dotplot_height_in(
         *height_user_overridden,
         app.settings.stage3_export_height_in,
         top_n,
         enrichment_fdr_threshold,
+        min_hit_count,
         &enrichment_result.rows,
     );
     let Some(path) = crate::ui::widgets::save_dialog("PNG", "png", "enrichment-dotplot.png") else {
@@ -639,6 +813,7 @@ fn download_png(app: &App) {
         width_px: w_px,
         height_px: h_px,
         fdr_threshold: enrichment_fdr_threshold,
+        min_hit_count,
         top_n,
         fdr_method,
         entry_label: app.settings.analysis_mode.entry_label_singular(),
@@ -656,7 +831,44 @@ fn download_png(app: &App) {
     }
 }
 
-fn download_csv(app: &App) {
+/// Which of the screen's two CSV buttons was pressed.
+///
+/// Named rather than a bare `bool` so a call site cannot say "filtered" while
+/// meaning something else. Each arm carries its own default filename: nothing
+/// INSIDE either file records which button wrote it, so the filename is the only
+/// distinction the user carries away.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CsvButton {
+    /// `Download enrichment results (CSV)` — the rows the figure is drawn from.
+    Figure,
+    /// `Download all results (CSV)` — every surviving row.
+    All,
+}
+
+impl CsvButton {
+    /// Deliberately NOT a bare `all_results.csv` for the complete export: Stage 2
+    /// already proposes that name for an unrelated file, and the two would
+    /// overwrite each other in one download folder.
+    fn default_filename(self) -> &'static str {
+        match self {
+            CsvButton::Figure => "enrichment.csv",
+            CsvButton::All => "enrichment_all_results.csv",
+        }
+    }
+}
+
+fn download_csv(app: &App, button: CsvButton) {
+    // `Top N` reaches NEITHER file. It is an ordering cap — "how many of the
+    // ranked rows fit on the axis" — so a file bounded by it would have a row
+    // count meaning "the twenty I happened to be looking at". The other two are
+    // per-row tests, which is what makes them meaningful in a file.
+    let selection = match button {
+        CsvButton::All => RowSelection::All,
+        CsvButton::Figure => RowSelection::Figure {
+            fdr_threshold: app.settings.enrichment_fdr_threshold,
+            min_hit_count: app.settings.min_hit_count,
+        },
+    };
     let AppState::Stage3EnrichResult {
         enrichment_result,
         dual_mode_breakdown,
@@ -666,7 +878,8 @@ fn download_csv(app: &App) {
     else {
         return;
     };
-    let Some(path) = crate::ui::widgets::save_dialog("CSV", "csv", "enrichment.csv") else {
+    let Some(path) = crate::ui::widgets::save_dialog("CSV", "csv", button.default_filename())
+    else {
         return;
     };
     let mut file = match std::fs::File::create(&path) {
@@ -679,17 +892,20 @@ fn download_csv(app: &App) {
     let is_dual = dual_mode_breakdown.is_some();
     // Module-mode runs self-document the Group-overlap threshold used; Pathway
     // runs (`module_retention == None`) pass `None` so the line is omitted.
+    // BOTH buttons supply it: the two files' comment blocks are required to be
+    // identical, so a site that omitted it would break that rather than differ.
     let min_group_overlap = module_retention.as_ref().map(|r| r.min_group_overlap);
+    // Which rows are written is a property of the BUTTON and of nothing else.
     if let Err(e) = export_csv_with_mode(
         &mut file,
         enrichment_result,
-        true,
         is_dual,
         min_group_overlap,
+        selection,
     ) {
         error!(error = %e, "enrichment CSV export failed");
     } else {
-        info!(path = %path.display(), is_dual, "enrichment CSV exported");
+        info!(path = %path.display(), is_dual, ?button, "enrichment CSV exported");
     }
 }
 
@@ -956,34 +1172,122 @@ fn start_refresh(app: &mut App, is_pubchem: bool) {
 
 #[cfg(test)]
 mod tests {
+    use crate::dam::fdr::FdrMethod;
+
+    /// A minimal `Stage3EnrichResult` carrying a chosen correction method.
+    ///
+    /// Duplicated rather than shared with `app.rs`'s `stage3_result_state()`,
+    /// which is private to that module's test scope.
+    fn result_state_with(method: FdrMethod) -> AppState {
+        AppState::Stage3EnrichResult {
+            dam_results: vec![],
+            module_retention: None,
+            enrichment_result: crate::enrichment::types::EnrichmentResult {
+                universe_size: 0,
+                dam_cpd_size: 0,
+                direction: crate::enrichment::types::EnrichmentDirection::Both,
+                min_hit_count: 1,
+                min_entry_size: 1,
+                entries_dropped_by_min_entry_size: 0,
+                empty_compound_count: 0,
+                rows: vec![],
+                fdr_method: method,
+            },
+            mapped_universe: std::collections::HashSet::new(),
+            feature_to_cpds: std::collections::HashMap::new(),
+            pubchem_time_span: None,
+            kegg_conv_time_span: None,
+            dual_mode_breakdown: None,
+            funnel: crate::app::Stage3Funnel::default(),
+            dotplot: None,
+            rendering: false,
+            render_rx: None,
+            refresh_state: RefreshState::Idle,
+            confirming_new_round: false,
+            height_user_overridden: false,
+        }
+    }
+
+    /// **Method from the run, threshold from the controls.**
+    ///
+    /// The snapshot must take its correction method from `EnrichmentResult` —
+    /// the method that produced the numbers on display — and its threshold from
+    /// settings, which is the live control the user tunes on this screen. This
+    /// is the half of the sourcing rule a test can see; that each label then
+    /// passes `snap.fdr_method` rather than the `app.settings` value also in
+    /// scope inside the render closure is not mechanically checkable here.
+    #[test]
+    fn snapshot_takes_method_from_the_run_and_threshold_from_settings() {
+        let state = result_state_with(FdrMethod::BenjaminiYekutieli);
+        // Settings deliberately disagree with the run.
+        let settings = crate::app::SessionSettings {
+            enrichment_fdr_method: FdrMethod::NoCorrection,
+            enrichment_fdr_threshold: 0.02,
+            ..Default::default()
+        };
+
+        let snap = result_snap(&state, &settings).expect("result state yields a snapshot");
+
+        assert_eq!(snap.fdr_method, FdrMethod::BenjaminiYekutieli);
+        assert_eq!(snap.fdr_threshold, 0.02);
+    }
+
+    #[test]
+    fn result_snap_is_none_off_the_result_screen() {
+        let settings = crate::app::SessionSettings::default();
+        assert!(result_snap(&AppState::default(), &settings).is_none());
+    }
+
+    /// The three label builders name the QUANTITY, so they follow the method.
+    #[test]
+    fn label_builders_follow_the_method() {
+        assert_eq!(
+            threshold_label(FdrMethod::BenjaminiYekutieli),
+            "Enrichment FDR threshold:"
+        );
+        assert_eq!(
+            threshold_label(FdrMethod::NoCorrection),
+            "Enrichment p-value threshold:"
+        );
+
+        // The `after FDR` clause is DROPPED under NoCorrection, not re-pointed:
+        // there is no FDR stage for the filter to follow.
+        assert!(min_hit_tooltip(FdrMethod::BenjaminiHochberg).contains("after FDR"));
+        assert!(!min_hit_tooltip(FdrMethod::NoCorrection).contains("FDR"));
+        assert!(!min_hit_tooltip(FdrMethod::NoCorrection).contains("after"));
+    }
+
     use super::*;
     use crate::enrichment::types::EnrichmentRow;
 
-    fn row(fdr: f64, displayed: bool) -> EnrichmentRow {
+    /// `has_hit == true` gives the row one hit, so it clears `min_hit_count = 1`
+    /// and is filtered out by `min_hit_count = 2`.
+    fn row(fdr: f64, has_hit: bool) -> EnrichmentRow {
         EnrichmentRow {
             entry_id: "p".to_string(),
             entry_name: "n".to_string(),
-            hits: usize::from(displayed),
+            hits: usize::from(has_hit),
             total: 5,
             expected: 1.0,
             enrichment_ratio: 1.0,
             p_value: fdr,
             fdr,
             hit_kegg_ids: vec![],
-            displayed,
         }
     }
 
     #[test]
     fn displayed_row_count_matches_plot_predicate() {
         let rows = vec![
-            row(0.01, true),  // significant + displayed → counts
-            row(0.01, false), // below min_hit_count → excluded
+            row(0.01, true),  // significant + has a hit → counts
+            row(0.01, false), // no hits → below any min_hit_count → excluded
             row(0.5, true),   // not significant at 0.05 → excluded
         ];
-        assert_eq!(displayed_row_count(&rows, 0.05), 1);
+        assert_eq!(displayed_row_count(&rows, 0.05, 1), 1);
         // Loosen the threshold: the 0.5 row now passes too.
-        assert_eq!(displayed_row_count(&rows, 1.0), 2);
+        assert_eq!(displayed_row_count(&rows, 1.0, 1), 2);
+        // Raise min_hit_count instead — LIVE, no re-run: both one-hit rows drop.
+        assert_eq!(displayed_row_count(&rows, 1.0, 2), 0);
     }
 
     #[test]
@@ -994,12 +1298,12 @@ mod tests {
         let rows: Vec<EnrichmentRow> = (0..20).map(|_| row(0.5, true)).collect();
 
         // At FDR 0.05: 0 displayed → autosize floors to 2.0 in (Plot 1's squish).
-        let h_strict = effective_dotplot_height_in(false, 7.0, 20, 0.05, &rows);
+        let h_strict = effective_dotplot_height_in(false, 7.0, 20, 0.05, 1, &rows);
         assert!((h_strict - 2.0).abs() < 1e-9, "got {h_strict}");
 
         // Loosened to 1.0: 20 displayed (capped by top_n=20) → grows to 7.0 in
         // (Plot 2's correctly-sized, label-wrapping canvas) WITHOUT a re-run.
-        let h_loose = effective_dotplot_height_in(false, 2.0, 20, 1.0, &rows);
+        let h_loose = effective_dotplot_height_in(false, 2.0, 20, 1.0, 1, &rows);
         assert!((h_loose - 7.0).abs() < 1e-9, "got {h_loose}");
     }
 
@@ -1008,7 +1312,100 @@ mod tests {
         let rows: Vec<EnrichmentRow> = (0..20).map(|_| row(0.5, true)).collect();
         // overridden == true → the hand-set height is returned regardless of
         // how many rows the loosened threshold would display.
-        let h = effective_dotplot_height_in(true, 12.5, 20, 1.0, &rows);
+        let h = effective_dotplot_height_in(true, 12.5, 20, 1.0, 1, &rows);
         assert!((h - 12.5).abs() < 1e-9, "got {h}");
+    }
+}
+
+#[cfg(test)]
+mod invalidation_tests {
+    use super::*;
+
+    fn f(fdr_threshold: f64, min_hit_count: usize, top_n: usize) -> EnrichDisplayFilters {
+        EnrichDisplayFilters {
+            fdr_threshold,
+            min_hit_count,
+            top_n,
+        }
+    }
+
+    #[test]
+    fn a_texture_is_live_only_while_every_filter_still_matches() {
+        let drawn = f(0.05, 1, 20);
+        assert!(texture_is_live(Some(drawn), drawn));
+        // Each of the three, alone, is enough to kill it.
+        assert!(!texture_is_live(Some(drawn), f(0.01, 1, 20)));
+        assert!(!texture_is_live(Some(drawn), f(0.05, 3, 20)));
+        assert!(!texture_is_live(Some(drawn), f(0.05, 1, 30)));
+        // No texture is never live.
+        assert!(!texture_is_live(None, drawn));
+    }
+
+    #[test]
+    fn changing_a_filter_back_still_costs_a_re_render() {
+        // The user raises `min_hit_count` and lowers it again. The predicate is
+        // true again on the values alone — but by then the FIRST change has
+        // already taken the texture to `None` (`show_inner`'s discard block), so
+        // what the screen actually asks is `texture_is_live(None, ...)`.
+        //
+        // This is D1's accepted cost, pinned rather than assumed: a label would
+        // have cleared itself here, a discard cannot un-discard.
+        let drawn = f(0.05, 1, 20);
+        assert!(!texture_is_live(Some(drawn), f(0.05, 3, 20)));
+        assert!(!texture_is_live(None, drawn));
+    }
+
+    #[test]
+    fn export_size_changes_do_not_invalidate() {
+        // Width / Height / DPI are not display filters: they change the canvas,
+        // not which rows are on it. They are absent from the tuple by design,
+        // and `Re-draw dot plot` is reachable only through them.
+        let drawn = f(0.05, 1, 20);
+        assert!(texture_is_live(Some(drawn), drawn));
+        assert_eq!(draw_button_label(true), "Re-draw dot plot");
+    }
+
+    #[test]
+    fn the_discard_frame_never_offers_to_re_draw_what_is_gone() {
+        // The one-frame artifact the same-frame design creates: on the discard
+        // frame the texture is still `Some`, so anything reading raw presence
+        // would say "Re-draw". Label and prompt both read the predicate instead.
+        let drawn = f(0.05, 1, 20);
+        let live = f(0.05, 4, 20);
+        let label = draw_button_label(texture_is_live(Some(drawn), live));
+        assert_eq!(label, "Draw dot plot");
+        assert_eq!(
+            not_yet_drawn_prompt(label),
+            "Click \"Draw dot plot\" to render the plot."
+        );
+    }
+
+    #[test]
+    fn a_late_render_is_rejected_by_the_same_comparison() {
+        // `drain_render` compares the filters the finished render carries
+        // against the live ones. Same operator, at the one point where there is
+        // no texture on screen for the frame body's comparison to reach.
+        let launched_with = f(0.05, 1, 20);
+        let live_now = f(0.05, 4, 20);
+        assert_ne!(launched_with, live_now, "the render is stale on arrival");
+        assert_eq!(launched_with, launched_with, "an unchanged render installs");
+    }
+
+    #[test]
+    fn the_two_csv_buttons_propose_different_default_filenames() {
+        // Nothing INSIDE either file records which button wrote it — the comment
+        // block is a closed ordered contract this change adds no line to — so
+        // the filename is the only distinction that survives the download.
+        assert_ne!(
+            CsvButton::Figure.default_filename(),
+            CsvButton::All.default_filename()
+        );
+        assert_eq!(CsvButton::Figure.default_filename(), "enrichment.csv");
+        // NOT a bare `all_results.csv`: Stage 2 already proposes that name for
+        // an unrelated file, and the two would collide in one download folder.
+        assert_eq!(
+            CsvButton::All.default_filename(),
+            "enrichment_all_results.csv"
+        );
     }
 }

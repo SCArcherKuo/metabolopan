@@ -452,7 +452,7 @@ mod tests {
             dedup_reports: vec![],
             pubchem_time_span: None,
             kegg_conv_time_span: None,
-            dotplot_tex: None,
+            dotplot: None,
             rendering: false,
             render_rx: None,
             confirming_new_round: false,

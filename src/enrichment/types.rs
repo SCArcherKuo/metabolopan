@@ -51,10 +51,6 @@ pub struct EnrichmentRow {
     pub fdr: f64,
     /// Compound IDs that hit this entry, sorted alphabetically.
     pub hit_kegg_ids: Vec<String>,
-    /// Whether this row passes the post-FDR `min_hit_count` display
-    /// filter (i.e. `hits >= min_hit_count`). FDR was computed over all
-    /// rows regardless of this flag.
-    pub displayed: bool,
 }
 
 /// Entry-level summary of the enrichment Run.
