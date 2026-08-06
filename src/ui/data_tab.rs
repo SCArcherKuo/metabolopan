@@ -107,7 +107,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
     // scroll area so it stays pinned while the stage summary scrolls. Save is
     // hidden during `Initializing`; Load is enabled only on Stage 1 (greyed
     // elsewhere with a hover hint). Clicks set the same `LogPaneState` flags
-    // `App::update()` drains — see the `app-shell` spec.
+    // `App::update()` drains — Owner: the `app-shell` capability.
     let enable_settings_save = !matches!(app.state, AppState::Initializing { .. });
     let enable_settings_load = matches!(app.state, AppState::Stage1Input { .. });
     if enable_settings_save {
@@ -373,7 +373,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
     }
     // The organism-roster refresh button sets a flag the FRAME drains — every
     // frame, on every screen — which opens the refresh confirm (App-owned, but
-    // outside the four-modal family; see the `app-shell` spec). It renders on
+    // outside the four-modal family, per `app-shell`). It renders on
     // five `AppState` variants, so a screen-owned drain could not have covered
     // it.
     if organisms_refresh {
@@ -482,8 +482,7 @@ fn render_dam_slots(
 /// provenance *of*, so the live selection IS the answer. After a run, the run
 /// captured what it surveyed and the live selection is no longer about it — a
 /// confirmed organism-roster refresh can clear the selection out from under a
-/// finished run whose dot plot and CSV still name it. See the `coverage-ui`
-/// capability spec.
+/// finished run whose dot plot and CSV still name it. Owner: the `coverage-ui` capability.
 pub(crate) enum CoverageTarget<'a> {
     /// `Stage2CoverageSetup` and `Stage3EnrichRunning` carrying a coverage run.
     Selected {
@@ -890,8 +889,7 @@ fn render_coverage_slots(
 ///
 /// It does render the `Refresh KEGG organism list` row — the roster is
 /// session-wide infrastructure, not a per-route cache — and that button is
-/// functional here, because the frame drains its request on every screen. See
-/// the `data-summary-panel` capability spec.
+/// functional here, because the frame drains its request on every screen. Owner: the `data-summary-panel` capability.
 #[allow(clippy::too_many_arguments)]
 fn render_coverage_cache_block(
     ui: &mut egui::Ui,
@@ -1194,7 +1192,7 @@ fn render_cache_block_setup(
     // the RUNNING states of both routes as well as the setup screens, and a
     // running state owns neither an in-flight fetch slot nor an `error` field
     // — so a refused refresh there could not even report itself. Disabling is
-    // the only intelligible answer; see the `data-summary-panel` spec.
+    // the only intelligible answer; Owner: the `data-summary-panel` capability.
     busy: bool,
     out_module_refresh: &mut bool,
     out_pathway_refresh: &mut bool,

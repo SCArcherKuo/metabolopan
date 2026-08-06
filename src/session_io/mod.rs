@@ -2,8 +2,7 @@
 //! plus SHA-256 hashes of the currently-loaded MS-DIAL `.txt` +
 //! metadata `.csv` inputs for drift detection.
 //!
-//! See the `session-settings-io` capability spec for the normative
-//! contract. The on-disk schema is owned by `schema::Snapshot`; the
+//! Owner: the `session-settings-io` capability. The on-disk schema is owned by `schema::Snapshot`; the
 //! `SCHEMA_VERSION` constant + golden fixture + version-rock test form
 //! the triple-lock against schema drift.
 
@@ -41,8 +40,8 @@ pub struct InputHashMismatch {
 /// Computes per-role hashes via `hash::sha256_file`. Roles whose source
 /// is `None` at save time (in-memory / fixture-built ion tables with
 /// `txt_path == None`; `inputs.csv_path == None`) are OMITTED from
-/// `input_files` — see the "Snapshot save SHALL be available outside
-/// `Initializing`" requirement in the spec.
+/// `input_files`, so a snapshot saved outside `Initializing` records only the
+/// slots that hold something. Owner: the `session-settings-io` capability.
 pub fn from_session(
     settings: &SessionSettings,
     inputs: &SessionInputs,

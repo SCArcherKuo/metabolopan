@@ -2,9 +2,9 @@
 
 Software version: metabolopan v1.6.0
 
-Update date: 2026-08-05
+Update date: 2026-08-06
 
-This manual documents what the software does numerically — algorithms, default thresholds, deviations from common alternatives — so you can defend any number it produces in a paper or report.
+This manual documents what the software does numerically (algorithms, default thresholds, and deviations from common alternatives), so you can defend any number it produces in a paper or report.
 Read this once before publishing results that depend on the software.
 
 The pipeline operates in three stages.
@@ -18,8 +18,8 @@ This manual is written on **two tracks** so it works whether you just want to ru
 
 **Formatting legend** (applied consistently throughout):
 
-- **Bold** = a UI control you click or set — a button, radio, checkbox, or field (for example **Start DAM**, the **DAM method** radio, the **Log transformation** checkbox, **Continue to DAM**).
-- `monospace` = literal text seen on disk or in a file — file names, CSV headers, settings keys, log lines, formulas, and values (for example `0.05`).
+- **Bold** = a UI control you click or set: a button, radio, checkbox, or field (for example **Start DAM**, the **DAM method** radio, the **Log transformation** checkbox, **Continue to DAM**).
+- `monospace` = literal text seen on disk or in a file: file names, CSV headers, settings keys, log lines, formulas, and values (for example `0.05`).
 - `> **For developers:**` callouts hold internal implementation detail that a non-coder never needs. Skip them freely.
 
 Other callouts you will see: `> **Note:**` (clarifications, or where this software differs from standard tools), `> **⚠ Warning:**` (data-entry errors and fail-fast conditions), and `> **Example:**` (worked numbers and intuition).
@@ -33,10 +33,10 @@ Other callouts you will see: `> **Note:**` (clarifications, or where this softwa
 
 ## Pipeline at a glance
 
-**Who this is for:** wet-lab metabolomics researchers — no coding is needed to run it.
+**Who this is for:** wet-lab metabolomics researchers. No coding is needed to run it.
 
 The first screen you see is **Choose your analysis**, which offers two routes.
-Pick one and the rest of the session follows it — the screens, the stepper, and the output all change accordingly.
+Pick one and the rest of the session follows it: the screens, the stepper, and the output all change accordingly.
 
 **Route 1 — Differential analysis + enrichment** (three stages). Compare two sample groups, then test which KEGG pathways or modules are over-represented among the metabolites that changed:
 
@@ -182,11 +182,11 @@ The file formats below apply to both modes; the dual-mode-specific mechanics (bi
 ### MS-DIAL `.txt`
 
 - First 4 rows are MS-DIAL metadata (`Class`, `File type`, `Injection order`, `Batch ID`); the 5th row is the column header.
-  A column is treated as a real sample injection — and kept in `sample_cols` — when its `File type` value is non-empty AND not `"NA"` AND not the literal row label `"File type"`.
+  A column is treated as a real sample injection, and kept in `sample_cols`, when its `File type` value is non-empty AND not `"NA"` AND not the literal row label `"File type"`.
   This **includes** `Sample` and `Blank` (process blanks); it excludes only MS-DIAL's per-group `Average` / `Stdev` aggregation columns (labeled `NA`).
 - **Version compatibility.** Both MS-DIAL 4 and MS-DIAL 5 Alignment exports are supported.
   Column lookup is by name, so MS-DIAL 5's reordered/renamed scoring columns (it splits `Dot product` into `Simple` / `Weighted dot product`) parse identically; metabolopan uses only the columns shared by both versions.
-- **Missing values.** Empty / whitespace / `"null"` / `"NA"` / unparseable intensity cells become `f64::NAN` — an internal "missing" marker.
+- **Missing values.** Empty / whitespace / `"null"` / `"NA"` / unparseable intensity cells become `f64::NAN`, an internal "missing" marker.
   Explicit `"0"` stays `0.0`.
   This prevents downstream statistics from confusing missing measurements with true zeros.
   See [Missing values vs true zeros](#missing-values-nan-vs-true-zeros-00) for details.
@@ -201,7 +201,7 @@ The file formats below apply to both modes; the dual-mode-specific mechanics (bi
   `dry_weight`, `dilution`, `total_protein`); a column with any non-empty non-numeric cell (e.g. a `biosample` label like `CTR-01`) is silently dropped from that radio and a WARN line in the in-app log pane names which column was skipped and how many cells failed to parse.
   Empty metadata cells parse to `None`.
   Samples that appear in the MS-DIAL `.txt` but not in the CSV are flagged `Unassigned`; rows in the CSV that name samples missing from the `.txt` are logged as warnings and ignored, and listed in a red banner on the Input screen.
-  **Unassigned samples are visible on Stage 1 only** — the input-summary panel shows them with a yellow `Unassigned (N samples)` row so you know they exist, but they are dropped from the working matrix when you click **Start DAM** on the Stage 2 setup screen.
+  **Unassigned samples are visible on Stage 1 only**, the input-summary panel shows them with a yellow `Unassigned (N samples)` row so you know they exist, but they are dropped from the working matrix when you click **Start DAM** on the Stage 2 setup screen.
   No normalization, deduplication, DAM statistic, or downstream export ever sees them.
   To include a sample in analysis, add it to the metadata CSV with a real group label; to exclude a sample entirely (so it doesn't even show on Stage 1), remove its column from the MS-DIAL `.txt` File type row (set the entry to `NA`).
 
@@ -219,11 +219,11 @@ The **Continue to DAM** button stays disabled until:
 ## Stage 2 — Normalization, Deduplication & DAM
 
 **In plain terms:** All of the following are options on the single Stage 2 setup screen; together they configure one DAM run.
-Below they are presented in the order that matters most — first the core statistical test (DAM) that decides which metabolites differ, then the deduplication that cleans up duplicate compound rows, then the optional sample normalization that corrects technical loading before any of it.
+Below they are presented in the order that matters most, first the core statistical test (DAM) that decides which metabolites differ, then the deduplication that cleans up duplicate compound rows, then the optional sample normalization that corrects technical loading before any of it.
 
 ### Differentially Accumulated Metabolites (DAM)
 
-**In plain terms:** DAM is the heart of Stage 2 — it tests every metabolite, one at a time, between the two groups you chose (numerator vs denominator) and tells you which ones really differ. You pick a statistical method (**Student**, **Welch**, or **Brunner–Munzel**), pick an FDR correction (**BH** or **BY**), click **Start DAM**, and get a volcano plot plus an exportable table of up / down / not-significant features.
+**In plain terms:** DAM is the heart of Stage 2. It tests every metabolite, one at a time, between the two groups you chose (numerator vs denominator) and tells you which ones really differ. You pick a statistical method (**Student**, **Welch**, or **Brunner–Munzel**), pick an FDR correction (**BH** or **BY**), click **Start DAM**, and get a volcano plot plus an exportable table of up / down / not-significant features.
 
 Each feature is tested independently between the user-chosen numerator and denominator groups.
 Three statistical methods are offered; all follow the same overall flow.
@@ -249,7 +249,7 @@ Features failing any check are removed from the result and counted in a `skipped
 #### 3a. Method: Student's t-test (equal variances) [parametric, **default**]
 
 Classical (homoscedastic) form.
-Best when sample sizes per group are similar and the two groups have roughly comparable spread — under those assumptions it has slightly more power than Welch.
+Best when sample sizes per group are similar and the two groups have roughly comparable spread, under those assumptions it has slightly more power than Welch.
 **Default for new sessions**: paired with the **Log transformation** (arcsinh) step (also ON by default), it is the project's standard starting point.
 Switch to Welch if you suspect unequal variances, or to Brunner–Munzel when the distributions are skewed enough that the transform is not enough.
 
@@ -262,7 +262,7 @@ Switch to Welch if you suspect unequal variances, or to Brunner–Munzel when th
     - `log_transform=false` (raw scale): `FC = mean(numerator) / mean(denominator)`, `log2(FC) = log2(FC)`.
     - `log_transform=true` (arcsinh scale): `log2(FC) = (mean(arcsinh(num)) − mean(arcsinh(den))) / ln(2)`, and `FC = 2^log2(FC)`.
       Sign of `log2(FC)` is **guaranteed** to agree with the *t*-statistic sign on the same data.
-      For large *x* arcsinh(x) ≈ ln(2x), so `log2(FC)` asymptotes to `log2(GM(num) / GM(den))` — the classical log-fold-change of limma / DESeq2.
+      For large *x* arcsinh(x) ≈ ln(2x), so `log2(FC)` asymptotes to `log2(GM(num) / GM(den))`, the classical log-fold-change of limma / DESeq2.
       For small *x* (close to 0) arcsinh(x) ≈ x, so `log2(FC)` degrades to a scaled arithmetic mean difference rather than a true ratio.
       This is a documented consequence of variance-stabilization; the equivalent log-FC interpretation only holds in the large-*x* asymptote where arcsinh aligns with ln.
       CSV exports surface the active basis via the `fc_basis` column (`mean` / `median` / `arcsinh-mean`) so downstream consumers can identify which scale a number is on without rerunning the pipeline.
@@ -274,18 +274,18 @@ Use this when group spreads visibly differ, or as a safer default when you are u
 
 - Same optional pre-test transform as Student (`arcsinh` only, gated by the Stage 2 **Log transformation** checkbox; default ON).
 - Welch's t statistic is computed from the (optionally arcsinh-transformed) values using NaN-aware means and variances, with Welch–Satterthwaite degrees of freedom, then converted to a two-tailed p via the Student-*t* CDF.
-- **Fold change scale matches the test scale** — same rule as Student above.
+- **Fold change scale matches the test scale**, same rule as Student above.
   With `log_transform=true`, `FC` is on the arcsinh scale, so its sign always agrees with the Welch *t* sign.
   With `log_transform=false`, `FC` is the classical raw mean ratio.
 
 > **⚠ Warning: Welch / Student edge case — zero variance in one group.** When every replicate in one group has the same value (e.g. the feature is below the limit of detection in every sample of one condition and gets imputed to a constant), the Welch–Satterthwaite degrees of freedom collapse to `n − 1` of the OTHER group.
-> For `n = 2` this gives `df = 1`, which makes the *t* distribution extremely wide and the p-value very conservative — even when the two groups are visibly well-separated.
+> For `n = 2` this gives `df = 1`, which makes the *t* distribution extremely wide and the p-value very conservative, even when the two groups are visibly well-separated.
 > This is the standard mathematical behavior (matches R's `t.test(var.equal=FALSE)` and SciPy's `ttest_ind(equal_var=False)` exactly), but for metabolomics the affected features often correspond to genuine "presence-in-one-condition, absence-in-the-other" signals you may want to keep.
 
 `run_dam` emits a single INFO log per run reporting the count of features that triggered this path (look for `zero_variance_features=N` in your session log at `<data_dir>/metabolopan/logs/session_*.log`, where `<data_dir>` is `dirs::data_dir()` — macOS `~/Library/Application Support`, Linux `~/.local/share`, Windows `%APPDATA%`); when N > 0, consider re-running with the Brunner–Munzel method, which is rank-based and handles this edge case differently.
 
 > **For developers:** The diagnostic counter uses a relative tolerance — variance below
-> `(max(|mean|, 1))² × 1e−20` is flagged — so features whose group is constant up to
+> `(max(|mean|, 1))² × 1e−20` is flagged, so features whose group is constant up to
 > floating-point noise (e.g. arithmetic on bit-equal pre-norm inputs at high intensity scale where `var ≈ ε² × c²` is non-zero but the df pathology kicks in the same way) also contribute to the count.
 > The per-method `var == 0.0` guard inside the t-test functions themselves is unchanged — only this diagnostic counter was loosened.
 
@@ -296,7 +296,7 @@ Metabolomics data is often poorly described by Gaussian assumptions (highly skew
 Select it via the Stage 2 setup radio when the default Student's t-test (even after `arcsinh`) is a poor fit — e.g. heavily skewed or presence/absence-dominated features, or when matching a previously published non-parametric analysis.
 
 - The Brunner–Munzel statistic is computed with mid-ranks across `numerator ∪ denominator`, combined with Welch–Satterthwaite-like degrees of freedom, then converted to a two-tailed p-value via the Student-*t* distribution.
-  Behavior matches SciPy's `brunnermunzel(distribution='t')` and R's `lawstat::brunner.munzel.test` — the W denominator inside `sqrt` is `nx·Sx + ny·Sy`.
+  Behavior matches SciPy's `brunnermunzel(distribution='t')` and R's `lawstat::brunner.munzel.test`, the W denominator inside `sqrt` is `nx·Sx + ny·Sy`.
 - Cliff's δ effect size: `(gt − lt) / (n · m)` where `gt` and `lt` are the strict-greater and
   strict-less pair counts. Range `−1` to `+1`; |δ| ≥ 0.33 is the conventional "medium effect"
   threshold used here.
@@ -308,12 +308,12 @@ Select it via the Stage 2 setup radio when the default Student's t-test (even af
 
 #### 4. Multiple-testing correction
 
-**In plain terms:** When you test thousands of metabolites at once, some will look "significant" by pure luck — test 5,000 features at p < 0.05 and you'd expect ~250 false hits even if nothing were real. FDR correction reins this in by inflating each raw p-value into a q-value that accounts for the whole family of tests. Think of the **BH** vs **BY** radio as a sensitivity/safety dial: BH is the standard, more-discoveries setting; BY is the stricter, safer-when-features-correlate setting.
+**In plain terms:** When you test thousands of metabolites at once, some will look "significant" by pure luck: test 5,000 features at p < 0.05 and you'd expect ~250 false hits even if nothing were real. FDR correction reins this in by inflating each raw p-value into a q-value that accounts for the whole family of tests. Think of the **BH** vs **BY** radio as a sensitivity/safety dial: BH is the standard, more-discoveries setting; BY is the stricter, safer-when-features-correlate setting.
 
 Each Stage 2 run applies a user-selected false discovery rate (FDR) correction to the per-feature p-values, regardless of which statistical method produced them.
 The Stage 2 setup screen exposes a radio with two options:
 
-- **Benjamini–Hochberg (BH) procedure** — the default.
+- **Benjamini–Hochberg (BH) procedure**, the default.
   BH assumes independence or positive regression dependence between tests (i.e. it assumes the tests don't conspire), and yields more discoveries.
 - **Benjamini–Yekutieli (BY) procedure** — opt-in, stricter.
   Multiplies BH's q-values by the exact harmonic factor $c(m) = \sum_{i=1}^{m} \frac{1}{i}$ (≈ ln(m) + γ for large m, so BY is roughly 9× more conservative than BH at m = 5,000 — that ~9× is the price you pay).
@@ -349,7 +349,7 @@ The Y axis is otherwise clipped at `finite_max + 1` for display only; underlying
 A single annotation strip below the X-axis label summarizes method, the active FC basis (`FC: mean` / `FC: median` / `FC: arcsinh-mean`), active thresholds, and ±∞ counts — e.g. `Method: Brunner-Munzel | FC: median | FDR(BH)<0.05, FC≥2, |δ|≥0.33 | −∞: 12  +∞: 8`.
 
 **BM dot size encodes Cliff's δ magnitude.** On Brunner–Munzel renders, each scatter dot's radius is mapped from the feature's `|Cliff's δ|`: `|δ|=0` gives the smallest still-visible dot, `|δ|=1` gives a dot ≈ 1.3× the default radius, and intermediate magnitudes scale linearly between the two anchors.
-The right-side legend grows a second `|δ| size` block under the existing trend counts, with three reference dots at `|δ|=0/0.5/1.0` in neutral gray — size-match scatter dots against these references
+The right-side legend grows a second `|δ| size` block under the existing trend counts, with three reference dots at `|δ|=0/0.5/1.0` in neutral gray. Size-match scatter dots against these references
 to read magnitude off the chart. Welch / Student renders keep a uniform dot radius across the chart and do NOT draw the `|δ| size` legend section (those tests don't produce a Cliff's δ to encode). BM features where `|δ|` is undefined (one group with `n < 2` non-NaN values) fall back to the default radius and still render in the appropriate trend color.
 
 #### 7. Exporting the figure as PNG
@@ -362,8 +362,8 @@ They define the saved image exactly: `pixel width = round(Width × DPI)`, `pixel
 - **DPI** sets the resolution: raising it makes the raster sharper (more pixels) at the *same* physical size — `300` is the usual journal floor for line art, `600` for print quality. Shrinking `Width` / `Height` makes the figure smaller; raising `DPI` keeps the on-page size but adds detail.
 - **Everything scales together.** Fonts, axis ticks, threshold lines, and scatter dots are sized relative to the canvas, so changing any of the three rescales the whole figure uniformly — text never ends up tiny or huge relative to the plot. (The dot plot keys its font size off `Width × DPI` only, because its height auto-fits to the row count — see item 10 under *Pathway mode*.)
 
-**What you see is what you get.** The on-screen preview and the downloaded PNG come from the *same* renderer at the *same* dimensions — there is no separate "export-quality" pass. The preview *is* the file: same layout, fonts, colors, dot positions, and pixel dimensions (your monitor may show it zoomed to fit the window, but the saved pixels match the preview's).
-The preview is the image from your last **Draw volcano** / **Re-draw volcano**. Changing a threshold blanks it (the button reverts to **Draw volcano**); changing an export size does not — so after adjusting **Width** / **Height** / **DPI**, click **Re-draw volcano** to bring the preview in line with what **Download volcano PNG** will write.
+**What you see is what you get.** The on-screen preview and the downloaded PNG come from the *same* renderer at the *same* dimensions. There is no separate "export-quality" pass. The preview *is* the file: same layout, fonts, colors, dot positions, and pixel dimensions (your monitor may show it zoomed to fit the window, but the saved pixels match the preview's).
+The preview is the image from your last **Draw volcano** / **Re-draw volcano**. Changing a threshold blanks it (the button reverts to **Draw volcano**); changing an export size does not, so after adjusting **Width** / **Height** / **DPI**, click **Re-draw volcano** to bring the preview in line with what **Download volcano PNG** will write.
 
 #### DAM caveats worth knowing
 
@@ -379,7 +379,6 @@ The preview is the image from your last **Draw volcano** / **Re-draw volcano**. 
 
 **In plain terms:** MS-DIAL often reports the same compound as several rows (different adducts, isotope peaks, or split peaks). Deduplication collapses each set of same-compound rows to the single best feature so they don't multiply your test family. It runs as a checkbox on the Stage 2 setup screen (default ON), and you can download an audit CSV afterward to see exactly which rows were dropped and why.
 
-MS-DIAL routinely emits multiple Alignment IDs that resolve to the same compound.
 There are three biological / instrumental causes:
 
 1. **Adduct multiplicity.** The same neutral molecule ionizes as `[M+H]+`, `[M+Na]+`, `[M+NH4]+`, … in positive mode (or `[M-H]-`, `[M+Cl]-`, `[M+FA-H]-`, … in negative mode).
@@ -388,7 +387,7 @@ There are three biological / instrumental causes:
 3. **Split chromatographic peaks.** When peak picking is suboptimal, a single Gaussian elution can be cut into two adjacent Alignment IDs that share every annotation but differ on `Fill %` / `S/N average`.
 
 Feeding all duplicates into DAM inflates the FDR (false discovery rate) family size by 2–5× over the true compound count, eroding statistical power.
-Stage 3 ORA is insulated from this particular inflation: it builds its foreground `K` (drawn-compound count) and universe `N` as sets of *unique* KEGG compounds keyed by InChIKey, so adduct, isotope, and split-peak duplicates — which share an InChIKey — collapse to a single compound and leave `K` unchanged whether or not dedup ran.
+Stage 3 ORA is insulated from this particular inflation: it builds its foreground `K` (drawn-compound count) and universe `N` as sets of *unique* KEGG compounds keyed by InChIKey, so adduct, isotope, and split-peak duplicates, which share an InChIKey, collapse to a single compound and leave `K` unchanged whether or not dedup ran.
 Dedup still matters for Stage 3, but the risk runs the *other* way: a single low-quality duplicate whose DAM trend disagrees with its siblings makes the shared compound aggregate to an intra-mode `Conflict` and *drops* it from `K` (shrinking the foreground, not inflating it) rather than letting the cascade keep the one high-confidence feature.
 
 **Deduplication runs as an opt-out toggle on the Stage 2 setup screen (default ON).** The cascade is *purely* a deduplication operation, NOT a generic quality filter — features with `inchikey = None` pass through untouched, and singletons (one Alignment ID per InChIKey) are kept even if their annotation quality is poor.
@@ -400,18 +399,18 @@ Positional or stereo-isomers can share an InChIKey skeleton yet elute at differe
 Collapsing those into one feature would discard real, chromatographically resolved signal.
 
 metabolopan therefore groups by InChIKey **and** retention time: within each InChIKey group, features are partitioned into retention-time clusters, and the cascade below runs independently within each cluster.
-Any two same-InChIKey features more than the **RT tolerance** apart in retention time land in different clusters and are **both kept** — every cluster's whole retention-time span stays within the tolerance, so nothing more than one tolerance wide is ever collapsed into a single feature.
+Any two same-InChIKey features more than the **RT tolerance** apart in retention time land in different clusters and are **both kept**, every cluster's whole retention-time span stays within the tolerance, so nothing more than one tolerance wide is ever collapsed into a single feature.
 
 - The **RT tolerance (min)** is a numeric field on the Stage 2 setup screen, directly under the deduplication checkbox (active only when deduplication is on). The default is **0.1 min**, and the minimum is **0.001 min** (the tolerance must be strictly positive).
 - Clustering keeps each cluster's retention-time **span** (its latest member minus its earliest) within the tolerance — equivalently, every pair of features inside a cluster is within the tolerance of each other (complete-linkage). Concretely, features are sorted by retention time and each cluster is anchored at its first (earliest) member; a feature joins while it is within the tolerance of that anchor, otherwise it starts a new cluster (a span exactly equal to the tolerance still counts as together).
-- **Left bias.** When a middle feature sits within the tolerance of *both* a lower and an upper neighbour, but those two neighbours are more than the tolerance apart, it cannot join both. metabolopan deterministically keeps it with the **lower** (earlier-eluting) cluster. This is a fixed, predictable convention — not a quality judgement; if you need such a feature grouped the other way, adjust the tolerance.
+- **Left bias.** When a middle feature sits within the tolerance of *both* a lower and an upper neighbour, but those two neighbours are more than the tolerance apart, it cannot join both. metabolopan deterministically keeps it with the **lower** (earlier-eluting) cluster. This is a fixed, predictable convention, not a quality judgement; if you need such a feature grouped the other way, adjust the tolerance.
 - A feature with a blank `Average Rt(min)` cannot be placed against a known retention time, so all such features form one separate "no-retention-time" cluster per InChIKey and compete only among themselves.
 - Setting the tolerance very large recovers the older InChIKey-only behavior for any compound whose rows all carry (or all lack) a retention time.
 
-Retention time decides *which* features compete, never *which one wins* — the cascade decision table below is unchanged and never reads the retention time.
+Retention time decides *which* features compete, never *which one wins*, the cascade decision table below is unchanged and never reads the retention time.
 
 **Example (simple).** Three rows share InChIKey `AAA`: two at `Average Rt(min)` 2.10 and 2.13, and one at 8.55.
-With the default 0.1 min tolerance the first two fall in one cluster (span 2.13 − 2.10 = 0.03 ≤ 0.1) and collapse to a single cascade winner, while the 8.55 row is a cluster of its own and is kept — so the compound survives as **two** features, not one.
+With the default 0.1 min tolerance the first two fall in one cluster (span 2.13 − 2.10 = 0.03 ≤ 0.1) and collapse to a single cascade winner, while the 8.55 row is a cluster of its own and is kept, so the compound survives as **two** features, not one.
 
 **Example (chain + left bias).** Three rows share InChIKey `BBB` at `Average Rt(min)` 0.00, 0.08, and 0.16 min.
 The consecutive gaps are each 0.08 min (≤ 0.1), but the 0.00-to-0.16 span is 0.16 min (> 0.1). Because a cluster's whole span must stay within the tolerance, these do **not** all collapse into one: the 0.00 and 0.08 rows form one cluster (span 0.08 ≤ 0.1) and the 0.16 row is kept separately. The middle 0.08 row is packed into the **lower** cluster (the left bias) rather than pairing with 0.16.
@@ -448,7 +447,7 @@ In dual-mode runs the file contains one report per mode, separated by `# Mode: P
 #### Opt-out
 
 Uncheck **Deduplicate features by InChIKey** on the Stage 2 setup screen to disable.
-With the box unchecked the DAM run is bit-equal to the pre-feature behavior — every input row reaches the pre-filter, FDR `m` equals the post-pre-filter count, and `dedup_report` on the DAM result is `None`.
+With the box unchecked the DAM run is bit-equal to the pre-feature behavior, every input row reaches the pre-filter, FDR `m` equals the post-pre-filter count, and `dedup_report` on the DAM result is `None`.
 
 ### Sample normalization
 
@@ -469,7 +468,7 @@ Five methods are offered in addition to the default:
   `dry_weight`, `dilution`).
   Each cell is divided by the per-sample value from that column, then rescaled by the median value across samples.
   Behavior on incomplete data in the given metadata column:
-  - *Missing value (empty cell):* the sample is **dropped** from the analysis — every cell in that sample's column is NaN-marked so DAM's NaN-aware machinery excludes it from per-feature statistics.
+  - *Missing value (empty cell):* the sample is **dropped** from the analysis, every cell in that sample's column is NaN-marked so DAM's NaN-aware machinery excludes it from per-feature statistics.
     The Stage 2 setup screen lists the samples being dropped in a yellow warning line before the user clicks **Start DAM**.
   - *Non-positive value (zero or negative):* errors loudly with the offending sample and column named.
     Zero/negative metadata is a data-entry problem, not absence, so failing fast is the right call.
@@ -480,14 +479,14 @@ Five methods are offered in addition to the default:
   Tied items at sorted positions `[k, k+t)` are assigned the **MEAN** of the reference values at those `t` rank positions — `mean(reference[k..k+t])`.
 
   > **Note:** This is a **literal** reading of Smyth's remark in the Bioconductor support thread #1569 (2003, <https://support.bioconductor.org/p/1569/>) that tied items should get "the average of the corresponding pooled quantiles".
-  > The widely-deployed canonical implementations — including Smyth's own `limma::normalizeQuantiles(ties=TRUE)` (the default) and Bolstad's `preprocessCore::normalize.quantiles` — instead resolve ties by average-rank lookup with linear interpolation, i.e. the reference value at the tie's middle rank.
+  > The widely-deployed canonical implementations, including Smyth's own `limma::normalizeQuantiles(ties=TRUE)` (the default) and Bolstad's `preprocessCore::normalize.quantiles`, instead resolve ties by average-rank lookup with linear interpolation, i.e. the reference value at the tie's middle rank.
   > The two readings coincide for `t == 2` ties OR when the reference is locally linear, and diverge for `t ≥ 3` ties on a curvy reference (common at the bottom of below-LOD-imputed metabolomics samples, e.g. the worked example below).
-  > metabolopan's output therefore differs from **both** preprocessCore and limma in exactly that case — a deliberate choice, documented here so you can compare against the standard tools knowingly.
+  > metabolopan's output therefore differs from **both** preprocessCore and limma in exactly that case, a deliberate choice, documented here so you can compare against the standard tools knowingly.
 
   > **Example:** reference `[1.5, 7.5, 52.5, 502.5, 55000]` with a 3-way tie at sorted positions 1–3 yields mean(7.5, 52.5, 502.5) = **187.5** here; `limma::normalizeQuantiles(ties=TRUE)` / `preprocessCore::normalize.quantiles` return `reference[2]` = **52.5**.
   > ![quantile-normaliztion-in-r](./figure/quantile-normalization.png)
 
-  This divergence does not depend on samples having equal non-NaN counts — it is purely about how `t ≥ 3` ties map onto a curvy reference; equal vs unequal non-NaN counts is a separate axis, covered next.
+  This divergence does not depend on samples having equal non-NaN counts. It is purely about how `t ≥ 3` ties map onto a curvy reference; equal vs unequal non-NaN counts is a separate axis, covered next.
   - **Unequal non-NaN counts across samples.** When samples have different numbers of non-NaN cells (e.g. heterogeneous missingness), the reference is built on a common fractional-rank grid of size `K = max(n_j)` and each sample's sorted values are linearly interpolated onto it.
 
     > **For developers:** This matches limma's `(r − 1)/(n − 1) ∈ [0, 1]` scheme.
@@ -503,21 +502,21 @@ Five methods are offered in addition to the default:
 #### Why Sum / Median / Metadata rescale to the median factor (rather than divide to a constant)
 
 These three methods share one driver.
-For each sample column *j* it computes a scalar factor `f_j` — the column sum (Sum), the column's NaN-aware median (Median), or the sample's positive metadata value (Metadata) — then rewrites every finite cell as
+For each sample column *j* it computes a scalar factor `f_j`: the column sum (Sum), the column's NaN-aware median (Median), or the sample's positive metadata value (Metadata). It then rewrites every finite cell as
 
   $$ x^{\prime}_{[i, j]} = x_{[i, j]} \times \frac{M}{f_j}, \; where \; M = \underset{j}{median}(f_j) $$
 
 The `× M` term is the deliberate part.
 The textbook form of sum normalization is plain `x / f_j` (or `× 10^6` for CPM-style counts), which forces every sample onto a *per-unit* scale: for Sum every column would then sum to 1 (proportions, ~ 1e-5 – 1e-3); for Median every column's median would become 1.
-We instead multiply back by `M`, the **median of the per-sample factors**, so each column's sum (resp. median) lands on `M` — the *typical* sample's original magnitude — instead of 1.
+We instead multiply back by `M`, the **median of the per-sample factors**, so each column's sum (resp. median) lands on `M`, the *typical* sample's original magnitude, instead of 1.
 The between-sample technical loading (injection volume, dilution, dry weight) is still equalized; only the absolute intensity scale is preserved.
 
-- *Why it matters — the downstream `arcsinh`.* The default **Log transformation** is `arcsinh`, which behaves like a logarithm (`arcsinh(x) ≈ ln(2x)`) only once *x* is reasonably large; for *x* near 0 it is essentially **linear** (`arcsinh(x) ≈ x`).
+- *Why it matters, the downstream `arcsinh`.* The default **Log transformation** is `arcsinh`, which behaves like a logarithm (`arcsinh(x) ≈ ln(2x)`) only once *x* is reasonably large; for *x* near 0 it is essentially **linear** (`arcsinh(x) ≈ x`).
   Dividing to proportions would push the whole working matrix into that near-linear regime, collapsing arcsinh's variance-stabilizing effect and degrading the t-test to a linear-scale comparison of tiny numbers.
-  Keeping values at intensity scale (≈ 1e4 – 1e7) keeps arcsinh in its useful log-like regime — the "never near 0" goal.
-  Scaling **all** cells by the same constant `M` cancels out in Brunner–Munzel's median ratio, but **not** under `arcsinh` (it is nonlinear), so this rescale specifically protects the Student / Welch + `arcsinh` path — the current default.
-- *Why the median (not the mean) of the factors.* The median is robust — one unusually-high-loading sample cannot drag the target scale — and it makes the *typical* sample the anchor: that sample's `f_j ≈ M`, so `f_j / M ≈ 1` leaves it essentially unchanged while the off-scale samples move toward it.
-- *Worked numbers.* Three samples with column sums `6, 15, 24` give `M = median(6, 15, 24) = 15`; after `x / sum_j × 15` every column sums to **15** (sample A scaled ×2.5, C ×0.625, B unchanged) — not to 1.
+  Keeping values at intensity scale (≈ 1e4 – 1e7) keeps arcsinh in its useful log-like regime, the "never near 0" goal.
+  Scaling **all** cells by the same constant `M` cancels out in Brunner–Munzel's median ratio, but **not** under `arcsinh` (it is nonlinear), so this rescale specifically protects the Student / Welch + `arcsinh` path, the current default.
+- *Why the median (not the mean) of the factors.* The median is robust (one unusually-high-loading sample cannot drag the target scale) and it makes the *typical* sample the anchor: that sample's `f_j ≈ M`, so `f_j / M ≈ 1` leaves it essentially unchanged while the off-scale samples move toward it.
+- *Worked numbers.* Three samples with column sums `6, 15, 24` give `M = median(6, 15, 24) = 15`; after `x / sum_j × 15` every column sums to **15** (sample A scaled ×2.5, C ×0.625, B unchanged), not to 1.
   With Median normalization on per-sample medians `2, 20, 200`, `M = 20` and every column's median becomes **20**.
   Metadata is identical with `f_j` the chosen column's value, giving "intensity at the median dry weight."
 
@@ -526,9 +525,9 @@ The chosen `M` is reported in the dispatcher INFO log as `scaling_to_median_fact
 
 #### Lifecycle
 
-The normalization choice — and every other settings parameter — persists across every navigation transition for the lifetime of the session.
+The normalization choice, and every other settings parameter, persists across every navigation transition for the lifetime of the session.
 Backing up to a previous stage never drops the choice; you simply land on the previous screen with all your prior picks intact.
-(If you re-pick files at Stage 1 and the prior numerator/denominator groups no longer exist in the new metadata, Stage 2 blocks the gate until you re-select valid groups.) There is no separate normalization step at Stage 3 — the working matrix (already normalized) is what Stage 3 enrichment sees.
+(If you re-pick files at Stage 1 and the prior numerator/denominator groups no longer exist in the new metadata, Stage 2 blocks the gate until you re-select valid groups.) There is no separate normalization step at Stage 3, the working matrix (already normalized) is what Stage 3 enrichment sees.
 
 #### Errors at startup
 
@@ -550,12 +549,9 @@ The DAM task only starts when the working matrix is finite and shape-correct.
   They differ in robustness: Sum is sensitive to a few high-intensity outliers per sample; Median ignores them.
 ## Stage 3 — Enrichment (over-representation analysis)
 
-Stage 3 takes the differentially-accumulated compounds you found in Stage 2 and asks a single biological question: *do they cluster into any known pathway (or module) more than you'd expect by chance?*
-If, say, half of your "up" compounds all belong to glycolysis, that pathway is *over-represented* — a signal worth reporting.
-Each mode (Pathway / Module) runs the same statistical machinery; they differ only in which KEGG catalog of compound-sets the test is run against.
-
 Stage 3 takes the DAM result from Stage 2 and asks: *"Which KEGG entries are over-represented in my list of differentially-accumulated compounds?"* — where "entry" means **[a KEGG pathway](https://www.kegg.jp/kegg/pathway.html)** (pathway mode) or **[a KEGG module](https://www.kegg.jp/kegg/module.html)** (module mode).
 The two modes share identical machinery for the hypergeometric test, user-selected FDR (BH or BY), and the measurable-metabolome universe; they differ only in what catalog of compound-sets ORA operates over.
+If, say, half of your "up" compounds all belong to glycolysis, that pathway is *over-represented*, a signal worth reporting.
 
 ### How over-representation analysis works here
 
@@ -577,9 +573,9 @@ Four plain-language quantities drive the whole test (defined before the formula 
 > `N = 300` measurable compounds, you draw `K = 30` differentially-accumulated ones, and a pathway has `m_p = 10` compounds in it.
 > If your `K` hits were sprinkled at random, chance predicts only `30 × (10 / 300) = 1` of them would land in that pathway.
 > You actually hit `k_p = 5`.
-> Five against an expectation of one is strong over-representation — a small *p*-value.
+> Five against an expectation of one is strong over-representation, a small *p*-value.
 
-Stage 3 carries its own FDR-correction radio, independent of the Stage 2 choice — **the default is Benjamini–Yekutieli (BY)**, the safer choice for pathway/module ORA because entries inherently share compounds (many cpds appear in multiple pathways), which violates BH's independence assumption. Benjamini–Hochberg remains available for users who prioritize cross-tool reproducibility.
+Stage 3 carries its own FDR-correction radio, independent of the Stage 2 choice: **the default is Benjamini–Yekutieli (BY)**, the safer choice for pathway/module ORA because entries inherently share compounds (many cpds appear in multiple pathways), which violates BH's independence assumption. Benjamini–Hochberg remains available for users who prioritize cross-tool reproducibility.
 The Stage 3 dot plot's colorbar title and annotation strip both name the active method (e.g.
 `-log10(FDR (BY))` / `FDR: BY`), and the leading `# FDR:` comment line on the enrichment CSV records the choice for downstream parsing.
 
@@ -588,12 +584,10 @@ The Stage 3 dot plot's colorbar title and annotation strip both name the active 
 The setup screen is where you choose *what* to test against and *how strict* to be.
 You pick a mode, a KEGG scope (a species for pathways, an organism Group for modules), a direction filter, and the entry-size / FDR knobs, then press **Run Enrichment**.
 
-The Stage 3 setup screen is where the user picks:
-
 - **Analysis Mode** (Pathway / Module) via a radio toggle.
   Both modes' selections AND their fetched KEGG caches coexist for the lifetime of the session — toggling between modes is instant and never re-fetches data you've already pulled.
 - **KEGG scope.** Pathway mode shows a searchable species selector with the eagerly-loaded KEGG organism list; module mode shows the Level + Group picker described below in *Module mode*.
-  Selecting a species (or Group) triggers the corresponding KEGG fetch inline on this screen — a small progress bar with caption streams the per-pathway (or per-module + ETA) progress without leaving the setup screen. See below for details.
+  Selecting a species (or Group) triggers the corresponding KEGG fetch inline on this screen, a small progress bar with caption streams the per-pathway (or per-module + ETA) progress without leaving the setup screen. See below for details.
 - **Include DAM features with direction** as (`Both` / `Up only` / `Down only`).
 - **Minimum number of compounds detected in a pathway/module** (the "minimum entry size" filter; default `1`, range `[1, 20]`).
   Drops pathways / modules whose universe-restricted compound count is below this threshold *before* the FDR family is built — see [Pathway mode step 5](#pathway-mode) for the canonical explanation.
@@ -605,7 +599,7 @@ The Stage 3 setup screen is where the user picks:
 These three controls live on the *result* screen so you can iterate on the figure after seeing the data, without walking back to setup.
 
 - **Significance threshold** (default `0.05`). The control is labelled `Enrichment FDR threshold` when a correction is applied, and `Enrichment p-value threshold` under `No correction` — it names the quantity the cutoff is compared against.
-- **Minimum hit count** (a display filter on hit count; default `1`). Like the other two, moving it **discards the figure on screen** and the next `Draw dot plot` renders one at the new value — no re-run needed.
+- **Minimum hit count** (a display filter on hit count; default `1`). Like the other two, moving it **discards the figure on screen** and the next `Draw dot plot` renders one at the new value, no re-run needed.
   The Top N input that controls the dot plot's display cap lives on the screen so you can iterate on it after seeing the data, without coming back to setup.
 - **Top N pathways** (default `20`).
 
@@ -626,12 +620,12 @@ The pipeline is:
    If PubChem returns multiple CIDs for an InChIKey (stereo / regio / salt ambiguity) and they all resolve to the same KEGG cpd, the feature contributes that cpd **once** to the foreground `K` and to the universe `N`.
    If they resolve to genuinely different cpds, each cpd counts.
    Features whose InChIKey has no PubChem CID, or whose CIDs all fail to map to a KEGG cpd, are dropped from `K` and `N` and surfaced in the bottom-panel **Data** tab's mapping funnel (`<N> InChIKeys → <N> PubChem CIDs → <N> KEGG cpds`).
-4. **Universe definition (N).** The universe is the union of unique cpd IDs across all annotated features that passed Stage 2's pre-filter AND successfully mapped through PubChem and KEGG conv — the *measurable metabolome* on this platform.
+4. **Universe definition (N).** The universe is the union of unique cpd IDs across all annotated features that passed Stage 2's pre-filter AND successfully mapped through PubChem and KEGG conv, the *measurable metabolome* on this platform.
    We intentionally use the measurable-only universe so p-values better reflect what your data could have said.
 5. **Pre-FDR entry-size filter.** Before any hypergeometric work, each pathway's `m_p` is compared against the user-tunable `min_entry_size` (default `1`, range `[1, 20]`).
    Entries with `m_p < min_entry_size` are **dropped entirely** from the run — they contribute no p-value to the FDR family, do not appear in the CSV, and do not appear on the dot plot.
    The dropped count is surfaced in the bottom-panel **Data** tab via a retention line `Tested: <surviving> / <total> (≥ N compounds in universe)` (`Tested: <surviving> (≥ N compounds in universe)` in module mode).
-   The default `1` keeps the pre-filter permissive — only `m_p = 0` entries are dropped (such an entry could only ever score `p = 1.0` anyway), so every pathway with at least one measurable compound is tested.
+   The default `1` keeps the pre-filter permissive: only `m_p = 0` entries are dropped (such an entry could only ever score `p = 1.0` anyway), so every pathway with at least one measurable compound is tested.
    Raising it to `3` to additionally exclude entries with `m_p ∈ {1, 2}` that are mathematically untestable at typical `K`/`N` values — e.g. an entry with `m_p = 1` can produce at most `k_p = 1`, giving raw `p ≈ K/N` which is rarely below `α = 0.05` and even more rarely below the BH critical value `0.05/m`.
    The trade-off is symmetric: a lower `min_entry_size` tests more pathways but enlarges the multiple-testing family `m`.
 
@@ -647,15 +641,15 @@ The pipeline is:
 
    > **For developers:** The implementation also enforces `K ⊆ N` as a `debug_assert!` (any upstream regression that lets K leak compounds outside N is caught loudly in dev/test; release builds emit a per-run `ERROR` log summarizing any Hypergeometric domain errors so the failure mode "all entries non-significant with no diagnostic" cannot ship silently).
 
-   - **Fold enrichment (effect size).** Alongside each p-value the ORA records an effect-size metric — the observed hit count over the count expected under the null. *Expected* = if your `K` hits were sprinkled at random, how many would land in this pathway from its size alone: `expected_p = K · (m_p / N)`, so `fold enrichment = k_p / expected_p = (k_p · N) / (m_p · K)`.
+   - **Fold enrichment (effect size).** Alongside each p-value the ORA records an effect-size metric, the observed hit count over the count expected under the null. *Expected* = if your `K` hits were sprinkled at random, how many would land in this pathway from its size alone: `expected_p = K · (m_p / N)`, so `fold enrichment = k_p / expected_p = (k_p · N) / (m_p · K)`.
      `> 1` means over-represented (more hits than chance predicts), `= 1` exactly as expected, `< 1` under-represented.
-     It is the dot plot's **X axis** and the `Expected` / `EnrichmentRatio` columns of the exported CSV, and it is **effect size only, carrying no significance** — a one-compound entry (`m_p = 1`) can post a large fold enrichment off a single lucky hit, which is exactly why selection is by FDR rather than fold enrichment (step 9) and why the `min_entry_size` pre-filter (step 5) exists.
+     It is the dot plot's **X axis** and the `Expected` / `EnrichmentRatio` columns of the exported CSV, and it is **effect size only, carrying no significance**, a one-compound entry (`m_p = 1`) can post a large fold enrichment off a single lucky hit, which is exactly why selection is by FDR rather than fold enrichment (step 9) and why the `min_entry_size` pre-filter (step 5) exists.
      Edge case: when `expected_p = 0` (no measurable compounds in the entry) the ratio is undefined — `NaN` internally, written as an **empty** cell in the CSV.
 7. **User-selected FDR correction** via the Stage 3 setup screen's independent radio (default Benjamini–Yekutieli procedure; Benjamini–Hochberg procedure one click away; `No correction` as a third option for exploratory runs only, see below).
    The radio is independent of the Stage 2 choice on purpose: the two stages have different dependence profiles, and users will reasonably want Stage 2 BH (cross-tool reproducibility on the volcano) + Stage 3 BY (conservative ORA on shared-compound entries).
    For pathway/module ORA we **default to BY**: pathways share compounds heavily (glycolysis ↔ TCA share G6P, pyruvate, etc.), so the independence assumption underlying BH is violated. Most biology tools default to BH; switch the radio to BH if you need cross-tool-comparable q-values.
    BY is more conservative under dependence; expect uniformly higher (less significant) adjusted p-values.
-   `No correction` skips multiple-testing correction entirely — the significance value carried through is the raw p-value, unchanged.
+   `No correction` skips multiple-testing correction entirely, the significance value carried through is the raw p-value, unchanged.
    Because nothing was adjusted, the exported CSV omits its `FDR` column for such a run and carries `PValue` alone: an `FDR` column would have repeated `PValue` byte-for-byte under a name no correction earned.
 
    > **⚠ Warning:** Use `No correction` **only for exploratory ranking**, never for published claims of significance; on a typical KEGG pathway catalog (~300 pathways tested) you'd expect ~15 false positives at `p < 0.05` purely by chance.
@@ -663,7 +657,7 @@ The pipeline is:
    The Stage 2 DAM radio does NOT expose `No correction` — raw p across ~13 k features would flood the result set; a hand-crafted snapshot carrying `dam_fdr_method=NoCorrection` is defensively coerced back to BH with a `tracing::warn!` event.
 
    **Color scale.** Each marker's fill encodes `-log10(FDR)` (raw `-log10(p)` under `No correction`) on a ColorBrewer **YlOrRd** 9-step ramp — palest yellow for the least-significant entry shown (FDR at the displayed threshold) deepening to dark red for the most significant; the dots and the colorbar legend share a single `-log10` span, so equal colors mean equal significance across both.
-   The active method is recorded in the dot plot's colorbar title (`-log10(FDR (BH))` / `-log10(FDR (BY))` / `-log10(p-value)` for `No correction` — the wrapper drops because the axis values ARE raw p, not q) and in the leading `# FDR: BH` / `# FDR: BY` / `# FDR: NoCorrection` line of the exported enrichment CSV.
+   The active method is recorded in the dot plot's colorbar title (`-log10(FDR (BH))` / `-log10(FDR (BY))` / `-log10(p-value)` for `No correction`, the wrapper drops because the axis values ARE raw p, not q) and in the leading `# FDR: BH` / `# FDR: BY` / `# FDR: NoCorrection` line of the exported enrichment CSV.
    The CSV also carries additional self-documenting comment lines recording the thresholds that run used: `# MinEntrySize: N` (the pre-FDR entry-size filter) and, in Module mode, `# MinGroupOverlap: N` (the Group-overlap threshold).
    The dot plot itself also carries a four-line plain-language annotation block below the X axis so reviewers can reconstruct the FDR family from the figure alone:
 
@@ -676,47 +670,44 @@ The pipeline is:
 
    (the last line reads `… Benjamini–Hochberg (BH)`, or `raw p-value (no FDR correction)`, when those methods are active).
    The `N` / `K` / `m` symbols are deliberately spelled out rather than abbreviated; the tested count `<m>` is the number of entries that reached BH/BY and is the divisor each raw p-value was multiplied by.
-   **Everything in this paragraph about `m` and about filters running before or after FDR describes a run with BH or BY selected.** Under `No correction` no adjustment is performed, so there is no correction stage for a filter to precede or follow and no `m` denominator — the entry-size filter still drops small entries before the test, and the hit-count filter still hides rows, but neither is positioned relative to a correction that did not happen.
+   **Everything in this paragraph about `m` and about filters running before or after FDR describes a run with BH or BY selected.** Under `No correction` no adjustment is performed, so there is no correction stage for a filter to precede or follow and no `m` denominator. The entry-size filter still drops small entries before the test, and the hit-count filter still hides rows, but neither is positioned relative to a correction that did not happen.
    The `m` denominator equals the count of pathways that **survived the pre-FDR `min_entry_size` filter** (step 5) — i.e. `m = entries.len() − entries_dropped_by_min_entry_size`.
    The orchestrator-level Group filter (module mode) is applied at an even earlier layer; `m` reflects both filters by the time FDR runs.
 8. **Display filtering by hit count.** A user-controlled `min_hit_count` (default 1) hides pathways with fewer hits from the dot plot.
-   It never changes any p-value or q-value — with BH or BY selected, `m` was already computed over all surviving entries, so the adjusted values are honest regardless of this setting.
+   It never changes any p-value or q-value, with BH or BY selected, `m` was already computed over all surviving entries, so the adjusted values are honest regardless of this setting.
    Distinct from `min_entry_size` in step 5: that one drops entries **before the test** and so shrinks `m`; this one only hides rows from the figure.
    It is evaluated when the figure is drawn, so changing it discards the current figure and the next `Draw dot plot` renders one at the new value. No re-run is needed: the filter is consulted after the correction has been applied, so it cannot move `m` or change a single p-value.
    **Which of the two CSV downloads it reaches depends on the button.** `Download enrichment results (CSV)` writes the rows the figure is drawn from, so this filter and the significance threshold both apply to it; `Download all results (CSV)` writes every surviving entry and neither applies. `Top N` reaches neither file — it caps how many rows fit on an axis, which is not a property of a row.
 9. **Dot plot selection vs ordering — two different bases.** The dot plot chooses *which* entries to draw and *how* to stack them on the Y axis using **deliberately different criteria**:
    - **Selection (which entries appear) is by statistical significance.** Among entries passing `fdr < threshold` and the `min_hit_count` filter (steps 7–8), the plot keeps the **Top N with the lowest FDR** (`top_n`, default 20, tunable on the result screen).
-     The entries shown are therefore always the *most significant* ones — they are **never** selected by fold enrichment.
+     The entries shown are therefore always the *most significant* ones. They are **never** selected by fold enrichment.
    - **Vertical order (Y axis) is by effect size.** The kept entries are then arranged by **fold enrichment (observed/expected) descending**, so the entry with the largest fold enrichment sits at the **top** and the figure reads as a largest-on-top staircase down the X axis (which is itself fold enrichment).
      Ties break by FDR (more significant first), then entry ID.
      This matches the clusterProfiler convention of ordering the Y axis by the X-axis metric.
 
-   > **Note:** A *tiny* pathway can show huge fold enrichment off one lucky hit — so significance/FDR decides **what** appears, and fold enrichment only stacks the survivors.
+   > **Note:** A *tiny* pathway can show huge fold enrichment off one lucky hit, so significance/FDR decides **what** appears, and fold enrichment only stacks the survivors.
    > Read the dot plot accordingly: **color and vertical position = how sure you are** (significance); the **X-axis = how strong** the effect is (fold enrichment).
 
    The practical consequence: when more entries are significant than `top_n`, the ones omitted are the **least significant** (highest FDR) — *not* the smallest fold enrichment.
    Significance gates inclusion; effect size only arranges what got in.
-   **`Top N` reaches neither CSV.** `Download all results (CSV)` lists every surviving entry ordered by ascending FDR, with full (untruncated) names; `Download enrichment results (CSV)` lists the rows the figure is drawn from *before* this cap — so it is a superset of what the plot shows, by exactly the rows `Top N` cut.
-10. **Dot plot canvas height.** The exported plot height auto-fits to the number of rows actually shown — `clamp(min(top_n, displayed) × 0.3 + 1.0, 2.0, 40)` inches — and is **recomputed every time you draw**.
+   **`Top N` reaches neither CSV.** `Download all results (CSV)` lists every surviving entry ordered by ascending FDR, with full (untruncated) names; `Download enrichment results (CSV)` lists the rows the figure is drawn from *before* this cap, so it is a superset of what the plot shows, by exactly the rows `Top N` cut.
+10. **Dot plot canvas height.** The exported plot height auto-fits to the number of rows actually shown (`clamp(min(top_n, displayed) × 0.3 + 1.0, 2.0, 40)` inches) and is **recomputed every time you draw**.
     So if a run is non-significant at your initial FDR threshold and you loosen the threshold on the result screen and redraw, the canvas grows to fit the newly-revealed rows instead of cramming them into a short plot (which would truncate the Y-axis labels).
     Editing the **Height (in)** field turns it into a manual override that sticks until the next enrichment run/re-run resets the auto-fit.
 
-    **Text size is independent of entry count.** Labels, axis titles, the colorbar, and the Hits legend scale with the plot **width** (a fixed `Width (in) × DPI`), *not* the auto-fitting height — so a two-entry result renders its text at exactly the same size as a twenty-entry one.
+    **Text size is independent of entry count.** Labels, axis titles, the colorbar, and the Hits legend scale with the plot **width** (a fixed `Width (in) × DPI`), *not* the auto-fitting height, so a two-entry result renders its text at exactly the same size as a twenty-entry one.
     The `2.0`-inch lower bound on the height exists so the full-size legend always clears the canvas on those sparse results.
-11. **Exporting the dot plot (PNG size + DPI).** The `Width (in)` / `Height (in)` / `DPI` controls and the what-you-see-is-what-you-get guarantee work exactly as for the volcano — the shared `pixels = round(inches × DPI)`, `pHYs` physical-size, clamp, and same-render-as-preview mechanics are described in [7. Exporting the figure as PNG](#7-exporting-the-figure-as-png) under Stage 2.
+11. **Exporting the dot plot (PNG size + DPI).** The `Width (in)` / `Height (in)` / `DPI` controls and the what-you-see-is-what-you-get guarantee work exactly as for the volcano: the shared `pixels = round(inches × DPI)`, `pHYs` physical-size, clamp, and same-render-as-preview mechanics are described in [7. Exporting the figure as PNG](#7-exporting-the-figure-as-png) under Stage 2.
     The dot-plot-specific facts are:
     - Export defaults are `3.5 × 7.0 in @ 300 DPI` (the `7.0` is the auto-fit height for the default `top_n = 20`).
     - **Height** auto-fits to the displayed-row count and is recomputed on each draw unless you override it (item 10 above), while `Width` and `DPI` are plain values you set.
     - Fonts key off `Width × DPI`, so changing `Width` or `DPI` rescales the text; changing `Height` does not.
 
-    The preview and the display filters behave exactly as Stage 2's volcano does, and for the same reason: **changing `Top N`, the significance threshold or `Minimum hit count` blanks the preview** (the button reverts to `Draw dot plot`), so a figure on screen always matches the controls beside it. **Changing an export size does not** — so after adjusting `Width` / `Height` / `DPI`, click `Re-draw dot plot` to bring the preview in line with what a download will write.
+    The preview and the display filters behave exactly as Stage 2's volcano does, and for the same reason: **changing `Top N`, the significance threshold or `Minimum hit count` blanks the preview** (the button reverts to `Draw dot plot`), so a figure on screen always matches the controls beside it. **Changing an export size does not**, so after adjusting `Width` / `Height` / `DPI`, click `Re-draw dot plot` to bring the preview in line with what a download will write.
 
     `Download dot plot PNG` is unaffected either way: it re-renders from the current values rather than reading the preview, so it writes a correct figure even while the preview area is empty.
 
 ### Module mode
-
-Module mode tests against KEGG *modules* (small, functional reaction units) instead of whole pathways, and scopes by an organism **Group** rather than a single species.
-Everything downstream of catalog selection — PubChem mapping, the hypergeometric test, FDR, the dot plot — is identical to Pathway mode.
 
 Module mode runs the identical PubChem → KEGG conv → hypergeometric → user-selected-FDR pipeline as pathway mode, but **(a)** the entry catalog is the set of KEGG modules instead of per-species pathways, and **(b)** the user picks an **[organism Group](https://www.kegg.jp/kegg/tables/br08606.html)** instead of a single species.
 A module is included in the analysis when its KEGG `COMPLETE` block contains at least `min_group_overlap` (default `1`) organisms from the chosen Group; this is how the per-species framing maps onto the global module catalog.
@@ -736,7 +727,7 @@ A module is included in the analysis when its KEGG `COMPLETE` block contains at 
    Higher values tighten the filter — e.g. `min_group_overlap = 5` requires that at least 5 of the Group's organisms have the module fully assembled.
    The active threshold is set via the **Minimum group overlap** control on the Stage 3 setup screen and recorded in the exported CSV's `# MinGroupOverlap:` comment line, so any number you publish is reproducible from header + cache snapshot alone.
 
-3. **Universe and K — same as pathway mode.** The PubChem and KEGG-conv phases are mode-agnostic.
+3. **Universe and K, same as pathway mode.** The PubChem and KEGG-conv phases are mode-agnostic.
    `N` is still the measurable metabolome (DAM features that mapped through to a KEGG cpd); `K` is still the cpd set of DAM features matching the active direction filter (Up / Down / Both).
    Module mode does *not* substitute "all module compounds" or "all KEGG compounds" for `N`.
 
@@ -744,12 +735,12 @@ A module is included in the analysis when its KEGG `COMPLETE` block contains at 
    `m`, `M_m = |module.compounds ∩ universe|`, `k_m = |K ∩ module.compounds|`, and
    `p_value = 1 - HypergeometricCDF(k_m - 1; N, M_m, K)` with the same zero-input short-circuit.
 
-5. **User-selected FDR correction** — same options and defaults as pathway mode (BY default for shared-compound entries; BH available).
+5. **User-selected FDR correction**, same options and defaults as pathway mode (BY default for shared-compound entries; BH available).
    The `m` denominator equals the count of **retained modules** (after the Group filter), not the total ~573 modules in the KEGG catalog.
    This is the correct null: ORA is asking "among the modules that *could* apply to this organism Group, which are over-represented?" Including taxonomically-irrelevant modules in `m` would distort the FDR upward without contributing biological signal.
 
 6. **Empty-COMPOUND module counter.** Some KEGG modules (signature / reaction-only modules) have no `COMPOUND` block at all.
-   With `compounds = []` such a module has `M_m = 0`, so — exactly like any `M_p = 0` entry in pathway mode — it is dropped by the pre-FDR `min_entry_size` filter before any hypergeometric test: it never reaches the `p_value = 1.0` short-circuit and contributes no p-value to the FDR family.
+   With `compounds = []` such a module has `M_m = 0`, so, exactly like any `M_p = 0` entry in pathway mode, it is dropped by the pre-FDR `min_entry_size` filter before any hypergeometric test: it never reaches the `p_value = 1.0` short-circuit and contributes no p-value to the FDR family.
    A separate empty-COMPOUND counter still tallies them, which the bottom-panel **Data** tab surfaces as a `With compound list: <kept>  (−<empty> empty)` line so silent drops never erode trust.
    (Symmetrical pathway-mode reporting is on the roadmap.)
 
@@ -760,9 +751,9 @@ A module is included in the analysis when its KEGG `COMPLETE` block contains at 
   The Stage 3 setup screen shows an inline progress bar with an ETA derived from a rolling-average of per-module wall-clock time once the first 5 modules have completed.
   Subsequent runs use the cache and the `Run Enrichment` button enables in seconds.
 - **Group 1 has only two options** (Prokaryotes / Eukaryotes), which is biologically very coarse.
-  It exists for completeness — e.g. "any prokaryote" comparative studies — but most analyses will benefit from Level 2 (6 candidates) or Level 3 (tens of candidates) for finer scoping.
+  It exists for completeness ("any prokaryote" comparative studies, for example), but most analyses will benefit from Level 2 (6 candidates) or Level 3 (tens of candidates) for finer scoping.
 - **`min_group_overlap` is a research knob.** Default `1` (permissive ∃-overlap) is appropriate for exploratory work.
-  For papers, consider testing a higher threshold to ensure robustness — a module that only one of the hundreds of organisms in a Group (e.g.
+  For papers, consider testing a higher threshold to ensure robustness. A module that only one of the hundreds of organisms in a Group (e.g.
   "Animals") possesses is biologically marginal for that analytic frame even if it survives the default filter.
 - **Module CSV column names match pathway-mode CSV.** Both modes export the same header: `EntryID,EntryName,Hits,Total,Expected,EnrichmentRatio,PValue,FDR,HitKeggIDs`. The analysis mode never varies it; the only thing that does is the correction method, which omits the `FDR` column under `No correction`.
   (`Expected` and `EnrichmentRatio` are defined under the per-pathway hypergeometric step above: `EnrichmentRatio` is fold enrichment = observed / expected.)
@@ -771,11 +762,9 @@ A module is included in the analysis when its KEGG `COMPLETE` block contains at 
 
 ### Starting a new analysis round
 
-When you're done with one dataset and want to begin fresh, **Start a new analysis** wipes everything; the stepper's **Input** step, by contrast, keeps your settings and caches so you can re-run the *same* dataset.
-
-When you finish an enrichment run and want to analyze a different dataset — or re-run the whole pipeline from scratch — the Stage 3 **Enrichment Result** screen offers a **Start a new analysis** button on its own line below `[Download all results (CSV)]`, the last of the three downloads.
+When you finish an enrichment run and want to analyze a different dataset, or re-run the whole pipeline from scratch, the Stage 3 **Enrichment Result** screen offers a **Start a new analysis** button on its own line below `[Download all results (CSV)]`, the last of the three downloads.
 Clicking it opens a confirmation dialog warning that the current DAM / enrichment results and any un-downloaded plots or CSV will be lost.
-On **Start over** the app resets every parameter to its default, clears the loaded MS-DIAL `.txt` / metadata `.csv` and the in-memory KEGG data, and returns you to Stage 1 — *without* re-running the startup organism-list load.
+On **Start over** the app resets every parameter to its default, clears the loaded MS-DIAL `.txt` / metadata `.csv` and the in-memory KEGG data, and returns you to the **Choose your analysis** screen — *without* re-running the startup organism-list load.
 (The on-disk KEGG cache survives, so re-fetching the same species or modules afterward is a fast cache hit.)
 
 This is deliberately distinct from the stage stepper's **Input** step, which navigates back to Stage 1 while *preserving* every setting, loaded file, and fetched cache so you can keep iterating on the **same** dataset.
@@ -787,7 +776,7 @@ If you might want the current configuration again, save it via the Data tab's **
 ## KEGG coverage survey
 
 The coverage survey answers a different question from enrichment: not *"which pathways changed?"* but *"how much of each pathway did I actually see?"*
-It takes every metabolite you detected, maps it onto a KEGG pathway or module catalog, and reports — for each entry — how many of that entry's compounds you detected and what fraction that is.
+It takes every metabolite you detected, maps it onto a KEGG pathway or module catalog, and reports, for each entry, how many of that entry's compounds you detected and what fraction that is.
 
 **It performs no statistical test.** There is no *p*-value, no *q*-value, no FDR method, no enrichment ratio, and no significance threshold anywhere on this route.
 That is a deliberate design decision, not an omission, and it follows from the input: a hypergeometric test needs a *foreground* drawn from a *background*, and with no two-group comparison there is no defensible foreground to draw.
@@ -800,7 +789,7 @@ Reporting a *p*-value against an invented foreground would give a number that lo
 
 ### When to use it
 
-- You have a **single condition** — one tissue, one time point, one treatment — so there is nothing to compare against.
+- You have a **single condition** (one tissue, one time point, one treatment) so there is nothing to compare against.
 - You want to know **what your method covers** before designing a comparison: which pathways your platform can see at all.
 - You want a **quick survey** of a dataset before committing to the full DAM + enrichment route. The PubChem and KEGG caches are shared between the two routes, so running a coverage survey first makes a later enrichment run faster.
 
@@ -812,17 +801,17 @@ If you *do* have two groups of at least two samples each and want to know which 
 - **Group `.csv`** — **optional.** When supplied, its groups become selectable on the setup screen and you can exclude QC pools or solvent blanks. When absent, every sample column counts as data and no intensity value is read for filtering.
 
 The Stage 1 gate is correspondingly relaxed: the "at least 2 groups of at least 2 samples" checks that guard the *t*-test do not run on this route.
-A `.csv` that you picked but that **fails to parse** still blocks the run on both routes — that is a real loading problem, not an absent input.
+A `.csv` that you picked but that **fails to parse** still blocks the run on both routes. That is a real loading problem, not an absent input.
 
 ### Setup screen
 
 **Sample groups** (shown only when a `.csv` was loaded).
-One checkbox per group, `Unassigned` excluded — it is the absence of a group assignment, not a condition you chose to measure.
+One checkbox per group, `Unassigned` excluded. It is the absence of a group assignment, not a condition you chose to measure.
 Every group starts checked. Uncheck a QC pool or a solvent blank so its compounds do not enter the results.
 The software never guesses which groups those are from their names: group naming is yours, and a wrong guess would silently discard real data.
 
 **Detected in at least N % of a group's samples** (default `50 %`).
-A feature counts as *detected in a group* when it has a real measured intensity — present and above zero — in at least this fraction of that group's samples.
+A feature counts as *detected in a group* when it has a real measured intensity, present and above zero, in at least this fraction of that group's samples.
 A feature detected in **no** selected group is excluded.
 The test is applied per group and the results are OR-ed: a compound seen in any one selected condition is a compound the sample contains.
 
@@ -833,7 +822,7 @@ The test is applied per group and the results are OR-ed: a compound seen in any 
 
 **Deduplication** — the same checkbox and the same `RT tolerance (min)` field as the Stage 2 DAM setup screen, bound to the same settings.
 On this route deduplication **cannot change which compounds are found or any coverage number.**
-The reason is structural: it groups features by InChIKey and always returns at least one survivor per group, and the detected compound set is the KEGG image of the surviving InChIKey *set* — so the set is identical either way.
+The reason is structural: it groups features by InChIKey and always returns at least one survivor per group, and the detected compound set is the KEGG image of the surviving InChIKey *set*, so the set is identical either way.
 What it does change is **which metabolite names are listed for each compound in the exported CSV**, because a different representative feature is elected. The Data tab's `Dedupe:` line and its audit download are the other places its effect is visible.
 
 There is deliberately **no Drop Unknown features checkbox** on this screen. A feature without an InChIKey cannot reach the results under any setting, so offering a checkbox for it would present a non-choice as a choice.
@@ -851,7 +840,7 @@ There is deliberately **no Drop Unknown features checkbox** on this screen. A fe
   -> 1,974 InChIKeys -> 4,187 CIDs -> 391 KEGG compounds -> 264 in at least one entry
 ```
 
-The `in selected groups` term is omitted entirely when no `.csv` was supplied — the stage did not run, and repeating the raw count there would print a step that never happened.
+The `in selected groups` term is omitted entirely when no `.csv` was supplied: the stage did not run, and repeating the raw count there would print a step that never happened.
 
 **The results table** has five columns:
 
@@ -874,13 +863,13 @@ They are laid out in the order they are applied, so the screen reads top to bott
 - **Minimum entry size** — drops entries with fewer compounds *in KEGG* than this. Default `3`, **hard minimum `1`**.
 
     That floor is what makes a coverage-descending table meaningful.
-    About **20 %** of a typical species pathway catalog carries *no* KEGG compounds at all — including every "global and overview map" such as `hsa01100 Metabolic pathways` — and a further ~10 % carries one or two.
+    About **20 %** of a typical species pathway catalog carries *no* KEGG compounds at all, including every "global and overview map" such as `hsa01100 Metabolic pathways`, and a further ~10 % carries one or two.
     Without a floor, those entries would occupy the top of the table at `0 %`, `50 %`, or `100 %` on a single hit, ahead of every meaningful result.
-    The count of zero-compound entries is reported in grey beneath the control (`76 of 372 entries have no compounds in KEGG and are never shown.`) rather than silently swallowed.
+    The count of zero-compound entries is reported in gray beneath the control (`76 of 372 entries have no compounds in KEGG and are never shown.`) rather than silently swallowed.
 
 - **Minimum hit count** — drops entries with fewer detected compounds than this.
 - **Sort by** — `Coverage` (default) or `Hits`. Clicking the `Hits` or `Coverage` column header sets the same setting, so the two controls always agree; the active column is marked `(desc)`.
-- **Top N entries** — the display cap. It comes last because it caps whatever the sort left on top, rather than testing a row's own values.
+- **Top N entries**, the display cap. It comes last because it caps whatever the sort left on top, rather than testing a row's own values.
 
 The two thresholds are applied together, so which one is listed first cannot change the set of rows you see.
 The shared order exists so the controls, the counts reported in the **Data** tab, and the documented filter semantics cannot drift apart.
@@ -902,13 +891,13 @@ Its `Coverage data` block reports the whole chain, one line per stage, in the sa
 | `Displayed: <n> (Top N = <t>)` | rows the table actually shows, after sorting and truncation | same |
 
 Each number is less than or equal to the one above it, so the chain reads as a funnel.
-The last three lines are cumulative — an entry removed by the size floor is not counted again further down, even if its hit count would have cleared the next threshold.
+The last three lines are cumulative, an entry removed by the size floor is not counted again further down, even if its hit count would have cleared the next threshold.
 
 The first lines are fixed for a run and never move.
 The last three follow the filter controls and update **one frame after** you drag a control, because the Data tab is drawn before the controls are.
 The dot plot's annotation strip always agrees with them, because a figure cannot outlive the values it describes: moving any filter discards the plot, so the strip you are looking at was drawn at the values currently set.
 
-At the hard minimum of `1`, `With compound list:` and `Entry size >= 1:` are necessarily equal — an entry has at least one compound exactly when it has a compound list at all.
+At the hard minimum of `1`, `With compound list:` and `Entry size >= 1:` are necessarily equal, an entry has at least one compound exactly when it has a compound list at all.
 Both lines are still shown: a funnel stage that drops nothing is itself worth knowing, and a chain whose length changes with a setting is harder to read.
 
 There is no `Tested:` line anywhere on this route. "Tested" means "entered a hypergeometric test", and this route runs none.
@@ -924,15 +913,15 @@ The coverage dot plot inverts the enrichment plot's encoding:
 | Marker color | `-log10(FDR)` | **the quantity you did *not* sort by** |
 | Reference line | at `enrichment_ratio = 1` | **none** |
 
-**The X axis follows the Sort by setting.** With `Coverage` selected, X is coverage % and the marker colour is the hit count; with `Hits` selected, the two swap — X becomes the hit count and colour becomes coverage %.
+**The X axis follows the Sort by setting.** With `Coverage` selected, X is coverage % and the marker color is the hit count; with `Hits` selected, the two swap — X becomes the hit count and color becomes coverage %.
 The two channels always move together: the axis you sorted by is the axis the top-to-bottom row order reads off, so leaving the sort key off the X axis would give a chart whose ordering looks arbitrary.
-Marker size stays **entry size** in both, because it is the denominator behind both of the other quantities — the one fixed reference in the figure.
+Marker size stays **entry size** in both, because it is the denominator behind both of the other quantities, the one fixed reference in the figure.
 
 There is no reference line because there is no null expectation to mark.
-The rows drawn are exactly the rows the table shows, in the same order — both come from the same filter chain.
+The rows drawn are exactly the rows the table shows, in the same order, both come from the same filter chain.
 The annotation strip records the mode and target, the detected compound count, how many entries are displayed out of the whole catalog, the active filter values, a compact group record, and the line `Descriptive coverage — no statistical test`.
 
-**The plot is drawn on request and discarded when you move a filter.** The screen arrives showing `Click "Draw dot plot" to render the plot.` rather than a figure — a render takes seconds and the values a run happens to end on may not be the ones you want. Once drawn, changing `Minimum entry size`, `Minimum hit count`, `Sort by` or `Top N` — including by clicking a sortable column header — blanks it again, so the figure can never disagree with the table beside it, which updates as you drag. While a render is running the button is disabled and a `Rendering…` indicator sits beside it.
+**The plot is drawn on request and discarded when you move a filter.** The screen arrives showing `Click "Draw dot plot" to render the plot.` rather than a figure, a render takes seconds and the values a run happens to end on may not be the ones you want. Once drawn, changing `Minimum entry size`, `Minimum hit count`, `Sort by` or `Top N` — including by clicking a sortable column header — blanks it again, so the figure can never disagree with the table beside it, which updates as you drag. While a render is running the button is disabled and a `Rendering…` indicator sits beside it.
 `Download dot plot PNG` is unaffected by any of this: it re-renders from the current filter values rather than reading the preview, so it writes a correct figure even when the preview area is empty.
 
 ### CSV export
@@ -942,7 +931,7 @@ The annotation strip records the mode and target, the detected compound count, h
 1. A title line.
 2. `# No statistical test was performed. These are descriptive counts.`
 3. The run context: mode, target, detected compounds, entry counts, and the active filters.
-4. The feature-inclusion record: the selected group list, the full offered list, and the detection threshold — or `# Sample groups: none supplied; every feature included.`
+4. The feature-inclusion record: the selected group list, the full offered list, and the detection threshold, or `# Sample groups: none supplied; every feature included.`
 5. A note that `share` values do not sum to 1, because entries share compounds.
 
 The columns are `entry_id,entry_name,entry_size,hits,coverage,share,hit_compounds`.
@@ -950,7 +939,7 @@ The columns are `entry_id,entry_name,entry_size,hits,coverage,share,hit_compound
 `share` is `hits / detected_total` — "what fraction of my metabolome is in this entry", a different question from `coverage`'s "what fraction of this entry did I detect".
 It is exported but deliberately **not displayed**: on screen, two percentages that do not compare would invite comparing them.
 
-Each hit compound renders as `C00031 (D-Glucose)` — the KEGG ID followed by **your own MS-DIAL metabolite names**, not KEGG's compound names, so no extra lookup is introduced.
+Each hit compound renders as `C00031 (D-Glucose)`, the KEGG ID followed by **your own MS-DIAL metabolite names**, not KEGG's compound names, so no extra lookup is introduced.
 When one compound was reached from several features with different names, all of them are listed, sorted and joined by `" | "`.
 (A pipe, not a slash: lipid shorthand such as `PC(16:0/18:1)` contains slashes, so splitting on `/` would shred those names.)
 When no name is available, the bare ID is written with no parentheses.
@@ -959,7 +948,7 @@ When no name is available, the bare ID is written with no parentheses.
 
 ## Advanced topics & reference
 
-The remaining sections are reference material you can read as needed — the foundational missing-vs-zero concept, dual-mode input, caches, the settings file, bug reports, and citations.
+The remaining sections are reference material you can read as needed, the foundational missing-vs-zero concept, dual-mode input, caches, the settings file, bug reports, and citations.
 
 ## Missing values (`NaN`) vs true zeros (`0.0`)
 
@@ -967,14 +956,11 @@ A blank cell and a measured zero are *not* the same thing, and metabolopan refus
 A blank means "we never measured this" (`NaN`, the internal *missing* marker); a `0.0` means "we measured it and it was genuinely zero."
 This section spells out exactly how each is treated, because the common shortcut of imputing blanks to `0` silently biases every statistic downstream.
 
-metabolopan draws a hard line between **a measurement that is absent** and **a measurement that is genuinely zero**, and that distinction is carried — deliberately and consistently — through every downstream step.
-Imputing missing cells to `0` before analysis (a common habit) would silently bias the statistics, so this section spells out exactly what each value means and how it is treated.
-
-**The rule, fixed at load time.** When an MS-DIAL `.txt` is parsed, an intensity cell that is empty / whitespace / `"null"` / `"NA"` (case-insensitive) or otherwise unparseable becomes `f64::NAN` — the internal marker for *missing / not measured / not computable*.
+**The rule, fixed at load time.** When an MS-DIAL `.txt` is parsed, an intensity cell that is empty / whitespace / `"null"` / `"NA"` (case-insensitive) or otherwise unparseable becomes `f64::NAN`, the internal marker for *missing / not measured / not computable*.
 A cell that literally reads `0` parses to a real `0.0`.
 Numeric metadata columns follow the same split: an empty cell is *absent* (`None`), while a written `0` is a real zero (and, because it would be a normalization divisor, is then rejected as a data-entry error rather than silently treated as absence).
 
-**The core behavior: `NaN` is skipped, `0.0` participates.** Every per-feature reduction in DAM — group mean, median, variance, IQR, and distinct-value count — first *drops* `NaN` values and computes on whatever remains.
+**The core behavior: `NaN` is skipped, `0.0` participates.** Every per-feature reduction in DAM (group mean, median, variance, IQR, and distinct-value count) first *drops* `NaN` values and computes on whatever remains.
 A `0.0`, being a real observation, enters the arithmetic in full.
 On the same three replicates this is the difference:
 
@@ -1012,16 +998,13 @@ A missing replicate behaves as though that sample did not exist; a zero replicat
 This is the only place the two are intentionally merged.
 
 **Bottom line.** Leave a genuinely-missing measurement *empty* and write a measured zero as `0`; the software keeps them apart from input to export.
-If you pre-impute missing cells to `0`, you will inflate sample sizes, drag group means toward zero, distort variances and fold changes, and bias the differential-accumulation calls — so let metabolopan carry missing values as `NaN` and do that bookkeeping for you.
+If you pre-impute missing cells to `0`, you will inflate sample sizes, drag group means toward zero, distort variances and fold changes, and bias the differential-accumulation calls, so let metabolopan carry missing values as `NaN` and do that bookkeeping for you.
 
 ## Dual-mode (positive + negative ionization) input
 
 If you ran the same samples through both positive and negative ionization, you have two MS-DIAL `.txt` files describing one experiment.
-Dual-mode loads both at once and fuses their enrichment signal under a deliberately conservative union rule — a compound only counts as "up" if no mode disagrees.
+Dual-mode loads both at once and fuses their enrichment signal under a deliberately conservative union rule, a compound only counts as "up" if no mode disagrees.
 A `biosample` column in your metadata is what tells the tool that `CTR_positive_01` and `CTR_negative_01` are the same biological replicate.
-
-Metabolomics experiments often run the same biological samples through both positive and negative ionization modes, producing two MS-DIAL `.txt` exports per study.
-The app supports loading both files at once and combining their enrichment signal under a conservative union rule.
 
 ### When to use dual-mode
 
@@ -1039,7 +1022,7 @@ Single-mode (one `.txt`) remains the default.
 A dual-mode run with a CSV that has no `biosample` column is blocked at Stage 1 with a specific error — add the `biosample` column or remove the second `.txt` to proceed.
 
 > **Single-mode does NOT need a `biosample` column.** It is only required when a second `.txt` is loaded. With one `.txt`, the plain `sample,group` form is enough
-> (a `biosample` column, if present, is recognized by name and excluded from the Stage 2 metadata-normalization radio — it is not offered as a numeric metadata column).
+> (a `biosample` column, if present, is recognized by name and excluded from the Stage 2 metadata-normalization radio. It is not offered as a numeric metadata column).
 
 ### Unbalanced or missing-mode samples
 
@@ -1054,8 +1037,8 @@ Each surfaces a specific error:
 **The `POS` / `NEG` labels in these three messages follow each slot, not a fixed order.** Each label is whatever mode that slot is actually set to, read in slot order (slot 1 then slot 2).
 The examples above assume the common slot 1 = Positive, slot 2 = Negative layout that Stage 1 auto-fills; put Negative in slot 1 and the same errors read with the modes swapped (e.g. `… N sample(s) in NEG but M in POS …`).
 
-**Effect of a missing-mode sample that passes the gate.** The two modes run DAM independently on their own sample columns — a biosample absent from NEG simply isn't iterated in the NEG run, so that mode has fewer replicates for its group and correspondingly lower statistical power; it does not invalidate the run.
-At Stage 3 the union is built at the **compound** level (per the conflict-only-strict rule below), not the sample level, so a biosample missing one mode just lets that mode contribute `Absent` for the affected compounds — the integrated K is unaffected.
+**Effect of a missing-mode sample that passes the gate.** The two modes run DAM independently on their own sample columns, a biosample absent from NEG simply isn't iterated in the NEG run, so that mode has fewer replicates for its group and correspondingly lower statistical power; it does not invalidate the run.
+At Stage 3 the union is built at the **compound** level (per the conflict-only-strict rule below), not the sample level, so a biosample missing one mode just lets that mode contribute `Absent` for the affected compounds, the integrated K is unaffected.
 
 **Recommendation.** For the cleanest dual-mode result, acquire every biosample in both polarities.
 If some samples are genuinely single-polarity, either keep them only in the mode where they exist (as long as each group still has ≥ 2 per mode), or drop the unbalanced side.
@@ -1072,7 +1055,7 @@ The adduct-disagreement hint ("yellow: Adduct column says X but you selected Y")
 
 ### Stage 2 (shared setup, per-mode DAM)
 
-Stage 2 uses a single setup screen — one normalization method, one comparison (numerator vs denominator), one DAM method, one FDR method — applied to **both** modes.
+Stage 2 uses a single setup screen, applying one normalization method, one comparison (numerator vs denominator), one DAM method, and one FDR method to **both** modes.
 Inside the orchestrator, two tokio workers run `run_dam` per mode in parallel; the running screen shows two stacked progress bars.
 If either mode fails, the error message names which mode (`POS: ...` or `NEG: ...`).
 
@@ -1103,7 +1086,7 @@ Stage 3 builds the universe N and foreground K from BOTH modes' DAM features und
 `Down` is symmetric.
 `Both` requires at least one Up or Down signal AND no Conflict AND not (Up in one mode AND Down in another).
 
-**Single-mode applies the same conflict rule.** A single-mode run is the degenerate one-mode case of this rule: a compound reached by both an Up feature and a Down feature within the single mode — two distinct InChIKeys that map to the **same** KEGG compound, one Up + one Down — aggregates to `Conflict` and is **excluded** from K, the same conservative choice as dual-mode.
+**Single-mode applies the same conflict rule.** A single-mode run is the degenerate one-mode case of this rule: a compound reached by both an Up feature and a Down feature within the single mode (two distinct InChIKeys that map to the **same** KEGG compound, one Up + one Down) aggregates to `Conflict` and is **excluded** from K, the same conservative choice as dual-mode.
 (Before this, single-mode kept such ambiguous compounds in K.) The conflict-excluded count appears in the Stage 3 INFO log.
 Single-mode K is unchanged for any dataset that has no such intra-mode conflict.
 
@@ -1137,7 +1120,7 @@ Using the `data/double-mode/` fixtures (8 Treatment + 8 Control + 3 QC biosample
 
 ## Caches and provenance
 
-To avoid re-downloading the same KEGG / PubChem data every session, the app keeps local cache files and never expires them — a cached entry is returned regardless of age, and you decide when to refresh.
+To avoid re-downloading the same KEGG / PubChem data every session, the app keeps local cache files and never expires them, a cached entry is returned regardless of age, and you decide when to refresh.
 The **Data** tab shows each cache's fetch dates neutrally so you can judge freshness yourself.
 
 **Files on disk** (in the KEGG cache directory):
@@ -1161,30 +1144,27 @@ The Stage 3 result screen surfaces this as a time span (`PubChem CIDs fetched da
 
 Cache freshness — **no staleness thresholds**.
 None of the KEGG caches expire: a cached entry is always returned regardless of age, and the app never silently re-fetches on its own.
-Instead the bottom-panel **Data** tab's `Cache data` block — which appears on every screen from Stage 3 setup onward, on both routes: Enrichment Analysis, the running screen, Enrichment Result, and the coverage route's Setup and Coverage screens — surfaces fetch times neutrally and leaves the refresh decision to you:
+Instead the bottom-panel **Data** tab's `Cache data` block (which appears on every screen from Stage 3 setup onward, on both routes: Enrichment Analysis, the running screen, Enrichment Result, and the coverage route's Setup and Coverage screens) surfaces fetch times neutrally and leaves the refresh decision to you:
 
 - Per-species pathway cache: shows `KEGG pathways (<code>): <ts>` (wherever the block appears and a species catalog is loaded); re-fetch via the `Refresh KEGG pathway cache` button.
 - Module entries: shows a `KEGG modules fetched date: <oldest> -> <newest>` span; the warm-fetch decision is cache-key membership.
   Re-fetch via the `Refresh KEGG module cache` button.
 - On the Enrichment **Result** screen the catalog-refresh button (module / pathway) navigates back to the Setup screen to run the re-fetch there (where its progress strip lives); the PubChem / KEGG-conv refreshes run in place via a confirmation modal.
 - Organism list (`organisms.json`): loaded once at startup (cache-first: an on-disk copy always wins regardless of age), refreshable in-app via the `Refresh KEGG organism list` button in the Data tab's `Cache data` block.
-  That button re-fetches the roster in place without a relaunch, from KEGG's BRITE hierarchy (`GET /get/br:br08601`) — the `/list/organism` endpoint it used to call was retired by KEGG; alternatively, delete `organisms.json` from the cache directory and relaunch to force a cold fetch.
+  That button re-fetches the roster in place without a relaunch, from KEGG's BRITE hierarchy (`GET /get/br:br08601`), the `/list/organism` endpoint it used to call was retired by KEGG; alternatively, delete `organisms.json` from the cache directory and relaunch to force a cold fetch.
   (The `Refresh KEGG pathway cache` button is separate — it refetches only the selected species' pathway→compound map, not the organism roster.)
 
 ## Saving and loading session settings (reproducibility)
 
-You normally never touch this file by hand — the app writes it for you when you click **[Save settings…]**, and reads it back on **[Load settings…]**.
+You normally never touch this file by hand. The app writes it for you when you click **[Save settings…]** in the Data tab, and reads it back on **[Load settings…]** beside it.
 It exists so a run is *reproducible*: hand the same snapshot plus the same inputs to a collaborator (or your future self) and the analysis comes out bit-equal.
 The format is documented here only for those who want to script it or inspect what was captured.
-
-Two buttons in the Data tab — **[Save settings…]** and **[Load settings…]** — let you snapshot every Stage 1–3 parameter to a JSON file and re-apply it later.
-The intent is reproducibility: if you (or a collaborator) re-run with the same snapshot and the same inputs, the analysis is bit-equal.
 
 ### What's in the file
 
 A pretty-printed JSON containing:
 
-- `schema_version` (currently `3` — the on-disk schema baseline), `app_version`, `saved_at` (UTC), a `user_note` field initially `""` — you can open the file in any text editor and fill it in.
+- `schema_version` (currently `3`, the on-disk schema baseline), `app_version`, `saved_at` (UTC), a `user_note` field initially `""`. You can open the file in any text editor and fill it in.
 - `input_files` — for each MS-DIAL `.txt` and the metadata `.csv` you had loaded at save time: the file's basename + its SHA-256.
   **Hashes only — your raw data is never included.** This lets a future Load detect when your inputs have drifted from what the snapshot was made against.
 - `settings` — every parameter from Stage 1 through Stage 3 (analysis mode, species / organism group, comparison groups, DAM method, normalization, FDR method, thresholds, export sizes, enrichment direction / FDR / Top N).
@@ -1246,7 +1226,7 @@ The example shows a filled-in session, so most values are the ones a real run wo
 }
 ```
 
-Envelope: `schema_version` must be `3` (other values are rejected on Load); `app_version` / `saved_at` are informational; `user_note` is free text you may hand-edit; each `input_files` entry is `role` (`positive` / `negative` / `metadata`) + file basename + SHA-256 (hashes only — never raw data).
+Envelope: `schema_version` must be `3` (other values are rejected on Load); `app_version` / `saved_at` are informational; `user_note` is free text you may hand-edit; each `input_files` entry is `role` (`positive` / `negative` / `metadata`) + file basename + SHA-256 (hashes only, never raw data).
 
 > **Note:** A few keys use an *object-variant* syntax — instead of a bare string, the value is a small object carrying data, e.g. `{"Metadata":{"column":"<name>"}}` for metadata normalization or `{"Group":"<name>"}` for a per-group PQN reference. The outer key (`Metadata`, `Group`) names the variant; the inner object holds its parameter.
 
@@ -1292,7 +1272,7 @@ Every key under `settings`. The **UI control** column maps each key to the scree
 | `coverage_min_entry_size` | `1`–`200` | `3` | **Minimum entry size** control (Coverage result) | Coverage route: drop entries with fewer compounds in KEGG than this. Hard minimum `1`, so a zero-compound entry can never be shown. Distinct from `min_entry_size`, which is the enrichment route's pre-FDR filter. |
 | `coverage_sort_key` | `"Coverage"` \| `"Hits"` \| `"EntrySize"` \| `"EntryId"` | `"Coverage"` | **Sort by** selector (Coverage result) | Coverage route: the results-table sort key, shared with the clickable column headers. The app offers `Coverage` and `Hits`; the other two load and sort correctly but are not currently selectable in the UI. |
 
-**Ranges are the in-app control limits, not hard file limits.** A hand-edited value outside a listed range loads as written and is only clamped the next time you touch that control in the app; export sizes are additionally clamped so `round(inches × DPI)` stays within `64–20000` px per axis at render. How strictly the file is checked depends on where a key sits. At the **envelope** level — `schema_version`, `app_version`, `saved_at`, `user_note`, `input_files`, `settings` — a misspelled or extra key is rejected on Load, as is any `schema_version` other than `3`. Inside `settings` an unrecognized key is **silently ignored**, so a typo there does not fail the load; it simply has no effect. A *missing* key inside `settings` is rejected for most of the fields above, and falls back to the default for the eight that list one (`log_transform`, `min_entry_size`, `dedup_rt_tolerance_min`, `analysis_route`, `coverage_min_entry_size`, `coverage_sort_key`, `coverage_selected_groups`, `coverage_presence_threshold`). The five input-dependent fields above are the only ones reset on Load.
+**Ranges are the in-app control limits, not hard file limits.** A hand-edited value outside a listed range loads as written and is only clamped the next time you touch that control in the app; export sizes are additionally clamped so `round(inches × DPI)` stays within `64–20000` px per axis at render. How strictly the file is checked depends on where a key sits. At the **envelope** level (`schema_version`, `app_version`, `saved_at`, `user_note`, `input_files`, `settings`) a misspelled or extra key is rejected on Load, as is any `schema_version` other than `3`. Inside `settings` an unrecognized key is **silently ignored**, so a typo there does not fail the load; it simply has no effect. A *missing* key inside `settings` is rejected for most of the fields above, and falls back to the default for the eight that list one (`log_transform`, `min_entry_size`, `dedup_rt_tolerance_min`, `analysis_route`, `coverage_min_entry_size`, `coverage_sort_key`, `coverage_selected_groups`, `coverage_presence_threshold`). The five input-dependent fields above are the only ones reset on Load.
 
 ### When is each button available
 
@@ -1337,10 +1317,9 @@ Any snapshot carrying a `schema_version` other than `3` is rejected — re-save 
 
 ## Reporting bugs
 
-If something looks wrong — an error, a hang, results that don't add up — the fastest way to get help is to click **[Download bug report…]** in the log pane and attach the resulting zip to a GitHub issue or email.
+If something looks wrong (an error, a hang, results that don't add up) the fastest way to get help is to click **[Download bug report…]** in the log pane (bottom of the window, next to the **Clear** button) and attach the resulting zip to a GitHub issue or email.
 The bundle is privacy-bounded by design: it carries logs and settings, never your raw data, and scrubs your home directory from any paths.
 
-If something looks wrong — an unexpected error, a Stage that hangs, results that don't match expectations — the easiest way to get help is to click **[Download bug report…]** in the log pane (bottom of the window, next to the **Clear** button).
 A confirmation dialog will list the files the resulting zip will contain, then a save-file dialog lets you pick where to put it.
 
 The zip contains exactly eight files:
@@ -1352,7 +1331,7 @@ The zip contains exactly eight files:
   These two are per-variable files (filename = variable name) so no one can mistake the bundle for a full environment dump — only these two named vars are ever included.
 - `logs.txt` — every INFO / WARN / ERROR event from this session (HTTP and other low-level dependency chatter is filtered out so the file stays readable).
 - `app_state.txt` — which stage you were on and your current settings (analysis mode, species/group, comparison groups, FDR method, thresholds, etc.).
-- `input_summary.txt` — the paths and counts of your loaded MS-DIAL files and metadata CSV (paths only — no cell values).
+- `input_summary.txt` — the paths and counts of your loaded MS-DIAL files and metadata CSV (paths only, no cell values).
 - `cache_summary.txt` — sizes and freshness timestamps of the KEGG / PubChem cache files (no cached content).
 
 **Privacy:**
@@ -1360,7 +1339,7 @@ The zip contains exactly eight files:
 - The bundle never includes your raw MS-DIAL `.txt` input, your metadata CSV, or any prior CSV/PNG exports.
 - Absolute paths inside the bundle have your home directory replaced with `~` (e.g.
   `/Users/alice/Projects/study/POS.txt` becomes `~/Projects/study/POS.txt`) so the bundle does not leak your account/username when shared publicly (GitHub issues, email).
-- Only `RUST_LOG` and `KEGG_CACHE_DIR` env vars are surfaced — never the full process environment.
+- Only `RUST_LOG` and `KEGG_CACHE_DIR` env vars are surfaced, never the full process environment.
 
 You can safely attach the zip to a GitHub issue or email it without worrying about leaking your experimental data or your machine identity.
 

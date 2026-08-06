@@ -2,9 +2,9 @@
 
 軟體版本：metabolopan v1.6.0
 
-更新日期：2026-08-05
+更新日期：2026-08-06
 
-本手冊記錄本軟體在數值上的運作方式——演算法、預設門檻值、以及與常見替代做法的差異——讓你能在論文或報告中為它產生的每一個數字辯護。
+本手冊記錄本軟體在數值上的運作方式（演算法、預設門檻值、以及與常見替代做法的差異），讓你能在論文或報告中說明它產生的每一個數字是怎麼來的。
 在發表任何依賴本軟體的結果之前，請先閱讀一次本手冊。
 
 本管線的運作分為三個階段。
@@ -12,7 +12,7 @@
 <a id="how-to-read-this-manual"></a>
 ## 如何閱讀本手冊（How to read this manual）
 
-本手冊採用**雙軌**書寫，因此無論你只是想跑一次分析，或是需要為論文中的每一個數字辯護，它都行得通。
+本手冊分**兩層**寫，因此無論你只是想跑一次分析，或是需要交代論文中每一個數字的來由，它都行得通。
 
 - **平實語言導讀**以 2–4 句話為每個章節開頭：說明該步驟做什麼、你如何點擊操作、你會挑選什麼、又會得到什麼回饋。只要快速瀏覽這些導讀，你就能跑完整條管線。
 - **更深入的技術區塊**（公式、邊角情況，以及任何標示 `> **給開發者：**` 的內容）位於其下方。初次閱讀時你可以跳過它們，等到審稿人問「為什麼是這個數字？」時再回頭查看。
@@ -28,7 +28,7 @@
 **四條閱讀路徑：**
 
 - **（a）只想跑一次分析。** 閱讀 [第一階段 — 輸入解析](#stage-1--input-parsing)、[第二階段 — 正規化、去除重複與 DAM](#stage-2--normalization-deduplication--dam)、[第三階段 — 富集分析（過度代表分析）](#stage-3--enrichment-over-representation-analysis) 的導讀，以及 [計算範例](#worked-example)。
-- **（b）為論文中的數字辯護。** 閱讀方法子章節（[DAM](#differentially-accumulated-metabolites-dam) 檢定方法 3a–3c）、[多重檢定校正（FDR）](#4-multiple-testing-correction)、[缺失值 vs 真正的零](#missing-values-nan-vs-true-zeros-00)，以及 [主要參考文獻](#key-references)。
+- **（b）交代論文中的數字怎麼來的。** 閱讀方法子章節（[DAM](#differentially-accumulated-metabolites-dam) 檢定方法 3a–3c）、[多重檢定校正（FDR）](#4-multiple-testing-correction)、[缺失值 vs 真正的零](#missing-values-nan-vs-true-zeros-00)，以及 [主要參考文獻](#key-references)。
 - **（c）再現性／撰寫指令稿。** 閱讀 [儲存與載入工作階段設定（再現性）](#saving-and-loading-session-settings-reproducibility) 與 [快取與來源](#caches-and-provenance)。
 - **（d）不做比較，只想調查你偵測到了什麼。** 閱讀 [KEGG 覆蓋率調查](#kegg-coverage-survey)。該路線不執行任何統計檢定，因此上述第二／第三階段的方法學大多不適用於它。
 
@@ -176,7 +176,7 @@
 <a id="stage-1--input-parsing"></a>
 ## 第一階段 — 輸入解析（Stage 1 — Input parsing）
 
-**平實說明：** 第一階段是你載入資料的地方。你把 MS-DIAL 匯出檔與一份小巧的群組對應試算表拖進來，metabolopan 會把它們解析成一張工作表格——並小心地讓*缺失*儲存格與*真正的零*保持區分。當兩個檔案都乾淨地解析、且你的群組有效時，**Continue to DAM** 按鈕就會亮起，你便進入第二階段。
+**平實說明：** 第一階段是你載入資料的地方。你把 MS-DIAL 匯出檔與一份小巧的群組對應試算表拖進來，metabolopan 會把它們解析成一張工作表格，並小心地讓*缺失*儲存格與*真正的零*保持區分。當兩個檔案都乾淨地解析、且你的群組有效時，**Continue to DAM** 按鈕就會亮起，你便進入第二階段。
 
 metabolopan 以兩種模式之一接收輸入，依你載入的 MS-DIAL `.txt` 檔數量決定。
 **單模式**是一個 MS-DIAL `.txt` + 一個群組對應 `.csv`；**雙模式**是兩個 MS-DIAL `.txt` 檔（一個正離子、一個負離子）+ 一個含 `biosample` 欄的群組對應 `.csv`。
@@ -186,11 +186,11 @@ metabolopan 以兩種模式之一接收輸入，依你載入的 MS-DIAL `.txt` �
 ### MS-DIAL `.txt`
 
 - 前 4 列是 MS-DIAL 的中繼資料（`Class`、`File type`、`Injection order`、`Batch ID`）；第 5 列是欄位標題。
-  當某一欄的 `File type` 值非空白、且不是 `"NA"`、也不是字面上的列標籤 `"File type"` 時，該欄會被視為真正的樣本進樣——並保留在 `sample_cols` 中。
+  當某一欄的 `File type` 值非空白、且不是 `"NA"`、也不是字面上的列標籤 `"File type"` 時，該欄會被視為真正的樣本進樣，並保留在 `sample_cols` 中。
   這**包含** `Sample` 與 `Blank`（製程空白）；只排除 MS-DIAL 各群組的 `Average` / `Stdev` 彙總欄（標記為 `NA`）。
 - **版本相容性。** 同時支援 MS-DIAL 4 與 MS-DIAL 5 的 Alignment 匯出檔。
-  欄位是依名稱查找，因此 MS-DIAL 5 重新排序／改名的評分欄（它把 `Dot product` 拆成 `Simple` / `Weighted dot product`）也能以相同方式解析；metabolopan 只使用兩個版本共有的欄位。
-- **缺失值。** 空白／僅含空白字元／`"null"`／`"NA"`／無法解析的強度儲存格會變成 `f64::NAN`——這是內部的「缺失」標記。
+  欄位是依名稱查找，因此 MS-DIAL 5 重新排序／改名的評分欄（它把 `Dot product` 拆成 `Simple` / `Weighted dot product`），也能以相同方式解析；metabolopan 只使用兩個版本共有的欄位。
+- **缺失值。** 空白／僅含空白字元／`"null"`／`"NA"`／無法解析的強度儲存格會變成 `f64::NAN`。這是內部的「缺失」標記。
   明確寫成 `"0"` 的則維持 `0.0`。
   這可避免下游統計把缺測值與真正的零混為一談。
   詳見 [缺失值 vs 真正的零](#missing-values-nan-vs-true-zeros-00)。
@@ -224,15 +224,15 @@ metabolopan 以兩種模式之一接收輸入，依你載入的 MS-DIAL `.txt` �
 <a id="stage-2--normalization-deduplication--dam"></a>
 ## 第二階段 — 正規化、去除重複與 DAM（Stage 2 — Normalization, Deduplication & DAM）
 
-**平實說明：** 以下全部都是單一個第二階段設定畫面上的選項；它們合起來設定一次 DAM 執行。
+**平實說明：** 以下全部都是同一個第二階段設定畫面上的選項；它們合起來設定一次 DAM 執行。
 下方按照最重要的順序呈現——先是決定哪些代謝物有差異的核心統計檢定（DAM），接著是清理重複化合物列的去除重複，最後是在這一切之前校正技術性負載的選用樣本正規化。
 
 <a id="differentially-accumulated-metabolites-dam"></a>
 ### 差異累積代謝物（DAM, Differentially Accumulated Metabolites）
 
-**平實說明：** DAM 是第二階段的核心——它會在你所選的兩群組（分子組 vs 分母組）之間，逐一檢定每一個代謝物，告訴你哪些真的有差異。你挑一種統計方法（**Student**、**Welch** 或 **Brunner–Munzel**）、挑一種 FDR 校正（**BH** 或 **BY**）、點擊 **Start DAM**，就會得到一張火山圖，外加一張可匯出的「上調／下調／不顯著」特徵表格。
+**平實說明：** DAM 是第二階段的核心。它會在你所選的兩群組（分子組 vs 分母組）之間，逐一檢定每一個代謝物，告訴你哪些真的有差異。你挑一種統計方法（**Student**、**Welch** 或 **Brunner–Munzel**）、挑一種 FDR 校正（**BH** 或 **BY**）、點擊 **Start DAM**，就會得到一張火山圖，外加一張可匯出的「上調／下調／不顯著」特徵表格。
 
-每個特徵都會在使用者所選的分子組與分母組之間被獨立檢定。
+每個特徵都會在你所選的分子組與分母組之間被獨立檢定。
 本軟體提供三種統計方法；它們都遵循相同的整體流程。
 
 **我該挑哪種檢定？**（「離散程度」／變異數 = 一個群組的值有多分散。）
@@ -247,7 +247,7 @@ metabolopan 以兩種模式之一接收輸入，依你載入的 MS-DIAL `.txt` �
 #### 1. 未知特徵過濾（預設開啟）（Unknown-feature filter）
 
 `InChIKey` 為 `null` 的特徵（MS-DIAL 的「Unknown」鑑定）會在任何統計工作之前被捨棄，這樣 FDR 校正的 `m` 就不會納入那些終究無法進入第三階段 ORA 的代謝物。
-若使用者特別想對未鑑定特徵取得統計結果（例如標記出供後續鑑定的候選），可在第二階段設定中取消勾選 **Drop unknown features (no InChIKey)** 核取方塊。
+若你特別想對未鑑定特徵取得統計結果（例如標記出供後續鑑定的候選），可在第二階段設定中取消勾選 **Drop unknown features (no InChIKey)** 核取方塊。
 
 <a id="2-per-feature-pre-filter"></a>
 #### 2. 逐特徵前置過濾（Per-feature pre-filter）
@@ -259,7 +259,7 @@ metabolopan 以兩種模式之一接收輸入，依你載入的 MS-DIAL `.txt` �
 #### 3a. 方法：Student t 檢定（等變異）[參數法，**預設**]（Student's t-test）
 
 古典（同質變異數）形式。
-當各組樣本數相近、且兩組離散程度大致相當時最適用——在這些假設下，它比 Welch 略具檢定力。
+當各組樣本數相近、且兩組離散程度大致相當時最適用，在這些假設下，它比 Welch 略具檢定力。
 **新工作階段的預設值**：搭配 **Log transformation**（arcsinh）步驟（同樣預設開啟），它是本專案的標準起點。
 若你懷疑變異數不等，請改用 Welch；若分布偏斜到連轉換都不足以應付，請改用 Brunner–Munzel。
 
@@ -272,7 +272,7 @@ metabolopan 以兩種模式之一接收輸入，依你載入的 MS-DIAL `.txt` �
     - `log_transform=false`（原始尺度）：`FC = mean(numerator) / mean(denominator)`，`log2(FC) = log2(FC)`。
     - `log_transform=true`（arcsinh 尺度）：`log2(FC) = (mean(arcsinh(num)) − mean(arcsinh(den))) / ln(2)`，且 `FC = 2^log2(FC)`。
       在相同資料上，`log2(FC)` 的正負號**保證**與 *t* 統計量的正負號一致。
-      對大的 *x*，arcsinh(x) ≈ ln(2x)，因此 `log2(FC)` 會漸近於 `log2(GM(num) / GM(den))`——即 limma / DESeq2 的古典對數倍數變化。
+      對大的 *x*，arcsinh(x) ≈ ln(2x)，因此 `log2(FC)` 會漸近於 `log2(GM(num) / GM(den))`，即 limma / DESeq2 的古典對數倍數變化。
       對小的 *x*（接近 0），arcsinh(x) ≈ x，因此 `log2(FC)` 會退化為縮放後的算術平均差，而非真正的比值。
       這是變異數穩定化已被記載的結果；等價的對數 FC 詮釋只在大 *x* 漸近區（arcsinh 與 ln 對齊處）成立。
       CSV 匯出會經由 `fc_basis` 欄（`mean` / `median` / `arcsinh-mean`）標示目前作用的基準，讓下游使用者無需重跑流程即可辨識某個數字位於哪種尺度上。
@@ -290,21 +290,21 @@ metabolopan 以兩種模式之一接收輸入，依你載入的 MS-DIAL `.txt` �
   在 `log_transform=false` 之下，`FC` 是古典的原始平均比值。
 
 > **⚠ 警告：Welch / Student 的邊角情況 — 某組變異數為零。** 當某一組的每個重複樣本都是相同的值時（例如某特徵在某條件的所有樣本中都低於偵測極限、而被填補成一個常數），Welch–Satterthwaite 自由度會塌縮為*另一*組的 `n − 1`。
-> 對 `n = 2` 而言，這會得到 `df = 1`，使 *t* 分布極寬、p 值極為保守——即使兩群組肉眼可見地分得很開時也是如此。
+> 對 `n = 2` 而言，這會得到 `df = 1`，使 *t* 分布極寬、p 值極為保守，即使兩群組肉眼可見地分得很開時也是如此。
 > 這是標準的數學行為（與 R 的 `t.test(var.equal=FALSE)` 和 SciPy 的 `ttest_ind(equal_var=False)` 完全一致），但對代謝體學而言，受影響的特徵往往對應到你可能想保留的、真正的「在某條件存在、在另一條件缺失」訊號。
 
 `run_dam` 每次執行會發出一行 INFO 日誌，回報觸發此路徑的特徵數量（在你的工作階段日誌 `<data_dir>/metabolopan/logs/session_*.log` 中尋找 `zero_variance_features=N`，其中 `<data_dir>` 為 `dirs::data_dir()`——macOS `~/Library/Application Support`、Linux `~/.local/share`、Windows `%APPDATA%`）；當 N > 0 時，可考慮改用 Brunner–Munzel 方法重跑，它是以秩為基礎，會以不同方式處理這個邊角情況。
 
 > **給開發者：** 這個診斷計數器使用相對容差——變異數低於
-> `(max(|mean|, 1))² × 1e−20` 者即被標記——因此某組在浮點數雜訊範圍內為常數的特徵（例如在高強度尺度下對位元相等的正規化前輸入做算術，使得 `var ≈ ε² × c²` 非零、但自由度的病態行為仍以相同方式發作）也會計入。
-> t 檢定函式本身內部的逐方法 `var == 0.0` 守衛維持不變——只有這個診斷計數器被放寬了。
+> `(max(|mean|, 1))² × 1e−20` 者即被標記，因此某組在浮點數雜訊範圍內為常數的特徵（例如在高強度尺度下對位元相等的正規化前輸入做算術，使得 `var ≈ ε² × c²` 非零、但自由度的病態行為仍以相同方式發作），也會計入。
+> t 檢定函式本身內部的逐方法 `var == 0.0` 守衛維持不變，只有這個診斷計數器被放寬了。
 
 <a id="3c-method-brunnermunzel-test--cliffs-δ-non-parametric"></a>
 #### 3c. 方法：Brunner–Munzel 檢定 + Cliff's δ [無母數]（Brunner–Munzel + Cliff's δ）
 
 當各組的強度分布偏斜或不相等、且變異數穩定化轉換仍不足以應付時最適用。
 代謝體學資料常常難以用高斯假設妥善描述（高度偏斜的對數分布、頻繁的存在／缺失模式、批次假影），因此在這些情況下，Brunner–Munzel + Cliff's δ 能在工作流程所見的各種離散情形中提供更誠實的 p 值。
-當預設的 Student t 檢定（即使經過 `arcsinh`）擬合不佳時——例如高度偏斜或以存在／缺失為主的特徵，或當你要對應先前已發表的無母數分析時——請透過第二階段設定的單選按鈕選用它。
+當預設的 Student t 檢定（即使經過 `arcsinh`）擬合不佳時（例如高度偏斜或以存在／缺失為主的特徵，或當你要對應先前已發表的無母數分析時），請透過第二階段設定的單選按鈕選用它。
 
 - Brunner–Munzel 統計量是用 `numerator ∪ denominator` 上的中位秩計算，搭配類 Welch–Satterthwaite 的自由度，再經由 Student-*t* 分布轉換為雙尾 p 值。
   行為與 SciPy 的 `brunnermunzel(distribution='t')` 和 R 的 `lawstat::brunner.munzel.test` 一致——`sqrt` 內的 W 分母為 `nx·Sx + ny·Sy`。
@@ -318,15 +318,15 @@ metabolopan 以兩種模式之一接收輸入，依你載入的 MS-DIAL `.txt` �
 <a id="4-multiple-testing-correction"></a>
 #### 4. 多重檢定校正（FDR）（Multiple-testing correction）
 
-**平實說明：** 當你一次檢定數千個代謝物時，有些會純粹靠運氣看起來「顯著」——在 p < 0.05 下檢定 5,000 個特徵，即使什麼都不是真的，你也會預期約有 ~250 個假陽性。FDR 校正會把每個原始 p 值膨脹成一個考慮整個檢定家族的 q 值，以此加以節制。可以把 **BH** vs **BY** 單選按鈕想成一個敏感度／安全性轉盤：BH 是標準、發現較多的設定；BY 是較嚴格、在特徵彼此相關時更安全的設定。
+**平實說明：** 當你一次檢定數千個代謝物時，有些會純粹靠運氣看起來「顯著」，在 p < 0.05 下檢定 5,000 個特徵，即使什麼都不是真的，你也會預期約有 ~250 個假陽性。FDR 校正會把每個原始 p 值膨脹成一個考慮整個檢定家族的 q 值，以此加以節制。可以把 **BH** vs **BY** 單選按鈕想成一個敏感度／安全性轉盤：BH 是標準、發現較多的設定；BY 是較嚴格、在特徵彼此相關時更安全的設定。
 
-每次第二階段執行都會對逐特徵的 p 值套用使用者所選的偽發現率（FDR）校正，不論這些 p 值是由哪種統計方法產生。
+每次第二階段執行都會對逐特徵的 p 值套用你所選的偽發現率（FDR）校正，不論這些 p 值是由哪種統計方法產生。
 第二階段設定畫面提供一個有兩個選項的單選按鈕：
 
 - **Benjamini–Hochberg (BH) procedure**——預設值。
   BH 假設檢定之間相互獨立或具正向迴歸相依（亦即假設這些檢定不會串通），並產生較多的發現。
 - **Benjamini–Yekutieli (BY) procedure**——需主動選擇，較嚴格。
-  把 BH 的 q 值乘上精確的調和因子 $c(m) = \sum_{i=1}^{m} \frac{1}{i}$（對大的 m 而言 ≈ ln(m) + γ，因此在 m = 5,000 時 BY 大約比 BH 保守 9 倍——那 ~9 倍就是你要付出的代價）。
+  把 BH 的 q 值乘上精確的調和因子 $c(m) = \sum_{i=1}^{m} \frac{1}{i}$（對大的 m 而言 ≈ ln(m) + γ，因此在 m = 5,000 時 BY 大約比 BH 保守 9 倍。那 ~9 倍就是你要付出的代價）。
   BY 在任意正向相依下都能控制 FDR，因此當許多特徵在生物上彼此相關時（例如共享路徑成員的代謝物），它是較安全的選擇。
 
 NaN 的 p 值在任一方法下都會原樣以 NaN 通過校正。
@@ -336,7 +336,7 @@ NaN 的 p 值在任一方法下都會原樣以 NaN 通過校正。
 <a id="5-trend-classification"></a>
 #### 5. 趨勢分類（Trend classification）
 
-它會在使用者調整門檻時即時重新計算——絕不儲存在結果中。
+趨勢分類會在你調整門檻時即時重新計算——絕不儲存在結果中。
 預設門檻：`FC = 2.0`（等同 |log2(FC)| > 1.0）、`FDR = 0.05`、`|δ| ≥ 0.33`（僅 BM）。
 
 - Student / Welch（皆為參數法，無效應量）：`Up` 當且僅當 `FDR < threshold` 且 `log2(FC) > log2(fc_threshold)`；`Down` 當且僅當 `FDR < threshold` 且 `log2(FC) < −log2(fc_threshold)`。
@@ -347,19 +347,19 @@ NaN 的 p 值在任一方法下都會原樣以 NaN 通過校正。
 #### 6. 火山圖（Volcano plot）
 
 X 軸 = `log2(FC)`，Y 軸 = `−log10(p_adjusted)`。
-**X 軸所代表的內容取決於作用中的方法與 `Log transformation` 切換**——對 `log_transform=false` 的 Welch / Student 是平均比值，對 `log_transform=true` 的 Welch / Student 是 arcsinh 平均差（以 log2 為單位），對 Brunner–Munzel 是中位數比值。
+**X 軸所代表的內容取決於作用中的方法與 `Log transformation` 切換**，對 `log_transform=false` 的 Welch / Student 是平均比值，對 `log_transform=true` 的 Welch / Student 是 arcsinh 平均差（以 log2 為單位），對 Brunner–Munzel 是中位數比值。
 詳見上方第 3 節；作用中的基準會記錄在每個 `DamFeature` 上的 `fc_basis`（`mean` / `arcsinh-mean` / `median`）。
 三種顏色依趨勢分類而定（紅／藍／灰，透明度 α ≈ 0.5）。
 門檻線為實心黑色：位於 `−log10(FDR)` 的水平線、位於 `±log2(FC)` 的垂直線。
 `log2(FC)` 為 `±∞` 的特徵（某組平均或中位數恰為 0）會被停靠在 X 軸邊緣 `±(xabs_max + 0.5)`，並加上小幅 jitter，使它們維持可見。
 Y 軸上的對稱飽和：BH/BY q 值下溢到恰好為 `0.0` 的特徵（極大的 `|t|` / 極小的原始 p，在分得很開的群組中很常見）會被停靠在 Y 軸頂端（`y_max`）**正下方**，並加上每點向下、在 `−log10(q)` 單位下最多 `0.08` 的 jitter（與 X 軸 ±0.04 jitter 慣例尺度匹配），使多個飽和特徵不會堆在單一像素上。
-底層的 `neg_log10_p_adjusted` 值仍為 `f64::INFINITY`，在 CSV 匯出中也照此記錄——只有螢幕上的位置被 jitter。
+底層的 `neg_log10_p_adjusted` 值仍為 `f64::INFINITY`，在 CSV 匯出中也照此記錄，只有螢幕上的位置被 jitter。
 Y 軸在其他情況下僅為顯示用途而被裁切於 `finite_max + 1`；底層數值在 CSV 匯出中保留。
-`NaN` 的 `neg_log10_p_adjusted` 保留給真正「p 無法計算」的情況（BM 下完全分層的群組；NaN-drop 後 `n < 2` 的參數檢定）——這些點會從圖中略去，但仍列在 CSV 裡。
+`NaN` 的 `neg_log10_p_adjusted` 保留給真正「p 無法計算」的情況（BM 下完全分層的群組；NaN-drop 後 `n < 2` 的參數檢定）。這些點會從圖中略去，但仍列在 CSV 裡。
 X 軸標籤下方的單一註解條會摘要方法、作用中的 FC 基準（`FC: mean` / `FC: median` / `FC: arcsinh-mean`）、作用中的門檻，以及 ±∞ 計數——例如 `Method: Brunner-Munzel | FC: median | FDR(BH)<0.05, FC≥2, |δ|≥0.33 | −∞: 12  +∞: 8`。
 
 **BM 點大小編碼 Cliff's δ 的量值。** 在 Brunner–Munzel 渲染中，每個散布點的半徑由該特徵的 `|Cliff's δ|` 對應而來：`|δ|=0` 給出仍可見的最小點，`|δ|=1` 給出約為預設半徑 1.3× 的點，中間量值則在兩個錨點之間線性縮放。
-右側圖例會在既有的趨勢計數下方長出第二個 `|δ| size` 區塊，含三個位於 `|δ|=0/0.5/1.0` 的中性灰參考點——以這些參考點對散布點做大小比對，即可從圖上讀出量值。Welch / Student 渲染在全圖維持一致的點半徑，且**不**繪製 `|δ| size` 圖例區塊（那些檢定不產生可編碼的 Cliff's δ）。`|δ|` 未定義的 BM 特徵（某組非 NaN 值 `n < 2`）會退回預設半徑，並仍以適當的趨勢顏色渲染。
+右側圖例會在既有的趨勢計數下方長出第二個 `|δ| size` 區塊，含三個位於 `|δ|=0/0.5/1.0` 的中性灰參考點，以這些參考點對散布點做大小比對，即可從圖上讀出量值。Welch / Student 渲染在全圖維持一致的點半徑，且**不**繪製 `|δ| size` 圖例區塊（那些檢定不產生可編碼的 Cliff's δ）。`|δ|` 未定義的 BM 特徵（某組非 NaN 值 `n < 2`）會退回預設半徑，並仍以適當的趨勢顏色渲染。
 
 <a id="7-exporting-the-figure-as-png"></a>
 #### 7. 將圖匯出為 PNG（Exporting the figure as PNG）
@@ -370,10 +370,10 @@ X 軸標籤下方的單一註解條會摘要方法、作用中的 FC 基準（`F
 
 - **Width / Height（英吋）** 設定圖在頁面上的物理尺寸。`DPI` 值也會寫進 PNG 的 `pHYs` 區塊（每公尺像素數），因此版面工具（Word、InDesign、LaTeX `\includegraphics`）會把影像精確放置成那麼多英吋，而不是從原始像素數推斷尺寸。
 - **DPI** 設定解析度：提高它會在*相同*物理尺寸下讓點陣更銳利（更多像素）——`300` 是線稿的常見期刊下限，`600` 則用於印刷品質。縮小 `Width` / `Height` 會讓圖變小；提高 `DPI` 則維持版面尺寸但增加細節。
-- **一切一起縮放。** 字型、軸刻度、門檻線與散布點都相對於畫布調整大小，因此改變三者中的任何一個都會讓整張圖均勻地重新縮放——文字絕不會相對於圖變得過小或過大。（點圖只以 `Width × DPI` 來決定字型大小，因為它的高度會依列數自動配合——見*路徑模式*下的第 10 項。）
+- **一切一起縮放。** 字型、軸刻度、門檻線與散布點都相對於畫布調整大小，因此改變三者中的任何一個都會讓整張圖均勻地重新縮放，文字絕不會相對於圖變得過小或過大。（點圖只以 `Width × DPI` 來決定字型大小，因為它的高度會依列數自動配合，見*路徑模式*下的第 10 項。）
 
-**所見即所得。** 螢幕上的預覽與下載的 PNG 來自*相同*的渲染器、以*相同*的尺寸產生——沒有另一道「匯出品質」處理。預覽*就是*那個檔案：相同的版面、字型、顏色、點位置與像素尺寸（你的螢幕可能會把它縮放以符合視窗，但儲存的像素與預覽的相符）。
-預覽是你上一次 **Draw volcano** / **Re-draw volcano** 所產生的影像。改變門檻會把它清空（按鈕還原為 **Draw volcano**）；改變匯出尺寸則不會——因此在調整 **Width** / **Height** / **DPI** 之後，請點擊 **Re-draw volcano**，使預覽與 **Download volcano PNG** 將寫出的內容一致。
+**所見即所得。** 螢幕上的預覽與下載的 PNG 來自*相同*的渲染器、以*相同*的尺寸產生，沒有另一道「匯出品質」處理。預覽*就是*那個檔案：相同的版面、字型、顏色、點位置與像素尺寸（你的螢幕可能會把它縮放以符合視窗，但儲存的像素與預覽的相符）。
+預覽是你上一次 **Draw volcano** / **Re-draw volcano** 所產生的影像。改變門檻會把它清空（按鈕還原為 **Draw volcano**）；改變匯出尺寸則不會，因此在調整 **Width** / **Height** / **DPI** 之後，請點擊 **Re-draw volcano**，使預覽與 **Download volcano PNG** 將寫出的內容一致。
 
 <a id="dam-caveats-worth-knowing"></a>
 #### DAM 值得注意的事項（DAM caveats worth knowing）
@@ -384,26 +384,25 @@ X 軸標籤下方的單一註解條會摘要方法、作用中的 FC 基準（`F
   當等變異假設成立時，等樣本數的 Student 是三者中最敏感的；當變異數肉眼可見地不同時，Welch 是穩健的退路。
 - 趨勢分類取決於作用中的門檻。
   火山圖與 CSV 匯出器都以相同的即時門檻分類每個特徵，因此剛繪製的圖與 CSV 在構造上一致。
-  沒有自動重繪：改變任何門檻會把火山圖清空（按鈕還原為 **Draw volcano**），直到你重繪它，因此螢幕上的圖絕不會留下顯示過時的分類——它要嘛與目前的門檻相符，要嘛什麼都不顯示。
+  沒有自動重繪：改變任何門檻會把火山圖清空（按鈕還原為 **Draw volcano**），直到你重繪它，因此螢幕上的圖絕不會留下顯示過時的分類。它要嘛與目前的門檻相符，要嘛什麼都不顯示。
 
 <a id="deduplication-by-inchikey"></a>
 ### 以 InChIKey 去除重複（Deduplication by InChIKey）
 
-**平實說明：** MS-DIAL 經常把同一個化合物回報為好幾列（不同的加成物、同位素峰，或分裂峰）。去除重複會把每一組同化合物的列塌縮成單一個最佳特徵，使它們不會讓你的檢定家族倍增。它以第二階段設定畫面上的核取方塊形式執行（預設開啟），事後你可以下載一份稽核 CSV，看清楚究竟哪些列被捨棄、又是為什麼。
+**平實說明：** MS-DIAL 經常把同一個化合物回報為好幾列（不同的加成物、同位素峰，或分裂峰）。去除重複會把每一組同化合物的列塌縮成一個最佳特徵，使它們不會讓你的檢定家族倍增。它以第二階段設定畫面上的核取方塊形式執行（預設開啟），事後你可以下載一份稽核 CSV，看清楚究竟哪些列被捨棄、又是為什麼。
 
-MS-DIAL 經常為解析到同一個化合物的多個 Alignment ID 各自輸出一列。
 這有三種生物／儀器層面的成因：
 
 1. **加成物多重性。** 同一個中性分子在正離子模式下會以 `[M+H]+`、`[M+Na]+`、`[M+NH4]+`、… 形式離子化（或在負離子模式下以 `[M-H]-`、`[M+Cl]-`、`[M+FA-H]-`、…）。
    每個加成物都會產生自己的 Alignment ID，但共用同一個 InChIKey。
 2. **同位素峰。** MS-DIAL 會為 M0 單一同位素峰、以及 M+1 / M+2 天然豐度同位素峰各自輸出獨立的列（由 `Isotope tracking weight number`、或 `Adduct type` 中的 `[M+1]` / `[M+2]` 後綴標示）。
-3. **層析峰分裂。** 當峰偵測不夠理想時，單一個高斯沖提峰可能被切成兩個相鄰的 Alignment ID，它們共用每一項鑑定資訊，只在 `Fill %` / `S/N average` 上有差異。
+3. **層析峰分裂。** 當峰偵測不夠理想時，一個高斯沖提峰可能被切成兩個相鄰的 Alignment ID，它們共用每一項鑑定資訊，只在 `Fill %` / `S/N average` 上有差異。
 
 把所有重複都餵進 DAM，會讓 FDR（偽發現率）的家族大小相對於真實化合物數膨脹 2–5 倍，侵蝕統計檢定力。
 第三階段 ORA 不受這種特定的數量膨脹影響：它的前景 `K`（被抽取化合物數）與母體 `N` 都是以 InChIKey 收斂的*唯一* KEGG 化合物集合，因此加成物、同位素峰與分裂峰這些共用 InChIKey 的重複都會塌縮成單一化合物，不論是否去除重複，`K` 都維持不變。
 去除重複對第三階段仍然重要，但風險方向其實*相反*：某個低品質重複特徵的 DAM 趨勢若與其同伴相左，會使該共用化合物彙總為模式內 `Conflict` 而被*移出* `K`（是縮減前景、而非膨脹），而非讓級聯保留那個唯一的高可信特徵。
 
-**去除重複以「預設啟用、可關閉」的切換開關呈現於第二階段設定畫面（預設開啟）。** 此級聯*純粹*是去除重複作業，並非通用的品質過濾器——`inchikey = None` 的特徵會原封不動地通過，而單一條目（一個 InChIKey 只對應一個 Alignment ID）即使鑑定品質不佳也會被保留。
+**去除重複以「預設啟用、可關閉」的切換開關呈現於第二階段設定畫面（預設開啟）。** 此級聯*純粹*是去除重複作業，並非通用的品質過濾器——`inchikey = None` 的特徵會原封不動地通過，而單一條目（一個 InChIKey 只對應一個 Alignment ID），即使鑑定品質不佳也會被保留。
 
 <a id="retention-time-clustering"></a>
 #### 滯留時間群集（Retention-time clustering）
@@ -413,7 +412,7 @@ MS-DIAL 經常為解析到同一個化合物的多個 Alignment ID 各自輸出�
 把這些塌縮成單一特徵，會捨棄掉真實、且已被層析解析開來的訊號。
 
 因此 metabolopan 同時以 InChIKey 與滯留時間分群：在每個 InChIKey 群組內，先把特徵切分成數個滯留時間群集，底下的級聯再於每個群集內各自獨立執行。
-任兩個相同 InChIKey 的特徵，只要其滯留時間相差超過 **RT 容差**，就會落入不同群集而兩者皆保留——每個群集的整體滯留時間跨度都被限制在容差之內，因此任何超過一個容差寬度的範圍，絕不會被塌縮成單一特徵。
+任兩個相同 InChIKey 的特徵，只要其滯留時間相差超過 **RT 容差**，就會落入不同群集而兩者皆保留，每個群集的整體滯留時間跨度都被限制在容差之內，因此任何超過一個容差寬度的範圍，絕不會被塌縮成單一特徵。
 
 - **RT tolerance (min)**（RT 容差，分鐘）是第二階段設定畫面上的數值欄位，就位於去除重複核取方塊的正下方（僅在去除重複開啟時可用）。預設為 **0.1 分鐘**，最小值為 **0.001 分鐘**（容差必須為嚴格正值）。
 - 分群會讓每個群集的滯留時間**跨度**（最晚成員減最早成員）維持在容差之內——等價地說，群集內任兩個特徵彼此都在容差之內（complete-linkage，完整連結）。具體作法：先依滯留時間排序，每個群集以其第一個（最早）成員為錨點；後續特徵只要與該錨點的距離在容差內就併入，否則另起新群集（跨度恰等於容差時仍算同群）。
@@ -424,7 +423,7 @@ MS-DIAL 經常為解析到同一個化合物的多個 Alignment ID 各自輸出�
 滯留時間決定「哪些特徵相互競爭」，絕不決定「哪一個勝出」——底下的級聯決策表維持不變，且從不讀取滯留時間。
 
 **範例（簡單）。** 三列共用 InChIKey `AAA`：兩列的 `Average Rt(min)` 分別為 2.10 與 2.13，另一列為 8.55。
-在預設 0.1 分鐘容差下，前兩列落在同一群集（跨度 2.13 − 2.10 = 0.03 ≤ 0.1）並塌縮為單一級聯勝者，而 8.55 那列自成一個群集並被保留——因此該化合物會保留成 **兩個特徵**，而非一個。
+在預設 0.1 分鐘容差下，前兩列落在同一群集（跨度 2.13 − 2.10 = 0.03 ≤ 0.1），並塌縮為單一級聯勝者，而 8.55 那列自成一個群集並被保留，因此該化合物會保留成 **兩個特徵**，而非一個。
 
 **範例（鏈 + 左偏）。** 三列共用 InChIKey `BBB`，`Average Rt(min)` 分別為 0.00、0.08、0.16 分鐘。
 相鄰間距都是 0.08 分鐘（≤ 0.1），但 0.00 到 0.16 的跨度是 0.16 分鐘（> 0.1）。由於群集的整體跨度必須維持在容差內，這三列不會全部塌縮成一個：0.00 與 0.08 那兩列形成一個群集（跨度 0.08 ≤ 0.1），而 0.16 那列被單獨保留。中間的 0.08 那列被歸入 **較低的群集**（左偏），而非與 0.16 配對。
@@ -464,14 +463,14 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
 #### 停用（Opt-out）
 
 在第二階段設定畫面取消勾選 **Deduplicate features by InChIKey** 即可停用。
-在未勾選的情況下，DAM 執行與導入本功能之前的行為逐位元相同——每一個輸入列都會抵達前置過濾、FDR 的 `m` 等於前置過濾後的數量、且 DAM 結果上的 `dedup_report` 為 `None`。
+在未勾選的情況下，DAM 執行與導入本功能之前的行為逐位元相同，每一個輸入列都會抵達前置過濾、FDR 的 `m` 等於前置過濾後的數量、且 DAM 結果上的 `dedup_report` 為 `None`。
 
 <a id="sample-normalization"></a>
 ### 樣本正規化（Sample normalization）
 
 **平實說明：** 樣本正規化是一個選用的第一步，它在任何統計之前校正樣本之間的技術性負載差異（進樣體積、稀釋、乾重）。預設為 **None**，它是安全的、什麼都不改變。挑 **Sum** 或 **Median** 以校正進樣負載；挑 **Metadata column** 以正規化到像乾重這樣的量測量；挑 **Quantile** 以用於同一基質、重複數充足的研究；或挑 **PQN** 以做 NMR 風格的稀釋校正。
 
-在進行任何逐特徵統計之前，使用者可選擇一種*樣本軸*（逐欄）正規化，以校正樣本之間的技術性變異（進樣體積、稀釋、乾重、總離子流）。
+在進行任何逐特徵統計之前，你可以選擇一種*樣本軸*（逐欄）正規化，以校正樣本之間的技術性變異（進樣體積、稀釋、乾重、總離子流）。
 每次 DAM 執行開始時，矩陣都會從最初解析得到的原始強度值（`intensity_raw`）重新正規化一次；`intensity_raw` 永遠不會被更動，因此切換方法是無損的。
 預設為 `None`，會逐位元保留先前的行為。
 
@@ -482,11 +481,11 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
   $$ x^{\prime}_{[i, j]} = x_{[i, j]} \times \frac{\underset{j}{median}(f_j)}{sum_j} $$
   乘上各樣本總和的中位數可保留整體量級，讓 Welch / Student 路徑中選用的 `arcsinh` 步驟（由第二階段 **Log transformation** 核取方塊控制；預設開啟）維持在有用的範圍內。詳見下方。
 - **Median。** 形式相同，改以各樣本的 NaN 感知中位數作為因子。
-- **Metadata column。** 使用者從中繼資料 CSV 解析出的選用數值欄中挑一欄（例如 `dry_weight`、`dilution`）。
+- **Metadata column。** 你從中繼資料 CSV 解析出的選用數值欄中挑一欄（例如 `dry_weight`、`dilution`）。
   每個儲存格會除以該欄對應該樣本的值，再以所有樣本的中位數值重新縮放。
   該指定中繼資料欄資料不完整時的行為：
   - *缺失值（空白儲存格）：* 該樣本會從分析中被**捨棄**——該樣本欄的每個儲存格都會標記為 NaN，讓 DAM 的 NaN 感知機制將其排除在逐特徵統計之外。
-    第二階段設定畫面會在使用者按下 **Start DAM** 之前，以一行黃色警告列出將被捨棄的樣本。
+    第二階段設定畫面會在你按下 **Start DAM** 之前，以一行黃色警告列出將被捨棄的樣本。
   - *非正值（零或負值）：* 會明確報錯並指出有問題的樣本與欄位。
     零／負的中繼資料是資料輸入問題、而非「缺失值」，因此立即失敗（fail fast）才是正確做法。
   - *非數字儲存格：* 在 CSV 載入時即解析，並在抵達第二階段之前就報錯。
@@ -496,55 +495,55 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
   在已排序位置 `[k, k+t)` 出現並列的項目，會被指派為這 `t` 個秩位上參考值的**平均（MEAN）**——`mean(reference[k..k+t])`。
 
   > **注意：** 這是對 Smyth 在 Bioconductor 支援討論串 #1569（2003，<https://support.bioconductor.org/p/1569/>）一句話的**字面**解讀——他說並列項目應取「對應之合併分位數（pooled quantiles）的平均」。
-  > 廣為部署的標準實作——包含 Smyth 自己的 `limma::normalizeQuantiles(ties=TRUE)`（預設值）以及 Bolstad 的 `preprocessCore::normalize.quantiles`——則改以平均秩查表搭配線性內插來處理並列，也就是回傳並列「中間秩」位置上的參考值。
+  > 廣為部署的標準實作（包含 Smyth 自己的 `limma::normalizeQuantiles(ties=TRUE)`（預設值）以及 Bolstad 的 `preprocessCore::normalize.quantiles`）則改以平均秩查表搭配線性內插來處理並列，也就是回傳並列「中間秩」位置上的參考值。
   > 兩種解讀僅在 `t == 2` 的並列、或參考在局部呈線性時才一致，而在參考曲度較大時、對 `t ≥ 3` 的並列就會分歧（這在以低於偵測極限值填補的代謝體學樣本底部很常見，例如下方的計算範例）。
-  > 因此 metabolopan 的輸出在這種情況下會與 preprocessCore 和 limma **兩者**都不同——這是刻意的設計，在此載明，好讓你能在知情的前提下與標準工具比較。
+  > 因此 metabolopan 的輸出在這種情況下會與 preprocessCore 和 limma **兩者**都不同。這是刻意的設計，在此載明，好讓你能在知情的前提下與標準工具比較。
 
   > **範例：** 參考為 `[1.5, 7.5, 52.5, 502.5, 55000]`，在已排序位置 1–3 有三項並列，在此會得到 mean(7.5, 52.5, 502.5) = **187.5**；`limma::normalizeQuantiles(ties=TRUE)` / `preprocessCore::normalize.quantiles` 則回傳 `reference[2]` = **52.5**。
   > ![quantile-normaliztion-in-r](./figure/quantile-normalization.png)
 
-  這個分歧與各樣本是否擁有相同的非 NaN 數量無關——它純粹取決於 `t ≥ 3` 的並列如何對應到曲度較大的參考；至於各樣本非 NaN 數量是否相等，是另一個面向，於下方說明。
+  這個分歧與各樣本是否擁有相同的非 NaN 數量無關。它純粹取決於 `t ≥ 3` 的並列如何對應到曲度較大的參考；至於各樣本非 NaN 數量是否相等，是另一個面向，於下方說明。
   - **各樣本非 NaN 數量不等。** 當樣本擁有不同數量的非 NaN 儲存格時（例如缺測情形不一致），參考會建立在大小為 `K = max(n_j)` 的共同分數秩格點上，並將每個樣本已排序的值線性內插到該格點上。
 
     > **給開發者：** 這與 limma 的 `(r − 1)/(n − 1) ∈ [0, 1]` 機制一致。
     > 它可避免「較長的樣本主導高秩」這個錯誤——過去一個僅有 3 個非 NaN 的樣本，其最大值會被對應到參考的第 60 百分位（其 5 個位置中的 `reference[2]`），而非參考的第 100 百分位。
-    > 當所有樣本的非 NaN 數量同為 `K` 時，每個分數秩都會落在整數格點索引上，內插路徑會退化為直接查表，輸出與本次變更之前我們所發布、僅支援等長的版本逐位元相同。
+    > 當所有樣本的非 NaN 數量同為 `K` 時，每個分數秩都會落在整數格點索引上，內插路徑會退化為直接查表，輸出與本次變更之前所發布、僅支援等長的版本逐位元相同。
     > NaN 儲存格維持 NaN。
 - **Probabilistic Quotient Normalization (PQN)。** 一種 NMR 風格、針對樣本稀釋的校正：它假設大多數特徵不應改變，因此某樣本相對於參考光譜的*典型*逐特徵比值，可估計該樣本的稀釋因子，再將其除掉。
   Dieterle 2006：先在內部做總和正規化；從所選群集（預設為 `All samples`，亦可選擇限定於某個指定群組）建立逐特徵的參考光譜；對每個樣本，計算其逐特徵商數相對於參考的中位數（略過參考為零、NaN、或樣本值為 NaN 的特徵）；再除以該因子並重新縮放。
   未指派樣本永遠不會抵達此階段（它們在第一階段 → 第二階段邊界就被捨棄了，因此無論是參考群集或逐樣本因子迴圈都不會看到它們）。
   若某個*已指派*的樣本仍產生退化的商數中位數（NaN 或 0），PQN 會中止並列出有問題的名稱——請改用其他正規化方法，或從 MS-DIAL `.txt` 的 File type 列移除該樣本。
-  分派器的 INFO 日誌行會顯示一個 `reference_features_used=N` 欄位，讓你看到該群集實際錨定了多少個特徵作為 PQN 參考（亦即 `median(cohort) > 0` 者）相對於總特徵數——在不重跑流程的情況下，這對診斷 QC 稀疏度很有用。
+  分派器的 INFO 日誌行會顯示一個 `reference_features_used=N` 欄位，讓你看到該群集實際錨定了多少個特徵作為 PQN 參考（亦即 `median(cohort) > 0` 者）相對於總特徵數，在不重跑流程的情況下，這對診斷 QC 稀疏度很有用。
 
 <a id="why-sum--median--metadata-rescale-to-the-median-factor-rather-than-divide-to-a-constant"></a>
 #### 為何 Sum / Median / Metadata 重新縮放到中位數因子（而非除到固定常數）（Why … rescale to the median factor）
 
 這三種方法共用同一個驅動機制。
-對每個樣本欄 *j*，它會計算一個純量因子 `f_j`——欄總和（Sum）、欄的 NaN 感知中位數（Median）、或樣本的正值中繼資料（Metadata）——然後把每個有限儲存格改寫為
+對每個樣本欄 *j*，它會計算一個純量因子 `f_j`（欄總和（Sum）、欄的 NaN 感知中位數（Median）、或樣本的正值中繼資料（Metadata）），然後把每個有限儲存格改寫為
 
   $$ x^{\prime}_{[i, j]} = x_{[i, j]} \times \frac{M}{f_j}, \; where \; M = \underset{j}{median}(f_j) $$
 
 `× M` 這一項是刻意的設計。
 總和正規化的教科書形式是單純的 `x / f_j`（或對 CPM 式計數乘上 `× 10^6`），這會強制把每個樣本拉到*每單位*尺度：對 Sum 而言，每欄總和都會變成 1（比例，約 1e-5 – 1e-3）；對 Median 而言，每欄中位數都會變成 1。
-我們改為乘回 `M`，即**各樣本因子的中位數**，使每欄的總和（或中位數）落在 `M`——*典型*樣本的原始量級——而非 1。
+metabolopan 改為乘回 `M`，即**各樣本因子的中位數**，使每欄的總和（或中位數）落在 `M`（*典型*樣本的原始量級），而非 1。
 樣本之間的技術性負載（進樣體積、稀釋、乾重）仍被均衡；只有絕對強度尺度被保留下來。
 
 - *為何重要——下游的 `arcsinh`。* 預設的 **Log transformation** 是 `arcsinh`，它只有在 *x* 夠大時才表現得像對數（`arcsinh(x) ≈ ln(2x)`）；對接近 0 的 *x* 而言，它基本上是**線性的**（`arcsinh(x) ≈ x`）。
   把資料除成比例會把整個工作矩陣推進那個近線性區，使 arcsinh 的變異數穩定化效果崩潰，並讓 t 檢定退化成在線性尺度上比較一堆極小的數。
-  把數值維持在強度尺度（約 1e4 – 1e7）能讓 arcsinh 停留在它有用的類對數區——即「永遠不要接近 0」的目標。
-  對**所有**儲存格乘上相同的常數 `M`，在 Brunner–Munzel 的中位數比值中會抵銷，但在 `arcsinh` 之下**不會**（它是非線性的），因此這個重新縮放正是為了保護 Student / Welch + `arcsinh` 這條路徑——也就是目前的預設。
-- *為何取因子的中位數（而非平均數）。* 中位數較穩健——單一個負載特別高的樣本無法把目標尺度往上拉——而且它讓*典型*樣本成為錨點：該樣本的 `f_j ≈ M`，於是 `f_j / M ≈ 1` 幾乎不會改變它，而偏離尺度的樣本則往它靠攏。
-- *數字範例。* 三個樣本的欄總和為 `6, 15, 24`，得 `M = median(6, 15, 24) = 15`；做完 `x / sum_j × 15` 後，每欄總和都變成 **15**（樣本 A 放大 ×2.5、C ×0.625、B 不變）——而非變成 1。
+  把數值維持在強度尺度（約 1e4 – 1e7）能讓 arcsinh 停留在它有用的類對數區，即「永遠不要接近 0」的目標。
+  對**所有**儲存格乘上相同的常數 `M`，在 Brunner–Munzel 的中位數比值中會抵銷，但在 `arcsinh` 之下**不會**（它是非線性的），因此這個重新縮放正是為了保護 Student / Welch + `arcsinh` 這條路徑，也就是目前的預設。
+- *為何取因子的中位數（而非平均數）。* 中位數較穩健（單一樣本負載特別高，也無法把目標尺度往上拉），而且它讓*典型*樣本成為錨點：該樣本的 `f_j ≈ M`，於是 `f_j / M ≈ 1` 幾乎不會改變它，而偏離尺度的樣本則往它靠攏。
+- *數字範例。* 三個樣本的欄總和為 `6, 15, 24`，得 `M = median(6, 15, 24) = 15`；做完 `x / sum_j × 15` 後，每欄總和都變成 **15**（樣本 A 放大 ×2.5、C ×0.625、B 不變），而非變成 1。
   若以各樣本中位數 `2, 20, 200` 做 Median 正規化，則 `M = 20`，每欄的中位數都會變成 **20**。
   Metadata 也相同，只是 `f_j` 改為所選欄的值，得到「在中位數乾重下的強度」。
 
-總結而言，metabolopan 的「先除再重新縮放到中位數」搭配的是 `arcsinh`，使正規化與廣義對數轉換在數值上保持相容。
+metabolopan 的「先除再重新縮放到中位數」搭配的是 `arcsinh`，使正規化與廣義對數轉換在數值上保持相容。
 所選的 `M` 會在分派器 INFO 日誌中以 `scaling_to_median_factor=…` 回報。
 
 <a id="lifecycle"></a>
 #### 生命週期（Lifecycle）
 
-正規化的選擇——以及其他每一個設定參數——會在整個工作階段的生命週期內、跨越每一次導覽轉換而保留。
+正規化的選擇（以及其他每一個設定參數）會在整個工作階段的生命週期內、跨越每一次導覽轉換而保留。
 退回上一階段絕不會丟失你的選擇；你只是回到上一個畫面，先前所有的選擇都原封不動。
 （若你在第一階段重新挑選檔案，而先前的分子／分母組在新的中繼資料中已不存在，第二階段會卡住關卡，直到你重新選擇有效的群組。）第三階段沒有獨立的正規化步驟——第三階段富集分析看到的，就是那份（已正規化的）工作矩陣。
 
@@ -558,7 +557,7 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
 #### 值得注意的事項（Caveats worth knowing）
 
 - *Quantile* 假設各樣本的分布*理應*相同。
-  對於同一基質、重複數充足的研究（例如細胞萃取物）這是合理的，但對於跨組織或跨生物體的比較——生物本質上在分布層級就有差異——則不成立。
+  對於同一基質、重複數充足的研究（例如細胞萃取物）這是合理的，但對於跨組織或跨生物體的比較（生物本質上在分布層級就有差異）則不成立。
 - *PQN* 對大多數 NMR 式的稀釋變異很穩健。
   所選的參考群集很重要：當研究有一個乾淨的基線群組時，以它作為 PQN 參考，往往比 `All samples` 產生更清晰的生物訊號。
   **PQN 對樣本品質很嚴格**：若某樣本的逐特徵商數中位數為 `NaN`（沒有可用於對照參考的特徵）或 `0`（其非參考零特徵中有半數以上恰為 0——通常是稀疏／類空白的樣本），會以錯誤訊息列出有問題的樣本名稱。
@@ -570,18 +569,15 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
 <a id="stage-3--enrichment-over-representation-analysis"></a>
 ## 第三階段 — 富集分析（過度代表分析，over-representation analysis）
 
-第三階段接收你在第二階段找到的差異累積化合物，並提出單一個生物學問題：*它們是否比偶然預期的程度更集中於某條已知路徑（或模組）？*
-舉例來說，若你的「up」化合物有一半全都屬於糖解作用，那麼該路徑就是*過度代表*的——一個值得回報的訊號。
-每個模式（路徑 / 模組）執行的是完全相同的統計機制；它們只在檢定所針對的 KEGG 化合物集合目錄上有所不同。
-
-第三階段接收第二階段的 DAM 結果，並提問：*「在我這份差異累積化合物清單中，哪些 KEGG 條目被過度代表？」*——這裡的「條目」指的是**[一條 KEGG 路徑](https://www.kegg.jp/kegg/pathway.html)**（路徑模式）或**[一個 KEGG 模組](https://www.kegg.jp/kegg/module.html)**（模組模式）。
-兩種模式在超幾何檢定、使用者所選的 FDR（BH 或 BY）、以及可量測代謝體母體上共用完全相同的機制；它們只在 ORA 所操作的化合物集合目錄上有所不同。
+第三階段接收第二階段的 DAM 結果，並提問：*「在我這份差異累積化合物清單中，哪些 KEGG 條目被過度代表？」*，這裡的「條目」指的是**[一條 KEGG 路徑](https://www.kegg.jp/kegg/pathway.html)**（路徑模式）或**[一個 KEGG 模組](https://www.kegg.jp/kegg/module.html)**（模組模式）。
+兩種模式在超幾何檢定、你所選的 FDR（BH 或 BY）、以及可量測代謝體母體上共用完全相同的機制；它們只在 ORA 所操作的化合物集合目錄上有所不同。
+舉例來說，若你的「up」化合物有一半全都屬於糖解作用，那麼該路徑就是*過度代表*的，一個值得回報的訊號。
 
 <a id="how-over-representation-analysis-works-here"></a>
 ### 過度代表分析在此如何運作（How over-representation analysis works here）
 
 把你能量測並對應到 KEGG 的每一個化合物想像成**罐子裡的一顆球**。
-其中有些球是有顏色的——它們屬於路徑 *P*。
+其中有些球是有顏色的。它們屬於路徑 *P*。
 接著你伸手抓出一把：你的*差異累積*化合物。
 超幾何檢定問的是，你抓出的這把球中有色球的數量是否*多於盲目運氣*所能預測的程度。
 
@@ -598,9 +594,9 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
 > `N = 300` 個可量測化合物，你抓出 `K = 30` 個差異累積化合物，而某條路徑裡含有 `m_p = 10` 個化合物。
 > 若你的 `K` 個命中是隨機散布的，機率預測只有 `30 × (10 / 300) = 1` 個會落在該路徑中。
 > 你實際命中了 `k_p = 5` 個。
-> 五對上期望值一，這是強烈的過度代表——一個很小的 *p* 值。
+> 五對上期望值一，這是強烈的過度代表，一個很小的 *p* 值。
 
-第三階段自帶一個獨立於第二階段選擇的 FDR 校正單選按鈕——**預設為 Benjamini–Yekutieli（BY）**，對路徑／模組 ORA 而言是較安全的選擇，因為條目本質上會共用化合物（許多化合物出現在多條路徑中），這違反了 BH 的獨立性假設。對重視跨工具再現性的使用者，Benjamini–Hochberg 仍可選用。
+第三階段自帶一個獨立於第二階段選擇的 FDR 校正單選按鈕——**預設為 Benjamini–Yekutieli（BY）**，對路徑／模組 ORA 而言是較安全的選擇，因為條目本質上會共用化合物（許多化合物出現在多條路徑中），這違反了 BH 的獨立性假設。若你重視跨工具再現性，Benjamini–Hochberg 仍可選用。
 第三階段點圖的色標標題與註解列都會標明目前作用的方法（例如 `-log10(FDR (BY))` / `FDR: BY`），而富集分析 CSV 開頭的 `# FDR:` 註解行也會記錄此選擇供下游解析。
 
 <a id="enrichment-analysis-setup-screen"></a>
@@ -609,12 +605,10 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
 設定畫面是你選擇*要檢定什麼*以及*要多嚴格*的地方。
 你選定一個模式、一個 KEGG 範圍（路徑用物種、模組用生物群組 Group）、一個方向過濾器，以及條目大小／FDR 旋鈕，然後按下 **Run Enrichment**。
 
-第三階段設定畫面是使用者挑選以下項目的地方：
-
 - **Analysis Mode**（Pathway / Module），透過單選切換鈕。
-  兩種模式的選擇以及它們已取得的 KEGG 快取在工作階段的整個生命週期內共存——在模式間切換是即時的，且絕不會重新取得你已抓取過的資料。
+  兩種模式的選擇以及它們已取得的 KEGG 快取在工作階段的整個生命週期內共存，在模式間切換是即時的，且絕不會重新取得你已抓取過的資料。
 - **KEGG 範圍。** 路徑模式顯示一個可搜尋的物種選擇器，內含預先積極載入的 KEGG 生物清單；模組模式則顯示下方 *模組模式* 所述的 Level + Group 選擇器。
-  選定一個物種（或 Group）會在此畫面內就地觸發對應的 KEGG 取得——一個帶有標題說明的小進度條會串流逐路徑（或逐模組 + ETA）的進度，無須離開設定畫面。詳見下文。
+  選定一個物種（或 Group）會在此畫面內就地觸發對應的 KEGG 取得，一個帶有標題說明的小進度條會串流逐路徑（或逐模組 + ETA）的進度，無須離開設定畫面。詳見下文。
 - **Include DAM features with direction**（`Both` / `Up only` / `Down only`）。
 - **Minimum number of compounds detected in a pathway/module**（即「最小條目大小」過濾器；預設 `1`，範圍 `[1, 20]`）。
   在建立 FDR 家族**之前**，捨棄其母體限定化合物數低於此門檻的路徑／模組——標準解釋見[路徑模式 step 5](#pathway-mode)。
@@ -626,7 +620,7 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
 
 這三個控制項位於*結果*畫面上，讓你能在看過資料後迭代調整圖形，無須走回設定畫面。
 
-- **顯著性門檻**（預設 `0.05`）。套用校正時控制項標示為 `Enrichment FDR threshold`，在 `No correction` 下標示為 `Enrichment p-value threshold`——它命名的是這個界限所比較的那個量。
+- **顯著性門檻**（預設 `0.05`）。套用校正時控制項標示為 `Enrichment FDR threshold`，在 `No correction` 下標示為 `Enrichment p-value threshold`。它命名的是這個界限所比較的那個量。
 - **Minimum hit count**（依命中數過濾顯示；預設 `1`）。與另外兩個一樣，移動它會**丟棄畫面上的圖**，下一次 `Draw dot plot` 會以新值重繪——不需要重跑。
   控制點圖顯示上限的 Top N 輸入欄位也位於此畫面，讓你可以在看過資料後再迭代調整，無須回到設定畫面。
 - **Top N pathways**（預設 `20`）。
@@ -643,18 +637,18 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
    每批最多 200 個 InChIKey。
 2. **KEGG 化合物轉換（[KEGG REST](https://www.kegg.jp/kegg/rest/keggapi.html)）。** 對每個唯一的 CID，透過 `/conv/compound/pubchem:CID1+CID2+...` 解析為一個 KEGG 化合物（`cpd:Cxxxxx`）。
    每批最多 10 個 CID，並受 KEGG 客戶端節流（每次請求間隔 334 ms，約 3 req/s，符合 KEGG 文件所載的軟性上限）。
-   對應到 `glycan:` 或 `dr:` 的行會被濾除——只保留 `cpd:` 目標。
+   對應到 `glycan:` 或 `dr:` 的行會被濾除，只保留 `cpd:` 目標。
    HTTP 403 被視為速率限制訊號，並以 5 s 退避最多重試 5 次。
 3. **多重對應規則。** 一個特徵就是一個化學實體。
    若 PubChem 對某個 InChIKey 回傳多個 CID（立體／位置／鹽類歧義）且它們全都解析到同一個 KEGG cpd，則該特徵對 DAM 化合物集合 `K` 與母體 `N` 各貢獻該 cpd **一次**。
    若它們解析到確實不同的 cpd，則每個 cpd 各自計數。
    若某特徵的 InChIKey 沒有 PubChem CID、或其 CID 全部無法對應到 KEGG cpd，則該特徵會從 `K` 與 `N` 中被丟棄，並顯示於底部面板 **Data** 分頁的對應漏斗中（`<N> InChIKeys → <N> PubChem CIDs → <N> KEGG cpds`）。
-4. **母體定義（N）。** 母體是所有「通過第二階段前置過濾**且**成功經由 PubChem 與 KEGG conv 對應」之已註解特徵的唯一 cpd ID 的聯集——即此平台上的*可量測代謝體*。
-   我們刻意採用「僅可量測」母體，使 p 值更能反映你的資料原本能說明的範圍。
-5. **FDR 前的條目大小過濾。** 在任何超幾何工作之前，每條路徑的 `m_p` 會與使用者可調的 `min_entry_size`（預設 `1`，範圍 `[1, 20]`）比較。
-   `m_p < min_entry_size` 的條目會從本次執行中**完全捨棄**——它們不對 FDR 家族貢獻任何 p 值、不出現在 CSV 中、也不出現在點圖上。
+4. **母體定義（N）。** 母體是所有「通過第二階段前置過濾**且**成功經由 PubChem 與 KEGG conv 對應」之已註解特徵的唯一 cpd ID 的聯集，即此平台上的*可量測代謝體*。
+   metabolopan 刻意採用「僅可量測」母體，使 p 值更能反映你的資料原本能說明的範圍。
+5. **FDR 前的條目大小過濾。** 在任何超幾何工作之前，每條路徑的 `m_p` 會與你可調的 `min_entry_size`（預設 `1`，範圍 `[1, 20]`）比較。
+   `m_p < min_entry_size` 的條目會從本次執行中**完全捨棄**。它們不對 FDR 家族貢獻任何 p 值、不出現在 CSV 中、也不出現在點圖上。
    被捨棄的數量會顯示於底部面板 **Data** 分頁的一行保留率資訊 `Tested: <surviving> / <total> (≥ N compounds in universe)`（模組模式為 `Tested: <surviving> (≥ N compounds in universe)`）。
-   預設 `1` 讓前置過濾保持寬鬆——只有 `m_p = 0` 的條目會被捨棄（這種條目本來就只可能得到 `p = 1.0`），因此每條至少含一個可量測化合物的路徑都會被檢定。
+   預設 `1` 讓前置過濾保持寬鬆，只有 `m_p = 0` 的條目會被捨棄（這種條目本來就只可能得到 `p = 1.0`），因此每條至少含一個可量測化合物的路徑都會被檢定。
    把它提高到 `3` 可額外排除 `m_p ∈ {1, 2}` 的條目，這些條目在典型的 `K`／`N` 值下在數學上無法被檢定——例如 `m_p = 1` 的條目最多只能產生 `k_p = 1`，得到原始 `p ≈ K/N`，這很少低於 `α = 0.05`，更少低於 BH 臨界值 `0.05/m`。
    這個取捨是對稱的：較低的 `min_entry_size` 會檢定更多路徑，但會擴大多重檢定家族 `m`。
 
@@ -671,11 +665,11 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
 
    - **Fold enrichment（富集倍數，效應量）。** 在每個 p 值之外，ORA 還會記錄一個效應量指標——觀測命中數除以虛無假設下的期望命中數。*期望值* = 若你的 `K` 個命中是隨機散布的，僅憑此路徑的大小有多少會落在其中：`expected_p = K · (m_p / N)`，故 `fold enrichment = k_p / expected_p = (k_p · N) / (m_p · K)`。
      `> 1` 代表過度代表（命中數多於機率預期）、`= 1` 恰如預期、`< 1` 代表代表不足。
-     它是點圖的 **X 軸**，也是匯出 CSV 的 `Expected` / `EnrichmentRatio` 兩欄；它**只是效應量、不含顯著性**——一個只含單一化合物的條目（`m_p = 1`）靠一次幸運命中就能得到很大的 fold enrichment，這正是為什麼選取依 FDR 而非 fold enrichment（step 9）、以及為什麼存在 `min_entry_size` 前置過濾（step 5）的原因。
+     它是點圖的 **X 軸**，也是匯出 CSV 的 `Expected` / `EnrichmentRatio` 兩欄；它**只是效應量、不含顯著性**，一個只含單一化合物的條目（`m_p = 1`）靠一次幸運命中就能得到很大的 fold enrichment，這正是為什麼選取依 FDR 而非 fold enrichment（step 9）、以及為什麼存在 `min_entry_size` 前置過濾（step 5）的原因。
      邊緣情況：當 `expected_p = 0`（該條目中沒有可量測化合物）時，比值為未定義——內部為 `NaN`，在 CSV 中寫成**空白**儲存格。
-7. **使用者所選的 FDR 校正**，透過第三階段設定畫面的獨立單選按鈕（預設為 Benjamini–Yekutieli 程序；Benjamini–Hochberg 程序只需一鍵切換；`No correction` 作為第三個選項，僅供探索性執行使用，見下文）。
+7. **你所選的 FDR 校正**，透過第三階段設定畫面的獨立單選按鈕（預設為 Benjamini–Yekutieli 程序；Benjamini–Hochberg 程序只需一鍵切換；`No correction` 作為第三個選項，僅供探索性執行使用，見下文）。
    此單選按鈕刻意與第二階段的選擇相互獨立：兩個階段有不同的相依性樣態，許多使用者會合理地想要第二階段 BH（火山圖的跨工具再現性）+ 第三階段 BY（對共享化合物條目採保守 ORA）。
-   對路徑／模組 ORA 我們**預設為 BY**：路徑大量共用化合物（糖解作用 ↔ TCA 共用 G6P、丙酮酸等），因此 BH 底層的獨立性假設被違反。多數生物學工具預設為 BH；若你需要可跨工具比較的 q 值，請把單選按鈕切到 BH。
+   對路徑／模組 ORA，metabolopan **預設為 BY**：路徑大量共用化合物（糖解作用 ↔ TCA 共用 G6P、丙酮酸等），因此 BH 底層的獨立性假設被違反。多數生物學工具預設為 BH；若你需要可跨工具比較的 q 值，請把單選按鈕切到 BH。
    BY 在相依情況下較為保守；預期校正後的 p 值會一律較高（較不顯著）。
    `No correction` 完全跳過多重檢定校正——被帶下去的顯著性數值就是未經調整的原始 p 值。
    既然沒有任何東西被調整過，這樣的執行所匯出的 CSV 就**不含 `FDR` 欄**，只帶 `PValue`：一個 `FDR` 欄會逐位元重複 `PValue`，而那個名字沒有任何校正掙來。
@@ -684,7 +678,7 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
 
    第二階段 DAM 單選按鈕**不**提供 `No correction`——約 13 k 個特徵的原始 p 會淹沒結果集；攜帶 `dam_fdr_method=NoCorrection` 的手工快照會防禦性地被強制改回 BH，並附帶一個 `tracing::warn!` 事件。
 
-   **色階。** 每個標記的填色將 `-log10(FDR)`（`No correction` 時為原始 `-log10(p)`）編碼於 ColorBrewer **YlOrRd** 9 階漸層上——所顯示之最不顯著條目（位於顯示門檻的 FDR）為最淡的黃色，加深至最顯著者的深紅色；點與色標圖例共用單一個 `-log10` 跨距，因此相同顏色在兩者間代表相同的顯著性。
+   **色階。** 每個標記的填色將 `-log10(FDR)`（`No correction` 時為原始 `-log10(p)`）編碼於 ColorBrewer **YlOrRd** 9 階漸層上——所顯示之最不顯著條目（位於顯示門檻的 FDR）為最淡的黃色，加深至最顯著者的深紅色；點與色標圖例共用同一個 `-log10` 跨距，因此相同顏色在兩者間代表相同的顯著性。
    目前作用的方法會記錄於點圖的色標標題（`-log10(FDR (BH))` / `-log10(FDR (BY))` / `No correction` 時為 `-log10(p-value)`——外層包裝被去除，因為軸上的值「就是」原始 p、而非 q），並記錄於匯出之富集分析 CSV 開頭的 `# FDR: BH` / `# FDR: BY` / `# FDR: NoCorrection` 行。
    CSV 還攜帶額外的自我說明註解行，記錄該次執行所用的門檻：`# MinEntrySize: N`（FDR 前的條目大小過濾），以及在模組模式下 `# MinGroupOverlap: N`（Group 重疊門檻）。
    點圖本身在 X 軸下方還附帶一個四行的純文字註解區塊，讓審閱者僅憑圖即可重建 FDR 家族：
@@ -699,31 +693,31 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
    （當那些方法作用時，最後一行會讀作 `… Benjamini–Hochberg (BH)`，或 `raw p-value (no FDR correction)`。）
    `N` / `K` / `m` 等符號刻意完整拼出而非縮寫；受檢定數 `<m>` 是抵達 BH/BY 的條目數，也是每個原始 p 值被乘上的除數。
    **本段中關於 `m`、以及關於過濾器跑在 FDR 之前或之後的一切，描述的都是選了 BH 或 BY 的執行。** 在 `No correction` 下沒有執行任何調整，因此不存在一個可供過濾器「之前」或「之後」定位的校正階段，也沒有 `m` 分母——條目大小過濾仍會在檢定前丟棄小條目、命中數過濾仍會隱藏列，但兩者都不再相對於一個並未發生的校正而定位。
-   `m` 分母等於**通過 FDR 前 `min_entry_size` 過濾**（step 5）的路徑數——即 `m = entries.len() − entries_dropped_by_min_entry_size`。
+   `m` 分母等於**通過 FDR 前 `min_entry_size` 過濾**（step 5）的路徑數，即 `m = entries.len() − entries_dropped_by_min_entry_size`。
    協調器層級的 Group 過濾（模組模式）在更早的一層套用；到 FDR 執行時，`m` 已反映了這兩道過濾。
-8. **依命中數過濾顯示。** 一個使用者控制的 `min_hit_count`（預設 1）會把命中數較少的路徑從點圖中隱藏。
-   它不會改變任何 p 值或 q 值——在選了 BH 或 BY 時，`m` 已在所有存活條目上計算完畢，因此不論此設定為何，校正後的值都是誠實的。
+8. **依命中數過濾顯示。** 一個你可控制的 `min_hit_count`（預設 1）會把命中數較少的路徑從點圖中隱藏。
+   它不會改變任何 p 值或 q 值，在選了 BH 或 BY 時，`m` 已在所有存活條目上計算完畢，因此不論此設定為何，校正後的值都是誠實的。
    與 step 5 的 `min_entry_size` 不同：那一個在**檢定之前**丟棄條目、因而縮減 `m`；這一個只是把列從圖中隱藏。
    它在繪圖時被評估，因此改動它會丟棄當前的圖，下一次 `Draw dot plot` 會以新值重繪。不需要重跑：這道過濾在校正套用**之後**才被查詢，因此它動不了 `m`，也改不了任何一個 p 值。
-   **它會影響哪一個 CSV 下載，取決於按鈕。** `Download enrichment results (CSV)` 寫出圖所繪製的那些列，因此這道過濾與顯著性門檻都會套用於它；`Download all results (CSV)` 寫出每一個存活的條目，兩者都不套用。`Top N` 兩個檔案都不會到達——它限制的是坐標軸能放下幾列，那不是某一列自身的性質。
+   **它會影響哪一個 CSV 下載，取決於按鈕。** `Download enrichment results (CSV)` 寫出圖所繪製的那些列，因此這道過濾與顯著性門檻都會套用於它；`Download all results (CSV)` 寫出每一個存活的條目，兩者都不套用。`Top N` 兩個檔案都不會到達。它限制的是坐標軸能放下幾列，那不是某一列自身的性質。
 9. **點圖的「選取」與「排序」——兩種不同的依據。** 點圖以**刻意不同的準則**選擇*要繪製哪些*條目以及*如何*把它們堆疊在 Y 軸上：
    - **選取（哪些條目出現）依統計顯著性。** 在通過 `fdr < threshold` 與 `min_hit_count` 過濾（step 7–8）的條目中，圖保留 **FDR 最低的 Top N**（`top_n`，預設 20，可在結果畫面調整）。
-     因此所顯示的條目永遠是*最顯著*的那些——它們**絕不**依富集倍數選取。
+     因此所顯示的條目永遠是*最顯著*的那些。它們**絕不**依富集倍數選取。
    - **垂直順序（Y 軸）依效應量。** 被保留的條目接著依**富集倍數（觀測／期望）由大到小**排列，使富集倍數最大的條目位於**最上方**，整張圖沿 X 軸（X 軸本身即為富集倍數）讀起來像一道「大者在上」往下的階梯。
      平手時以 FDR 打破（較顯著者在前），再以條目 ID 打破。
      這符合 clusterProfiler 以 X 軸指標排序 Y 軸的慣例。
 
-   > **注意：** 一條*極小*的路徑可能靠一次幸運命中就顯示出巨大的富集倍數——因此顯著性／FDR 決定**什麼**會出現，而富集倍數只是把存活者堆疊起來。
+   > **注意：** 一條*極小*的路徑可能靠一次幸運命中就顯示出巨大的富集倍數，因此顯著性／FDR 決定**什麼**會出現，而富集倍數只是把存活者堆疊起來。
    > 請據此判讀點圖：**顏色與垂直位置 = 你有多確定**（顯著性）；**X 軸 = 效應有多強**（富集倍數）。
 
    實務上的後果：當顯著條目多於 `top_n` 時，被省略的是**最不顯著**（FDR 最高）的那些——*而非*富集倍數最小的。
    顯著性把關「是否納入」；效應量只負責排列已納入者。
-   **`Top N` 兩個 CSV 都不會到達。** `Download all results (CSV)` 列出每個存活條目並依 FDR 由小到大排序，附完整（未截斷）的名稱；`Download enrichment results (CSV)` 列出圖所繪製的那些列，但在這道上限**之前**——因此它是圖所顯示內容的超集，恰好多出被 `Top N` 截掉的那些列。
-10. **點圖畫布高度。** 匯出圖的高度會自動配合實際顯示的列數——`clamp(min(top_n, displayed) × 0.3 + 1.0, 2.0, 40)` 英吋——並在你每次繪圖時**重新計算**。
+   **`Top N` 兩個 CSV 都不會到達。** `Download all results (CSV)` 列出每個存活條目並依 FDR 由小到大排序，附完整（未截斷）的名稱；`Download enrichment results (CSV)` 列出圖所繪製的那些列，但在這道上限**之前**，因此它是圖所顯示內容的超集，恰好多出被 `Top N` 截掉的那些列。
+10. **點圖畫布高度。** 匯出圖的高度會自動配合實際顯示的列數（`clamp(min(top_n, displayed) × 0.3 + 1.0, 2.0, 40)` 英吋），並在你每次繪圖時**重新計算**。
     因此若某次執行在你最初的 FDR 門檻下不顯著，而你在結果畫面放寬門檻並重繪，畫布會增大以容納新顯現的列，而非把它們塞進一張矮圖中（那會截斷 Y 軸標籤）。
     編輯 **Height (in)** 欄位會把它變成手動覆寫，並一直維持到下一次富集分析執行／重跑重置自動配合為止。
 
-    **文字大小與條目數無關。** 標籤、軸標題、色標與 Hits 圖例會隨繪圖**寬度**（固定的 `Width (in) × DPI`）縮放，*而非*自動配合的高度——因此兩個條目的結果，其文字渲染大小與二十個條目的完全相同。
+    **文字大小與條目數無關。** 標籤、軸標題、色標與 Hits 圖例會隨繪圖**寬度**（固定的 `Width (in) × DPI`）縮放，*而非*自動配合的高度，因此兩個條目的結果，其文字渲染大小與二十個條目的完全相同。
     高度 `2.0` 英吋的下限存在的原因，是讓全尺寸圖例在那些稀疏結果上總能容於畫布。
 11. **匯出點圖（PNG 大小 + DPI）。** `Width (in)` / `Height (in)` / `DPI` 控制項與所見即所得保證的運作方式與火山圖完全相同——共用的 `pixels = round(inches × DPI)`、`pHYs` 物理尺寸、夾限、以及與預覽相同的渲染機制，描述於第二階段的[7. 將圖匯出為 PNG](#7-exporting-the-figure-as-png)。
     點圖特有的事實是：
@@ -731,23 +725,20 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
     - **Height** 自動配合所顯示的列數，並在每次繪圖時重新計算，除非你覆寫它（上述第 10 項），而 `Width` 與 `DPI` 是你設定的普通數值。
     - 字型以 `Width × DPI` 為準，因此改變 `Width` 或 `DPI` 會重新縮放文字；改變 `Height` 則不會。
 
-    預覽與顯示過濾器的行為，和第二階段的火山圖完全一致，理由也一樣：**改變 `Top N`、顯著性門檻或 `Minimum hit count` 會清空預覽**（按鈕回到 `Draw dot plot`），因此畫面上的圖永遠與它旁邊的控制項相符。**改變匯出尺寸則不會**——所以在調整 `Width` / `Height` / `DPI` 之後，請點擊 `Re-draw dot plot`，使預覽與下載將產生的結果相符。
+    預覽與顯示過濾器的行為，和第二階段的火山圖完全一致，理由也一樣：**改變 `Top N`、顯著性門檻或 `Minimum hit count` 會清空預覽**（按鈕回到 `Draw dot plot`），因此畫面上的圖永遠與它旁邊的控制項相符。**改變匯出尺寸則不會**，所以在調整 `Width` / `Height` / `DPI` 之後，請點擊 `Re-draw dot plot`，使預覽與下載將產生的結果相符。
 
     `Download dot plot PNG` 不受這些影響：它是依當前的值重新算繪，而不是讀取預覽，因此即使預覽區是空的，它仍會寫出正確的圖。
 
 <a id="module-mode"></a>
 ### 模組模式（Module mode）
 
-模組模式針對 KEGG *模組*（小型的功能性反應單元）而非整條路徑進行檢定，並以生物**群組 Group** 而非單一物種來界定範圍。
-目錄選擇之後的所有下游——PubChem 對應、超幾何檢定、FDR、點圖——都與路徑模式完全相同。
-
-模組模式執行與路徑模式完全相同的 PubChem → KEGG conv → 超幾何 → 使用者所選 FDR 流程，但 **(a)** 條目目錄是 KEGG 模組的集合、而非逐物種的路徑，且 **(b)** 使用者挑選的是一個**[生物群組（organism Group）](https://www.kegg.jp/kegg/tables/br08606.html)** 而非單一物種。
+模組模式執行與路徑模式完全相同的 PubChem → KEGG conv → 超幾何 → 你所選 FDR 流程，但 **(a)** 條目目錄是 KEGG 模組的集合、而非逐物種的路徑，且 **(b)** 你挑選的是一個**[生物群組（organism Group）](https://www.kegg.jp/kegg/tables/br08606.html)** 而非單一物種。
 當某模組的 KEGG `COMPLETE` 區塊包含至少 `min_group_overlap`（預設 `1`）個來自所選 Group 的生物時，該模組就會被納入分析；這就是逐物種框架如何對應到全域模組目錄的方式。
 
 1. **生物群組選擇。** 當 Analysis Mode 切換鈕設為 Module 時，第三階段 **Enrichment Analysis setup** 畫面會浮現一個 Level 單選按鈕（1 / 2 / 3）與一個 Group 下拉選單。
    在 Group 下拉選單正下方，一個 **Minimum group overlap** 數值控制項設定 `min_group_overlap` 門檻（預設 `1`，範圍 `1`–`min(Group size, 20)`）；其效果見下文的「模組 → Group 過濾」。
    Level 索引進 [KEGG 譜系欄位](https://www.kegg.jp/kegg/tables/br08606.html)（Level 1 為 `Eukaryotes`，Level 2 為 `Animals` / `Bacteria` 等，Level 3 為 `Mammals` / `Insects` 等）。
-   KEGG 目前有 11,744 個生物，全都恰好有 4 個譜系層級；我們公開前三層。
+   KEGG 目前有 11,744 個生物，全都恰好有 4 個譜系層級；本軟體公開前三層。
    挑選一個 Group 會具現化 `org_codes`：屬於該 Group 的 KEGG 生物代碼集合（`hsa`、`ath`、…）。
 
 2. **模組 → Group 過濾（[KEGG REST](https://www.kegg.jp/kegg/rest/keggapi.html)）。** 每個模組的 `/get/<module-id>` 回應攜帶一個 `COMPLETE` 區塊，列出該模組完整組裝的生物。
@@ -767,12 +758,12 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
    `M_m = |module.compounds ∩ universe|`、`k_m = |K ∩ module.compounds|`，以及
    `p_value = 1 - HypergeometricCDF(k_m - 1; N, M_m, K)`，並使用相同的零輸入短路。
 
-5. **使用者所選的 FDR 校正**——選項與預設皆同路徑模式（對共享化合物條目預設 BY；BH 可選）。
+5. **你所選的 FDR 校正**——選項與預設皆同路徑模式（對共享化合物條目預設 BY；BH 可選）。
    `m` 分母等於**被保留模組**（Group 過濾之後）的數量，而非 KEGG 目錄中約 573 個模組的總數。
    這是正確的虛無假設：ORA 問的是「在*可能*適用於此生物群組的模組中，哪些被過度代表？」把分類上無關的模組納入 `m` 會在不貢獻生物學訊號的情況下把 FDR 往上扭曲。
 
 6. **空 COMPOUND 模組計數器。** 有些 KEGG 模組（signature／reaction-only 模組）根本沒有 `COMPOUND` 區塊。
-   當 `compounds = []` 時該模組的 `M_m = 0`，因此——就和路徑模式中任何 `M_p = 0` 的條目一樣——它會在任何超幾何檢定之前被 FDR 前的 `min_entry_size` 過濾器捨棄：它永遠不會走到 `p_value = 1.0` 的短路，也不對 FDR 家族貢獻任何 p 值。
+   當 `compounds = []` 時該模組的 `M_m = 0`，因此（就和路徑模式中任何 `M_p = 0` 的條目一樣）它會在任何超幾何檢定之前被 FDR 前的 `min_entry_size` 過濾器捨棄：它永遠不會走到 `p_value = 1.0` 的短路，也不對 FDR 家族貢獻任何 p 值。
    一個獨立的空 COMPOUND 計數器仍會統計它們，底部面板 **Data** 分頁會以一行 `With compound list: <kept>  (−<empty> empty)` 呈現，使默默捨棄絕不侵蝕信任。
    （對等的路徑模式回報已列入規劃。）
 
@@ -783,9 +774,9 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
   第三階段設定畫面會顯示一個就地進度條，其 ETA 在前 5 個模組完成後，由逐模組實際時間的滾動平均推導而來。
   後續執行會使用快取，且 `Run Enrichment` 按鈕會在數秒內啟用。
 - **Group 1 只有兩個選項**（Prokaryotes / Eukaryotes），這在生物學上非常粗略。
-  它的存在是為了完整性——例如「任何原核生物」的比較研究——但多數分析會受益於 Level 2（6 個候選）或 Level 3（數十個候選）以取得更細的範圍界定。
+  它的存在是為了完整性（例如「任何原核生物」的比較研究），但多數分析會受益於 Level 2（6 個候選）或 Level 3（數十個候選）以取得更細的範圍界定。
 - **`min_group_overlap` 是一個研究旋鈕。** 預設 `1`（寬鬆的 ∃-重疊）適合探索性工作。
-  對於論文，請考慮測試一個較高的門檻以確保穩健性——一個 Group（例如「Animals」）中數百個生物裡只有一個擁有的模組，即使它通過了預設過濾，對該分析框架而言在生物學上仍是邊緣的。
+  對於論文，請考慮測試一個較高的門檻以確保穩健性。一個 Group（例如「Animals」）中數百個生物裡只有一個擁有的模組，即使它通過了預設過濾，對該分析框架而言在生物學上仍是邊緣的。
 - **模組 CSV 欄名與路徑模式 CSV 一致。** 兩種模式都匯出相同的標頭：`EntryID,EntryName,Hits,Total,Expected,EnrichmentRatio,PValue,FDR,HitKeggIDs`。分析模式從不改變它；唯一會改變它的是校正方法——`No correction` 下 `FDR` 欄會被省略。
   （`Expected` 與 `EnrichmentRatio` 的定義見上方逐路徑超幾何步驟：`EnrichmentRatio` 即 fold enrichment = 觀測／期望。）
   在模組模式中，`EntryID` 欄攜帶 `M00001` 式的模組 ID；在路徑模式中則攜帶 `<species_code><pathway_number>` 形式的 ID（例如 `gmx00010`）。
@@ -793,11 +784,9 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
 <a id="starting-a-new-analysis-round"></a>
 ### 開始新一輪分析（Starting a new analysis round）
 
-當你完成某份資料集、想重新開始時，**Start a new analysis** 會清除一切；相對地，步進器的 **Input** 步驟則保留你的設定與快取，讓你能重跑*同一份*資料集。
-
-當你完成一次富集分析、想分析另一份資料集——或從頭重跑整個流程——時，第三階段 **Enrichment Result** 畫面會在 `[Download all results (CSV)]`——三個下載中的最後一個——下方獨立一行提供一個 **Start a new analysis** 按鈕。
+當你完成一次富集分析、想分析另一份資料集（或從頭重跑整個流程）時，第三階段 **Enrichment Result** 畫面會在 `[Download all results (CSV)]`（三個下載中的最後一個）下方獨立一行提供一個 **Start a new analysis** 按鈕。
 按下它會開啟一個確認對話框，警告目前的 DAM / 富集分析結果、以及任何尚未下載的圖或 CSV 都將遺失。
-按下 **Start over** 後，應用程式會把每個參數重置為其預設值、清除已載入的 MS-DIAL `.txt` / metadata `.csv` 以及記憶體中的 KEGG 資料，並把你帶回第一階段——*而不會*重新執行啟動時的生物清單載入。
+按下 **Start over** 後，應用程式會把每個參數重置為其預設值、清除已載入的 MS-DIAL `.txt` / metadata `.csv` 以及記憶體中的 KEGG 資料，並把你帶回 **Choose your analysis** 畫面——*而不會*重新執行啟動時的生物清單載入。
 （磁碟上的 KEGG 快取會留存，因此事後重新取得相同物種或模組會是快速的快取命中。）
 
 這刻意與階段步進器的 **Input** 步驟有所區別，後者會導航回第一階段，同時*保留*每項設定、已載入的檔案與已取得的快取，讓你能在**同一份**資料集上持續迭代。
@@ -824,7 +813,7 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
 <a id="when-to-use-it"></a>
 ### 何時使用（When to use it）
 
-- 你只有**單一條件**——一種組織、一個時間點、一種處理——因此沒有東西可供比較。
+- 你只有**單一條件**（一種組織、一個時間點、一種處理），因此沒有東西可供比較。
 - 你想知道**你的方法涵蓋了什麼**，以便在設計比較之前先確認：你的平台究竟看得到哪些路徑。
 - 你想在投入完整的 DAM + 富集分析路線之前，先對資料集做一次**快速調查**。PubChem 與 KEGG 快取在兩條路線之間共用，因此先跑一次覆蓋率調查會讓之後的富集分析執行得更快。
 
@@ -837,18 +826,18 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
 - **群組 `.csv`** — **選用。** 提供時，其群組會出現在設定畫面上供你勾選，你可以排除 QC pool 或溶劑空白。未提供時，每一個樣本欄都算作資料，且篩選過程不會讀取任何強度值。
 
 第一階段的關卡也相應放寬：用來保護 *t* 檢定的「至少 2 個群組、每組至少 2 個樣本」等檢查在這條路線上不會執行。
-但一個你已挑選、卻**解析失敗**的 `.csv` 在兩條路線上都會阻擋執行——那是真正的載入問題，而非未提供的輸入。
+但一個你已挑選、卻**解析失敗**的 `.csv` 在兩條路線上都會阻擋執行。那是真正的載入問題，而非未提供的輸入。
 
 <a id="setup-screen"></a>
 ### 設定畫面（Setup screen）
 
 **Sample groups**（僅在已載入 `.csv` 時顯示）。
-每個群組一個核取方塊，`Unassigned` 除外——它代表的是「沒有群組指派」，而不是你選擇去測量的一種條件。
+每個群組一個核取方塊，`Unassigned` 除外。它代表的是「沒有群組指派」，而不是你選擇去測量的一種條件。
 所有群組預設都是勾選狀態。取消勾選某個 QC pool 或溶劑空白，其化合物就不會進入結果。
 本軟體從不從群組名稱去猜測哪些是這類群組：群組的命名是你的，猜錯會靜靜地丟棄真實資料。
 
 **Detected in at least N % of a group's samples**（預設 `50 %`）。
-當一個特徵在某群組中至少這個比例的樣本裡具有真實的量測強度——存在且大於零——它才算作*在該群組中被偵測到*。
+當一個特徵在某群組中至少這個比例的樣本裡具有真實的量測強度（存在且大於零），它才算作*在該群組中被偵測到*。
 在**任何一個**已選群組中都未被偵測到的特徵會被排除。
 此檢定逐群組套用，結果以 OR 合併：在任何一個已選條件中被看見的化合物，就是樣本中含有的化合物。
 
@@ -859,7 +848,7 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
 
 **Deduplication** — 與第二階段 DAM 設定畫面完全相同的核取方塊與 `RT tolerance (min)` 欄位，繫結到相同的設定。
 在這條路線上，去除重複**無法改變找到哪些化合物，也無法改變任何一個覆蓋率數字。**
-原因是結構性的：它以 InChIKey 分組，且每一組必定至少回傳一個存活者，而偵測到的化合物集合是存活 InChIKey **集合**的 KEGG 映像——所以無論開關與否，該集合都相同。
+原因是結構性的：它以 InChIKey 分組，且每一組必定至少回傳一個存活者，而偵測到的化合物集合是存活 InChIKey **集合**的 KEGG 映像，所以無論開關與否，該集合都相同。
 它真正改變的是**匯出的 CSV 中每個化合物列出哪些代謝物名稱**，因為被選為代表的特徵不同。Data 分頁的 `Dedupe:` 行與其稽核下載，是它的效果另外兩個可見之處。
 
 此畫面上刻意**沒有 Drop Unknown features 核取方塊**。沒有 InChIKey 的特徵在任何設定下都無法進入結果，因此提供這個核取方塊等於把一個「不是選擇的東西」呈現為一個選擇。
@@ -901,7 +890,7 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
 - **Minimum entry size** — 丟棄在 *KEGG 中*化合物數低於此值的條目。預設 `3`，**硬性下限 `1`**。
 
     那個下限正是讓「依覆蓋率遞減」的表格有意義的東西。
-    一份典型物種路徑目錄中約有 **20 %** 的條目**完全沒有** KEGG 化合物——包括每一張「global and overview map」，例如 `hsa01100 Metabolic pathways`——另有約 10 % 只有一或兩個。
+    一份典型物種路徑目錄中約有 **20 %** 的條目**完全沒有** KEGG 化合物（包括每一張「global and overview map」，例如 `hsa01100 Metabolic pathways`），另有約 10 % 只有一或兩個。
     若沒有下限，這些條目會以 `0 %`、`50 %` 或單一命中的 `100 %` 盤據表格頂端，排在每一個有意義的結果之前。
     零化合物條目的數量會以灰色文字報告在該控制項下方（`76 of 372 entries have no compounds in KEGG and are never shown.`），而非被默默吞掉。
 
@@ -912,7 +901,7 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
 兩個門檻是一起套用的，因此哪一個先列出並不會改變你看到的列。
 之所以要共用同一個順序，是為了讓控制項、**Data** 分頁報告的計數、以及文件所述的篩選語意三者無法各自漂移。
 
-> **注意：** 沒有任何條目是依其識別碼被排除的。軟體中任何地方都沒有硬編碼的「global map」ID 清單；那些條目之所以在表格中消失，只是因為 KEGG 沒有給它們化合物，接著最小條目大小下限就像處理任何其他空條目一樣把它們移除。共用的磁碟 KEGG 快取同樣從不被篩選，因此一次覆蓋率執行不會影響之後富集分析的宇集。
+> **注意：** 沒有任何條目是依其識別碼被排除的。軟體中任何地方都沒有硬編碼的「global map」ID 清單；那些條目之所以在表格中消失，只是因為 KEGG 沒有給它們化合物，接著最小條目大小下限就像處理任何其他空條目一樣把它們移除。共用的磁碟 KEGG 快取同樣從不被篩選，因此一次覆蓋率執行不會影響之後富集分析的母體。
 
 <a id="the-entry-chain-in-the-data-tab"></a>
 ### Data 分頁中的條目鏈
@@ -936,7 +925,7 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
 最後三行跟隨篩選控制項，並在你拖動控制項後的**下一幀**更新，因為 Data 分頁的繪製順序在控制項之前。
 點圖的註解條則永遠與它們一致，因為一張圖不可能活得比它所描述的值更久：移動任何一個過濾器都會丟棄該圖，所以你當下看到的註解條，就是以當前設定值繪製的。
 
-當硬性下限為 `1` 時，`With compound list:` 與 `Entry size >= 1:` 必然相等——一個條目「至少有一個化合物」與「有化合物清單」是同一件事。
+當硬性下限為 `1` 時，`With compound list:` 與 `Entry size >= 1:` 必然相等，一個條目「至少有一個化合物」與「有化合物清單」是同一件事。
 兩行仍然都會顯示：一個什麼都沒濾掉的漏斗階段本身就是有用的資訊，而長度會隨設定改變的鏈更難閱讀。
 
 這條路線上任何地方都沒有 `Tested:` 這一行。「Tested」意指「進入了超幾何檢定」，而這條路線不執行任何檢定。
@@ -961,7 +950,7 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
 所畫出的列正是表格顯示的那些列、順序也相同——兩者來自同一條篩選鏈。
 註記帶（annotation strip）記錄模式與目標、偵測到的化合物數、顯示了整份目錄中的多少個條目、目前生效的篩選值、一份精簡的群組紀錄，以及 `Descriptive coverage — no statistical test` 這一行。
 
-**圖是按需求繪製的，而且在你移動任何過濾器時被丟棄。** 進入畫面時顯示的是 `Click "Draw dot plot" to render the plot.` 而不是一張圖——算繪需要數秒，而一次分析恰好結束在哪組值上，未必是你想要的那組。畫出之後，改變 `Minimum entry size`、`Minimum hit count`、`Sort by` 或 `Top N`——包括點擊可排序的欄位標題——都會再次清空它，因此圖永遠不會與它旁邊那個隨著你拖曳而即時更新的表格互相矛盾。算繪進行中時按鈕會被停用，旁邊會出現 `Rendering…` 指示。
+**圖是按需求繪製的，而且在你移動任何過濾器時被丟棄。** 進入畫面時顯示的是 `Click "Draw dot plot" to render the plot.` 而不是一張圖：算繪需要數秒，而一次分析恰好結束在哪組值上，未必是你想要的那組。畫出之後，改變 `Minimum entry size`、`Minimum hit count`、`Sort by` 或 `Top N`（包括點擊可排序的欄位標題）都會再次清空它，因此圖永遠不會與它旁邊那個隨著你拖曳而即時更新的表格互相矛盾。算繪進行中時按鈕會被停用，旁邊會出現 `Rendering…` 指示。
 `Download dot plot PNG` 不受這些影響：它是依當前的篩選值重新算繪，而不是讀取預覽，因此即使預覽區是空的，它仍會寫出正確的圖。
 
 <a id="csv-export"></a>
@@ -972,7 +961,7 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
 1. 一行標題。
 2. `# No statistical test was performed. These are descriptive counts.`
 3. 執行脈絡：模式、目標、偵測到的化合物數、條目計數，以及目前生效的篩選值。
-4. 特徵納入紀錄：已選群組清單、完整的可選清單，以及偵測門檻——或 `# Sample groups: none supplied; every feature included.`
+4. 特徵納入紀錄：已選群組清單、完整的可選清單，以及偵測門檻，或 `# Sample groups: none supplied; every feature included.`
 5. 一行說明 `share` 值不會加總為 1，因為條目之間共用化合物。
 
 欄位為 `entry_id,entry_name,entry_size,hits,coverage,share,hit_compounds`。
@@ -999,14 +988,11 @@ dropped_alignment_id,inchikey,winner_alignment_id,decided_at,loser_value,winner_
 空白意味著「我們從未量測這個」（`NaN`，內部的*缺失*標記）；`0.0` 則意味著「我們量測了它，而它確實是零」。
 本節會明確說明每一種如何被處理，因為「把空白填補為 `0`」這個常見捷徑會默默地使下游每一項統計產生偏誤。
 
-metabolopan 在**一筆缺席的量測**與**一筆確實為零的量測**之間劃出一條明確的界線，而這項區別會被刻意且一致地貫穿每一個下游步驟。
-在分析前把缺失儲存格填補為 `0`（一個常見習慣）會默默使統計產生偏誤，所以本節明確說明每個值的意義以及它如何被處理。
-
 **規則，在載入時即固定。** 當解析 MS-DIAL `.txt` 時，一個空白／僅含空白字元／`"null"`／`"NA"`（不分大小寫）或其他無法解析的強度儲存格會變成 `f64::NAN`——*缺失／未量測／無法計算*的內部標記（這裡 `f64::NAN` 即 IEEE 浮點數的「非數值」）。
 一個字面上讀作 `0` 的儲存格則解析為真正的 `0.0`。
 數值型中繼資料欄位遵循相同的劃分：空白儲存格是*缺席*（`None`），而寫成 `0` 則是真正的零（而且因為它會被當作正規化的除數，會被視為資料輸入錯誤而報錯，而非默默當成缺席）。
 
-**核心行為：`NaN` 被略過、`0.0` 參與運算。** DAM 中每個逐特徵的歸約——群組平均、中位數、變異數、IQR 與相異值計數——都會先*丟棄* `NaN` 值，再對剩下的部分計算。
+**核心行為：`NaN` 被略過、`0.0` 參與運算。** DAM 中每個逐特徵的歸約（群組平均、中位數、變異數、IQR 與相異值計數）都會先*丟棄* `NaN` 值，再對剩下的部分計算。
 `0.0` 作為一筆真實觀測，會完整地進入算術。
 在同樣三個重複樣本上，這就是差異：
 
@@ -1029,7 +1015,7 @@ metabolopan 在**一筆缺席的量測**與**一筆確實為零的量測**之間
 | **趨勢分類** | 一個其校正後 *p* 值或 `log2(FC)` 為 `NaN` 的特徵會被分類為 `NotSignificant`；它永遠不會被判為 Up 或 Down。 | 一個有限、顯著的結果會照常被分類為 Up 或 Down。 |
 | **`NaN` 與 `±∞` 保持區別** | `NaN` 意味著「無法被計算」（一個 *n* < 2 的群組；Brunner–Munzel 下完美分層的群組）。`NaN` 點會從圖中丟棄，但仍會列於 CSV 中。 | `±∞`（即正負無限大）是一個真實、*有序*的結果——一個 underflow 到剛好為 0 的 *q* 值在 `−log10` 軸上會變成 `+∞`（*超出刻度但有序*），而一個零平均群組會給出 `±∞` 倍數變化。`+∞` 點會被停靠在圖的邊緣。 |
 
-> **注意：** `f64::NAN` 是*缺失*標記，`f64::INFINITY` / `±∞`（即正負無限大）是一個*超出刻度但有序*的真實結果，而 `0.0` 是*一個真正的零*——這三個不同的狀態，軟體絕不會把任何一個塌縮成另一個。
+> **注意：** `f64::NAN` 是*缺失*標記，`f64::INFINITY` / `±∞`（即正負無限大）是一個*超出刻度但有序*的真實結果，而 `0.0` 是*一個真正的零*。這三個不同的狀態，軟體絕不會把任何一個塌縮成另一個。
 
 **CSV 編碼。** 匯出時每個狀態都會被寫成不同形式，使檔案可往返：
 
@@ -1044,16 +1030,13 @@ metabolopan 在**一筆缺席的量測**與**一筆確實為零的量測**之間
 這是唯一一處兩者被刻意合併的地方。
 
 **結論。** 把確實缺失的量測留為*空白*，並把量測到的零寫成 `0`；軟體會從輸入到匯出都讓它們保持區別。
-若你事先把缺失儲存格填補為 `0`，就會灌大樣本數、把群組平均拉向零、扭曲變異數與倍數變化，並使差異累積的判定偏誤——所以請讓 metabolopan 以 `NaN` 承載缺失值，由它替你完成這些記帳。
+若你事先把缺失儲存格填補為 `0`，就會灌大樣本數、把群組平均拉向零、扭曲變異數與倍數變化，並使差異累積的判定偏誤，所以請讓 metabolopan 以 `NaN` 承載缺失值，由它替你完成這些記帳。
 <a id="dual-mode-positive--negative-ionization-input"></a>
 ## 雙模式（正 + 負離子）輸入（Dual-mode input）
 
 若你把同一批樣本同時跑過正離子化與負離子化，你會有兩個描述同一個實驗的 MS-DIAL `.txt` 檔。
-雙模式會一次載入兩者，並以一條刻意保守的聯集規則融合它們的富集訊號——只有在沒有任何模式持反對意見時，某化合物才算作「up」。
+雙模式會一次載入兩者，並以一條刻意保守的聯集規則融合它們的富集訊號，只有在沒有任何模式持反對意見時，某化合物才算作「up」。
 中繼資料中的 `biosample` 欄，正是用來告訴工具 `CTR_positive_01` 與 `CTR_negative_01` 其實是同一個生物重複。
-
-代謝體學實驗常把同一批生物樣本同時跑正離子化與負離子化兩種模式，每個研究因此產生兩個 MS-DIAL `.txt` 匯出檔。
-本應用程式支援一次載入兩個檔案，並以一條保守的聯集規則合併它們的富集訊號。
 
 <a id="when-to-use-dual-mode"></a>
 ### 何時使用雙模式（When to use dual-mode）
@@ -1065,7 +1048,7 @@ metabolopan 在**一筆缺席的量測**與**一筆確實為零的量測**之間
 ### 準備輸入（Preparing inputs）
 
 1. **兩個 `.txt` 檔。** 每個離子模式一個。
-   `Adduct type` 欄同時驅動兩件事：插槽 1 模式單選按鈕的自動填入（見下方 *第一階段 UI*），以及當使用者手動覆寫為相反極性時的不一致提示（以 `+` 結尾的加成物推論為 Positive、以 `-` 結尾推論為 Negative）。
+   `Adduct type` 欄同時驅動兩件事：插槽 1 模式單選按鈕的自動填入（見下方 *第一階段 UI*），以及當你手動覆寫為相反極性時的不一致提示（以 `+` 結尾的加成物推論為 Positive、以 `-` 結尾推論為 Negative）。
 2. **一個含 `biosample` 欄的中繼資料 CSV**（例如標頭 `sample,biosample,group`；欄位順序不拘）。
    每一列把一個逐模式的樣本名稱（例如 `CTR_positive_01`、`CTR_negative_01`）對應到其**生物樣本標籤**（兩個模式皆為同一個 `CTR-01`）與群組。
    biosample 欄讓工具能辨識兩個名稱不同的樣本其實是同一個生物重複。
@@ -1073,7 +1056,7 @@ metabolopan 在**一筆缺席的量測**與**一筆確實為零的量測**之間
 以沒有 `biosample` 欄的 CSV 進行的雙模式執行，會在第一階段被一個明確的錯誤擋下——請新增 `biosample` 欄、或移除第二個 `.txt` 以繼續。
 
 > **單模式並不需要 `biosample` 欄。** 它只在載入第二個 `.txt` 時才為必需。只有一個 `.txt` 時，單純的 `sample,group` 形式就足夠
-> （若存在 `biosample` 欄，會以名稱辨識並排除於第二階段中繼資料正規化的單選按鈕之外——它不會被當作數值中繼資料欄提供）。
+> （若存在 `biosample` 欄，會以名稱辨識並排除於第二階段中繼資料正規化的單選按鈕之外。它不會被當作數值中繼資料欄提供）。
 
 <a id="unbalanced-or-missing-mode-samples"></a>
 ### 不平衡或缺少某模式的樣本（Unbalanced or missing-mode samples）
@@ -1109,7 +1092,7 @@ metabolopan 在**一筆缺席的量測**與**一筆確實為零的量測**之間
 <a id="stage-2-shared-setup-per-mode-dam"></a>
 ### 第二階段（共用設定、逐模式 DAM）（Stage 2）
 
-第二階段使用單一設定畫面——一種正規化方法、一組比較（分子組 vs 分母組）、一種 DAM 方法、一種 FDR 方法——並套用於**兩個**模式。
+第二階段使用單一設定畫面（一種正規化方法、一組比較（分子組 vs 分母組）、一種 DAM 方法、一種 FDR 方法），並套用於**兩個**模式。
 在執行器內部，兩個 tokio worker 會並行對每個模式執行 `run_dam`；執行畫面會顯示兩條堆疊的進度條。
 若任一模式失敗，錯誤訊息會指出是哪個模式（`POS: ...` 或 `NEG: ...`）。
 
@@ -1140,7 +1123,7 @@ DAM CSV 匯出會在開頭發出一行 `# Mode: dual (POS+NEG)` 註解，並在�
 `Down` 為對稱情形。
 `Both` 要求至少有一個 Up 或 Down 訊號，且無任何 Conflict，且非（一個模式 Up 而另一個模式 Down）。
 
-**單模式套用相同的衝突規則。** 單模式執行是此規則的退化單模式情形：某化合物同時被該單一模式內的一個 Up 特徵與一個 Down 特徵到達——兩個不同的 InChIKey 對應到**同一個** KEGG 化合物，一個 Up + 一個 Down——會彙總為 `Conflict` 並被**排除**於 K 之外，與雙模式採取相同的保守選擇。
+**單模式套用相同的衝突規則。** 單模式執行是此規則的退化單模式情形：某化合物同時被該單一模式內的一個 Up 特徵與一個 Down 特徵到達（兩個不同的 InChIKey 對應到**同一個** KEGG 化合物，一個 Up + 一個 Down）會彙總為 `Conflict` 並被**排除**於 K 之外，與雙模式採取相同的保守選擇。
 （在此之前，單模式會把這類含糊化合物保留在 K 中。）因衝突被排除的計數會出現在第三階段的 INFO 日誌中。
 對於任何沒有這種模式內衝突的資料集，單模式的 K 維持不變。
 
@@ -1176,7 +1159,7 @@ Foreground — significant features (active direction)
 <a id="caches-and-provenance"></a>
 ## 快取與來源（Caches and provenance）
 
-為避免每次工作階段都重新下載相同的 KEGG / PubChem 資料，本應用程式會保留本地快取檔且永不使其過期——不論年代多久，已快取的條目都會被回傳，何時刷新由你決定。
+為避免每次工作階段都重新下載相同的 KEGG / PubChem 資料，本軟體會保留本地快取檔且永不使其過期——不論年代多久，已快取的條目都會被回傳，何時刷新由你決定。
 **Data** 分頁會中立地顯示每個快取的擷取日期，讓你自行判斷新鮮度。
 
 **磁碟上的檔案**（位於 KEGG 快取目錄中）：
@@ -1195,37 +1178,34 @@ Foreground — significant features (active direction)
 > **給開發者：** 每個逐條目的 `fetched_at` 都是一個 `DateTime<Utc>`（一個 UTC 時間戳）。
 > 快取鎖機制：
 > - **PubChem `.inchikey.lock` + KEGG `.cid_to_cpd.lock`** — 短命，只在快取寫入期間持有。等待 30 s、以 100 ms 輪詢。（兩個檔案皆以點為前綴／隱藏。）
-> - **KEGG `.modules.lock`** — 長時間運行的建議鎖，在整個約 6–12 分鐘的模組擷取期間持有。鎖檔內嵌持有者的 PID 與一個至多每 30 s 改寫一次的心跳 `last_seen_at` 時間戳。並行的應用程式實例會看見這個存活的鎖，並等待至多 30 min（5 s 輪詢）直到它清除。若心跳超過 90 s 未更新，該鎖會被視為孤立（持有者已崩潰）並被覆寫。這可防止兩個應用程式實例在模組擷取迴圈中競速、進而一同觸發 KEGG 的 403 速率限制。
+> - **KEGG `.modules.lock`** — 長時間運行的建議鎖，在整個約 6–12 分鐘的模組擷取期間持有。鎖檔內嵌持有者的 PID 與一個至多每 30 s 改寫一次的心跳 `last_seen_at` 時間戳。並行的應用程式實例會看見這個存活的鎖，並等待至多 30 min（5 s 輪詢）直到它清除。若心跳超過 90 s 未更新，該鎖會被視為孤立（持有者已崩潰），並被覆寫。這可防止兩個應用程式實例在模組擷取迴圈中競速、進而一同觸發 KEGG 的 403 速率限制。
 > - **啟動清理。** 每次應用程式啟動時，快取目錄的鎖檔（`.inchikey.lock`、`.cid_to_cpd.lock`、`.modules.lock`）都會被無條件移除，使一次崩潰絕不會永久阻擋未來的寫入。
 
 快取新鮮度——**沒有過期門檻**。
 所有 KEGG 快取都不會過期：不論年代多久，已快取的條目都會被回傳，且應用程式絕不會自行默默重新擷取。
-取而代之的是底部面板 **Data** 分頁的 `Cache data` 區塊——它出現在第三階段設定之後的每一個畫面上，兩條路線皆然：Enrichment Analysis、執行中畫面、Enrichment Result，以及覆蓋率路線的 Setup 與 Coverage 畫面——會中立地呈現擷取時間，把刷新的決定留給你：
+取而代之的是底部面板 **Data** 分頁的 `Cache data` 區塊（它出現在第三階段設定之後的每一個畫面上，兩條路線皆然：Enrichment Analysis、執行中畫面、Enrichment Result，以及覆蓋率路線的 Setup 與 Coverage 畫面），會中立地呈現擷取時間，把刷新的決定留給你：
 
 - 逐物種路徑快取：顯示 `KEGG pathways (<code>): <ts>`（凡該區塊出現且已載入物種目錄之處皆有）；經由 `Refresh KEGG pathway cache` 按鈕重新擷取。
 - 模組條目：顯示一個 `KEGG modules fetched date: <oldest> -> <newest>` 跨度；warm-fetch 的決定取決於快取鍵的成員資格。
   經由 `Refresh KEGG module cache` 按鈕重新擷取。
 - 在 Enrichment **Result** 畫面上，目錄刷新按鈕（模組 / 路徑）會導回設定畫面，在那裡執行重新擷取（其進度列位於該處）；PubChem / KEGG-conv 的刷新則透過一個確認對話框就地執行。
 - 生物名冊（`organisms.json`）：啟動時載入一次（快取優先：不論年代多久，磁碟上的副本永遠勝出），可在應用程式內透過 Data 分頁 `Cache data` 區塊中的 `Refresh KEGG organism list` 按鈕刷新。
-  該按鈕會就地重新擷取名冊而無需重新啟動，來源是 KEGG 的 BRITE 階層（`GET /get/br:br08601`）——它過去呼叫的 `/list/organism` 端點已被 KEGG 停用；或者，從快取目錄刪除 `organisms.json` 並重新啟動以強制冷擷取。
-  （`Refresh KEGG pathway cache` 按鈕是分開的——它只重新擷取所選物種的「路徑→化合物」對應，而非生物名冊。）
+  該按鈕會就地重新擷取名冊而無需重新啟動，來源是 KEGG 的 BRITE 階層（`GET /get/br:br08601`）。它過去呼叫的 `/list/organism` 端點已被 KEGG 停用；或者，從快取目錄刪除 `organisms.json` 並重新啟動以強制冷擷取。
+  （`Refresh KEGG pathway cache` 按鈕是分開的。它只重新擷取所選物種的「路徑→化合物」對應，而非生物名冊。）
 
 <a id="saving-and-loading-session-settings-reproducibility"></a>
 ## 儲存與載入工作階段設定（再現性）（Saving and loading session settings）
 
-你通常永遠不需要手動碰這個檔案——當你點擊 **[Save settings…]** 時，應用程式會替你寫入它，並在 **[Load settings…]** 時把它讀回來。
+你通常永遠不需要手動碰這個檔案，當你在 Data 分頁點擊 **[Save settings…]** 時，應用程式會替你寫入它，並在同分頁的 **[Load settings…]** 時把它讀回來。
 它的存在是為了讓一次執行*可再現*：把同一份快照加上同一份輸入交給合作者（或未來的你），分析結果就會逐位元相同。
 此處之所以記載格式，只是給那些想要將它腳本化、或想檢視擷取了什麼的人參考。
-
-Data 分頁中的兩個按鈕——**[Save settings…]** 與 **[Load settings…]**——讓你把每一項第一至第三階段的參數快照到一個 JSON 檔，並在日後重新套用。
-其用意在於再現性：若你（或合作者）以同一份快照與同一份輸入重新執行，分析結果會逐位元相同。
 
 <a id="whats-in-the-file"></a>
 ### 檔案內容（What's in the file）
 
 一份美化排版（pretty-printed）的 JSON，包含：
 
-- `schema_version`（目前為 `3`——磁碟上的 schema 基準）、`app_version`、`saved_at`（UTC）、一個初始為 `""` 的 `user_note` 欄——你可以用任何文字編輯器打開檔案並填入它。
+- `schema_version`（目前為 `3`，磁碟上的 schema 基準）、`app_version`、`saved_at`（UTC）、一個初始為 `""` 的 `user_note` 欄。你可以用任何文字編輯器打開檔案並填入它。
 - `input_files` — 對於你在儲存時已載入的每個 MS-DIAL `.txt` 與中繼資料 `.csv`：該檔的 basename + 其 SHA-256。
   **僅雜湊——絕不包含你的原始資料。** 這讓未來的 Load 能偵測到你的輸入是否已偏離當初製作快照所依據的版本。
 - `settings` — 從第一階段到第三階段的每一項參數（分析模式、物種 / 生物群組、比較群組、DAM 方法、正規化、FDR 方法、門檻、匯出尺寸、富集方向 / FDR / top-N）。
@@ -1334,7 +1314,7 @@ Data 分頁中的兩個按鈕——**[Save settings…]** 與 **[Load settings�
 | `coverage_min_entry_size` | `1`–`200` | `3` | **Minimum entry size** 控制項（覆蓋率結果） | 覆蓋率路線：捨棄在 KEGG 中化合物數少於此值的條目。硬性下限為 `1`，因此零化合物條目永遠不會顯示。與 `min_entry_size` 不同，後者是富集分析路線的 FDR 前過濾。 |
 | `coverage_sort_key` | `"Coverage"` \| `"Hits"` \| `"EntrySize"` \| `"EntryId"` | `"Coverage"` | **Sort by** 選擇器（覆蓋率結果） | 覆蓋率路線：結果表格的排序鍵，與可點擊的欄標題共用。應用程式提供 `Coverage` 與 `Hits`；另外兩個可正確載入與排序，但目前不能在 UI 中選取。 |
 
-**這些範圍是應用程式內的控制項上限，而非檔案的硬性限制。** 手動編輯成超出所列範圍的值會照寫載入，只在你下次於應用程式中碰觸該控制項時才會被夾限；匯出尺寸還會額外被夾限，使 `round(inches × DPI)` 在算繪時每軸維持在 `64–20000` px 內。檢查有多嚴格，取決於鍵位於哪一層。在**外層**——`schema_version`、`app_version`、`saved_at`、`user_note`、`input_files`、`settings`——拼錯或多餘的鍵會在 Load 時被拒絕，任何非 `3` 的 `schema_version` 亦然。在 `settings` 之內，無法辨識的鍵會被**靜默忽略**，因此那裡的錯字不會導致載入失敗，只是不會生效。而 `settings` 內*缺少*某個鍵，對上表大多數欄位會被拒絕；只有列出預設值的那八個會回退到預設（`log_transform`、`min_entry_size`、`dedup_rt_tolerance_min`、`analysis_route`、`coverage_min_entry_size`、`coverage_sort_key`、`coverage_selected_groups`、`coverage_presence_threshold`）。上述五個依賴輸入的欄位是唯一會在 Load 時被重設的欄位。
+**這些範圍是應用程式內的控制項上限，而非檔案的硬性限制。** 手動編輯成超出所列範圍的值會照寫載入，只在你下次於應用程式中碰觸該控制項時才會被夾限；匯出尺寸還會額外被夾限，使 `round(inches × DPI)` 在算繪時每軸維持在 `64–20000` px 內。檢查有多嚴格，取決於鍵位於哪一層。在**外層**（`schema_version`、`app_version`、`saved_at`、`user_note`、`input_files`、`settings`），拼錯或多餘的鍵會在 Load 時被拒絕，任何非 `3` 的 `schema_version` 亦然。在 `settings` 之內，無法辨識的鍵會被**靜默忽略**，因此那裡的錯字不會導致載入失敗，只是不會生效。而 `settings` 內*缺少*某個鍵，對上表大多數欄位會被拒絕；只有列出預設值的那八個會回退到預設（`log_transform`、`min_entry_size`、`dedup_rt_tolerance_min`、`analysis_route`、`coverage_min_entry_size`、`coverage_sort_key`、`coverage_selected_groups`、`coverage_presence_threshold`）。上述五個依賴輸入的欄位是唯一會在 Load 時被重設的欄位。
 
 <a id="when-is-each-button-available"></a>
 ### 各按鈕何時可用（When is each button available）
@@ -1342,7 +1322,7 @@ Data 分頁中的兩個按鈕——**[Save settings…]** 與 **[Load settings�
 - **Save settings…** 在啟動畫面之後的每個畫面上都啟用，無論是否已載入輸入。
   從空白的第一階段儲存，會把你偏好的預設擷取為下次可用的預設組合。
 - **Load settings…** **只在第一階段**啟用。
-  在其他階段該按鈕會變灰；停留滑鼠其上會顯示「Loading settings is only available on the Stage 1 input screen.」這是刻意的——在分析進行到一半時套用快照，會使螢幕上的結果與新參數不同步，因此工作流程要求你從輸入重新執行。
+  在其他階段該按鈕會變灰；停留滑鼠其上會顯示「Loading settings is only available on the Stage 1 input screen.」這是刻意的，在分析進行到一半時套用快照，會使螢幕上的結果與新參數不同步，因此工作流程要求你從輸入重新執行。
 
 <a id="loading-workflow"></a>
 ### 載入流程（Loading workflow）
@@ -1353,9 +1333,9 @@ Data 分頁中的兩個按鈕——**[Save settings…]** 與 **[Load settings�
    一個確認對話框會向你顯示其中的內容：
    - 儲存時間戳（以你的當地時間顯示）、快照的應用程式版本、使用者備註（若有）。
    - 設定的單行摘要（分析模式、DAM 方法 + FDR、正規化、富集方向 + FDR + top-N）。
-   - **雜湊不符**——若你目前載入的任一輸入檔的 SHA-256 與快照不同，會列在此處。
+   - **雜湊不符**，若你目前載入的任一輸入檔的 SHA-256 與快照不同，會列在此處。
      若你選擇繼續，設定仍會套用，但你會被警告輸入已偏移。
-   - **欄位重設**——若快照指名了一個分子 / 分母組、一個中繼資料欄、一個 PQN 參考群組、或一個覆蓋率樣本組，而它不存在於你目前載入的中繼資料中，這些欄位會被列出並在套用時重設為 `None`。
+   - **欄位重設**，若快照指名了一個分子 / 分母組、一個中繼資料欄、一個 PQN 參考群組、或一個覆蓋率樣本組，而它不存在於你目前載入的中繼資料中，這些欄位會被列出並在套用時重設為 `None`。
      你會需要在第二階段設定中重新挑選它們。
      （此區段只在你於 Load 時已載入中繼資料時出現；若你在上傳中繼資料前就 Load，則安全網改為第二階段設定的關卡——見下一段。）
 3. 點擊 **Apply settings** 以覆寫你目前的設定，或 **Cancel** 以丟棄。
@@ -1384,10 +1364,9 @@ Data 分頁中的兩個按鈕——**[Save settings…]** 與 **[Load settings�
 <a id="reporting-bugs"></a>
 ## 回報問題（Reporting bugs）
 
-若有什麼看起來不對勁——一個錯誤、一次卡死、兜不攏的結果——取得協助最快的方式是點擊日誌窗格中的 **[Download bug report…]**，並把產生的 zip 附到 GitHub issue 或電子郵件。
+若有什麼看起來不對勁（一個錯誤、一次卡死、兜不攏的結果）取得協助最快的方式是點擊日誌窗格中的 **[Download bug report…]**（位於視窗底部、**Clear** 按鈕旁），並把產生的 zip 附到 GitHub issue 或電子郵件。
 這個套組在設計上即受隱私邊界約束：它攜帶日誌與設定，絕不含你的原始資料，並從任何路徑中清除你的家目錄。
 
-若有什麼看起來不對勁——一個非預期的錯誤、一個卡死的階段、與預期不符的結果——取得協助最簡單的方式是點擊日誌窗格中的 **[Download bug report…]**（位於視窗底部、**Clear** 按鈕旁）。
 一個確認對話框會列出產生的 zip 將包含的檔案，接著一個儲存檔案對話框讓你挑選要放在哪裡。
 
 該 zip 恰好包含八個檔案：
@@ -1396,7 +1375,7 @@ Data 分頁中的兩個按鈕——**[Save settings…]** 與 **[Load settings�
 - `version.txt` — 應用程式建置資訊（套件版本、git SHA、rustc、target）。
 - `RUST_LOG.txt` — 僅 `RUST_LOG` 指示詞的值，單獨一行。
 - `KEGG_CACHE_DIR.txt` — 僅 `KEGG_CACHE_DIR` 環境變數的值（或 `<unset>`）。
-  這兩個是逐變數的檔案（檔名 = 變數名），因此沒有人會把這個套組誤認為完整的環境傾印——只有這兩個具名變數會被納入。
+  這兩個是逐變數的檔案（檔名 = 變數名），因此沒有人會把這個套組誤認為完整的環境傾印，只有這兩個具名變數會被納入。
 - `logs.txt` — 本工作階段的每一則 INFO / WARN / ERROR 事件（HTTP 與其他低階依賴的雜訊會被過濾掉，使檔案保持可讀）。
 - `app_state.txt` — 你所在的階段與目前的設定（分析模式、物種／群組、比較群組、FDR 方法、門檻等）。
 - `input_summary.txt` — 你已載入的 MS-DIAL 檔案與中繼資料 CSV 的路徑與計數（僅路徑——無儲存格值）。

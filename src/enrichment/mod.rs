@@ -2,8 +2,7 @@
 //! entries (pathways in pathway mode, modules in module mode), plus
 //! CSV export.
 //!
-//! See the `enrichment-ora` capability spec for the
-//! requirement contract.
+//! Owner: the `enrichment-ora` capability.
 
 pub mod export;
 pub mod ora;

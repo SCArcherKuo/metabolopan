@@ -2,7 +2,7 @@
 //! filter, then deduplication, per ion-mode table.
 //!
 //! Pure — no I/O, no network, no `tracing` from these bodies (the orchestrator
-//! logs around the calls). See the `kegg-coverage` capability spec.
+//! logs around the calls). Owner: the `kegg-coverage` capability.
 
 use std::collections::HashSet;
 

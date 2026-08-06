@@ -9,7 +9,7 @@
 <!-- Fixes #123 / Closes #123, or "n/a". -->
 
 - Issue:
-- OpenSpec change name (if this went through `propose`/`apply`):
+- Design notes or prior discussion (maintainers: the change name, if any):
 
 ## Test plan
 

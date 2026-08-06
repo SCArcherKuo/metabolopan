@@ -9,7 +9,7 @@
 //! request, or issues a KEGG request — there is nothing on this screen that
 //! requires recomputation.
 //!
-//! See the `coverage-ui` and `kegg-coverage` capability specs.
+//! Owner: the `coverage-ui` and `kegg-coverage` capabilities.
 
 use egui::RichText;
 use std::sync::mpsc;
@@ -288,7 +288,7 @@ fn build_opts(app: &App, w_px: u32, h_px: u32) -> CoverageDotplotOpts {
 /// `app.settings`, which a confirmed organism-roster refresh clears when KEGG
 /// retires the selection, leaving a finished run's exports labelled `—`. This
 /// feeds the dot-plot annotation strip (and therefore the exported PNG) and the
-/// exported CSV; see the `coverage-ui` capability spec.
+/// exported CSV; Owner: the `coverage-ui` capability.
 ///
 /// The analysis mode still comes from `app.settings`: `analysis-mode-toggle`
 /// forbids an `AppState`-local `analysis_mode`, and the toggle renders only on
@@ -738,7 +738,7 @@ fn render_table(ui: &mut egui::Ui, app: &mut App, rows: &[&CoverageRow]) {
 /// has no arrow glyph and rendered it as a tofu box on macOS — the same
 /// constraint that forces the ASCII `>` in the stepper. Spelling the direction
 /// out also says which way the column is sorted, which the arrow only implied.
-/// Every offered key sorts descending (see `kegg-coverage`), so the word is
+/// Every offered key sorts descending (owner: `kegg-coverage`), so the word is
 /// currently constant; it is built from the key rather than hard-coded so a
 /// future ascending key cannot silently mislabel itself.
 fn sort_header(
@@ -888,8 +888,7 @@ mod tests {
     //
     // A finished run's target is provenance: it names what was surveyed and
     // MUST survive a cleared selection, because the dot-plot annotation strip
-    // and the CSV both carry it into files the user keeps. See the
-    // `coverage-ui` capability spec.
+    // and the CSV both carry it into files the user keeps. Owner: the `coverage-ui` capability.
 
     use crate::app::test_support::{app_on_coverage_result, module_retention_fixture};
 

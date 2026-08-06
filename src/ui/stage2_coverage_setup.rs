@@ -7,8 +7,7 @@
 //!
 //! It deliberately renders no direction radio, no FDR control, no normalization
 //! control, no numerator/denominator picker, no statistical-method radio, and
-//! no `Drop Unknown features` checkbox — see the `coverage-ui` capability spec
-//! for why each absence is a decision rather than an omission.
+//! no `Drop Unknown features` checkbox — Owner: the `coverage-ui` capability.
 
 use egui::RichText;
 

@@ -8,8 +8,8 @@
 //! `arcsinh_in_place` was removed in `add-log-transform-and-scaling` once
 //! empirical verification at f64 precision confirmed Pareto scaling is
 //! bit-equivalent for univariate t-statistics (per-feature linear rescaling
-//! cancels in `t = (m_a − m_b) / sqrt(v_a/na + v_b/nb)`). See design D1 of
-//! that change for the verification.
+//! cancels in `t = (m_a − m_b) / sqrt(v_a/na + v_b/nb)`) — the verification is
+//! that change's design D1.
 
 /// Apply `arcsinh(x)` to every non-NaN cell in place; NaN cells are left untouched.
 pub fn arcsinh_in_place(values: &mut [f64]) {

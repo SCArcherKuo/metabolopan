@@ -8,7 +8,7 @@
 //! defensible `K`. [`compute`] asks only "how much of this entry did I detect",
 //! which is a count and a ratio.
 //!
-//! See the `kegg-coverage` capability spec for the requirement contract.
+//! Owner: the `kegg-coverage` capability.
 
 pub mod detect;
 pub mod export;

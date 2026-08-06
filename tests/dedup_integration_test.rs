@@ -2,9 +2,8 @@
 //! `run_dam` with `dedup_enabled = true` / `false` against a synthetic
 //! `MetabolomicsTable` containing controlled InChIKey duplicates.
 //!
-//! See the `dam-analysis` capability spec, "System SHALL apply
-//! deduplication mask before pre-filter when `dedup_enabled` is true",
-//! for the requirement we're validating.
+//! Validates the `dam-analysis` requirement that the deduplication mask is
+//! applied before the pre-filter when `dedup_enabled` is true.
 
 use std::io::Write;
 

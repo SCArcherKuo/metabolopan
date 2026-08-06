@@ -20,7 +20,7 @@ const HEADER_NO_CORRECTION: &str =
 /// column would repeat `PValue` byte-for-byte under a name no correction
 /// earned — and two identically-valued columns read as two independent
 /// measurements. Nothing else varies it: not the analysis mode, not single vs
-/// dual input, not any display filter. See the `enrichment-ora` capability.
+/// dual input, not any display filter. Owner: the `enrichment-ora` capability.
 fn header_for(method: crate::dam::fdr::FdrMethod) -> &'static str {
     match method {
         crate::dam::fdr::FdrMethod::NoCorrection => HEADER_NO_CORRECTION,

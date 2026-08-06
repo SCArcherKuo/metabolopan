@@ -11,7 +11,7 @@ use std::hash::Hash;
 ///
 /// NOTE: this is distinct from the `sort(); dedup()` and count-only
 /// deduplications in `stage3` — those are deliberately NOT order-preserving
-/// and stay separate (see that change's design D4).
+/// and stay separate (per that change's design D4).
 pub fn dedupe_preserve_order<T: Eq + Hash + Clone>(input: &[T]) -> Vec<T> {
     let mut seen = HashSet::new();
     let mut out = Vec::with_capacity(input.len());

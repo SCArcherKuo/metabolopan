@@ -66,7 +66,7 @@ pub struct DamConfig {
 /// BM (rank-based) ignores the flag — arcsinh is monotone so ranks are
 /// invariant under it. The earlier hard-coded `pareto_scale_in_place`
 /// step is gone (no-op for univariate t-statistics — verified empirically
-/// at f64 precision; see add-log-transform-and-scaling design D1).
+/// at f64 precision; per `add-log-transform-and-scaling` design D1).
 ///
 /// `fdr_method` selects the FDR correction applied to the per-feature p
 /// vector (BH for the literature default and cross-tool reproducibility, BY
@@ -232,8 +232,8 @@ pub async fn run_dam(
                 // Student t-statistics (`raw_t == arcsinh+pareto_t ==
                 // arcsinh-only_t == 14.7173367156` empirically verified at
                 // f64 precision on the `[10,12,11]` vs `[1,2,1.5]` fixture
-                // — see add-log-transform-and-scaling design D1 + dam-analysis
-                // Welch/Student spec scenarios).
+                // — per `add-log-transform-and-scaling` design D1, and the
+                // `dam-analysis` Welch/Student scenarios).
                 let mut all: Vec<f64> = num_vals.iter().chain(den_vals.iter()).copied().collect();
                 if log_transform {
                     arcsinh_in_place(&mut all);

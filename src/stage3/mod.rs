@@ -2,7 +2,7 @@
 //! emitting progress events to the running screen and assembling the
 //! `Stage3RunOutput` consumed by `Stage3EnrichResult`.
 //!
-//! See the `stage3-ui` and `enrichment-ora` capabilities for the
+//! Owner: the `stage3-ui` and `enrichment-ora` capabilities for the
 //! end-to-end contract.
 
 use anyhow::Result;
@@ -157,7 +157,7 @@ pub struct ResolvedCompounds {
 /// Extracted from `run_stage3` so the enrichment and coverage routes share one
 /// implementation of the slow, network-bound part of the pipeline — batching,
 /// retry, cache read/write, force-refresh, and progress emission must not drift
-/// between them (see the `stage3-ui` capability spec).
+/// between them (owner: the `stage3-ui` capability).
 ///
 /// **Callers do not deduplicate.** `resolve_inchikeys_to_cids` and
 /// `resolve_cids_to_cpds` both dedupe internally via
@@ -269,7 +269,7 @@ pub async fn run_stage3(
     );
 
     // Phases 1 + 2 are identical on both analysis routes, so they live in the
-    // shared resolver rather than here (see the `stage3-ui` capability spec).
+    // shared resolver rather than here (owner: the `stage3-ui` capability).
     let ResolvedCompounds {
         inchikey_to_cids,
         cid_to_cpd,

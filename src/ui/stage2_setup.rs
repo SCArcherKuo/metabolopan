@@ -282,7 +282,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
         // deduplicated. The value is kept strictly positive by the DragValue
         // floor plus the `SessionSettings::apply_snapshot` clamp (both at
         // `crate::app::MIN_DEDUP_RT_TOLERANCE_MIN`), so it is NOT re-clamped
-        // here every frame. See the `msdial-deduplication` capability.
+        // here every frame. Owner: the `msdial-deduplication` capability.
         ui.horizontal(|ui| {
             ui.label("RT tolerance (min)");
             let resp = ui.add_enabled(
@@ -316,8 +316,8 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
         // visually ambiguous about whether arcsinh would apply. When the user
         // switches back to Welch/Student the checkbox stays unchecked and they
         // must explicitly re-check it if they want arcsinh on (no prior-value
-        // restoration). See dam-analysis BM-bypass requirement + stage2-ui
-        // "BM disables and auto-clears..." scenario.
+        // restoration), per the `dam-analysis` BM-bypass requirement and the
+        // `stage2-ui` "BM disables and auto-clears…" scenario.
         let log_enabled = *dam_method != DamMethod::BrunnerMunzel;
         if !log_enabled {
             *log_transform = false;

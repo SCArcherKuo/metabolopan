@@ -13,7 +13,7 @@ code/commit conventions.
 - Type-check: `cargo check`
 - Lint: `cargo clippy --all-targets -- -D warnings` (must exit 0)
 - Format: `cargo fmt --all` (Rust 2024 style)
-- Tests: `cargo test` (600+ tests; HTTP integration tests use `wiremock` and do
+- Tests: `cargo test` (800+ tests; HTTP integration tests use `wiremock` and do
   not hit the network). The KEGG/HTTP smoke tests are `#[ignore]`d by default —
   run them explicitly with `cargo test -- --ignored` only when you intend to
   reach the live KEGG/PubChem services.
@@ -24,14 +24,17 @@ code/commit conventions.
   then submit a PR referencing it.
 - **Bug fixes / typos / small refactors** — go straight to a PR.
 
-Explain the **why** in the PR description; for non-obvious decisions, prefer a
-short rationale in the PR over inline code comments.
+Explain the **why** in the PR description. Where a decision constrains the code
+— an invariant, an ordering, a value that must not change — state that
+constraint in a doc-comment too: a PR description is not in the tree a later
+reader has.
 
 ## Code style
 
 - `cargo fmt` (enforced) and `cargo clippy --all-targets -- -D warnings`
   (enforced) both pass before you push.
-- Prefer single-line comments; avoid multi-paragraph docstrings.
+- Keep comments as short as the point allows, and no shorter: a comment that
+  states a constraint the code must satisfy earns the lines it takes.
 - **UI text is ASCII** — the default egui font has gaps in its Unicode coverage
   (e.g. it lacks `←` and `›`, which is why Back/stepper separators use `<` and
   `>`). Keep on-screen strings ASCII unless you've verified the glyph renders.

@@ -38,8 +38,8 @@ pub fn session_log_path(started_at: DateTime<Utc>, pid: u32) -> PathBuf {
 /// in-window log pane. The suffix intentionally diverges by audience:
 /// ` UTC` on disk (developer-grade, used in bug-report bundles read
 /// across timezones) versus ` +HHMM` in the pane (live operator
-/// wall-clock readability) — see the `fix-log-pane-local-time` change
-/// (design D2) for the rationale.
+/// wall-clock readability) — per the `fix-log-pane-local-time` change,
+/// design D2.
 ///
 /// Exposed publicly because `main.rs` assembles the fmt layer inline (the
 /// generic-S `impl Layer<S>` return type would bake in S at the wrong

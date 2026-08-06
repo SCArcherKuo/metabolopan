@@ -41,8 +41,7 @@ use std::collections::HashSet;
 pub type VolcanoRender = (Vec<u8>, u32, u32);
 
 /// Which of the two analysis routes the session is on, picked on the
-/// route-chooser screen before any input file is loaded. See the
-/// `analysis-route-selection` capability spec.
+/// route-chooser screen before any input file is loaded. Owner: the `analysis-route-selection` capability.
 ///
 /// The route decides which screens exist, how many steps the stepper shows,
 /// and which of two very different analyses the session performs. Exactly
@@ -63,7 +62,7 @@ pub enum AnalysisRoute {
 /// Sort key for the coverage results table. Defined in `crate::coverage::types`
 /// alongside the rows it orders and re-exported here, because it is reachable
 /// from [`SessionSettings`] and every settings-facing enum is nameable from this
-/// module. See the `kegg-coverage` capability.
+/// module. Owner: the `kegg-coverage` capability.
 pub use crate::coverage::CoverageSortKey;
 
 /// Top-level analysis mode picked at Stage 1. Pathway is the historical
@@ -128,10 +127,7 @@ impl AnalysisPayload {
 /// Central store for every user-tunable parameter across all stages.
 /// Introduced by the `refactor-session-settings` change so that
 /// settings survive transitions without each transition function
-/// hand-copying field subsets. See the `app-shell` capability spec
-/// for the normative field list and default values, and the
-/// `refactor-session-settings` change's design notes (decision D11)
-/// for the table of reset/clear API surfaces.
+/// hand-copying field subsets. Owner: the `app-shell` capability.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionSettings {
     // ── Route ──
@@ -260,7 +256,7 @@ fn default_dedup_rt_tolerance_min() -> f64 {
 // path is normally unreachable (the strict version gate rejects non-current
 // snapshots before field-level deserialisation), but is kept as defence in
 // depth for any path that bypasses the gate. Do NOT remove the annotations as
-// "dead code" — see the `session-settings-io` capability spec.
+// "dead code" — Owner: the `session-settings-io` capability.
 
 /// Serde-default helper for `analysis_route`.
 fn default_analysis_route() -> AnalysisRoute {
@@ -291,7 +287,7 @@ fn default_coverage_presence_threshold() -> f64 {
 /// Smallest entry size the coverage route will display. Enforced at both the
 /// UI input and the persistence boundary so a zero-compound entry can never
 /// reach the table — every KEGG global/overview map is such an entry, and the
-/// floor is what removes them (see the `kegg-coverage` capability).
+/// floor is what removes them (owner: the `kegg-coverage` capability).
 pub(crate) const MIN_COVERAGE_ENTRY_SIZE: usize = 1;
 
 /// Clamp a coverage minimum-entry-size to [`MIN_COVERAGE_ENTRY_SIZE`]. Applied
@@ -315,7 +311,7 @@ pub(crate) fn clamp_coverage_presence_threshold(v: f64) -> f64 {
 
 /// Smallest retention-time tolerance (minutes) the app will pass to
 /// `crate::dedup::run_dedup`. Strictly positive so the dedup clustering never
-/// sees `0.0`, a negative, or `NaN` (see the `msdial-deduplication` capability);
+/// sees `0.0`, a negative, or `NaN` (owner: the `msdial-deduplication` capability);
 /// below this a tolerance would cluster only byte-identical retention times.
 pub(crate) const MIN_DEDUP_RT_TOLERANCE_MIN: f64 = 0.001;
 
@@ -501,8 +497,8 @@ impl SessionInputs {
 ///
 /// `App::organisms` (the eager-loaded KEGG organism roster) is NOT in
 /// this struct — it is session-immutable lookup data, loaded once at
-/// startup, and lives directly on `App`. See the `app-shell` capability
-/// spec (decision D10 / preamble) for the rule.
+/// startup, and lives directly on `App`. Owner: the `app-shell` capability
+/// (design D10).
 #[derive(Debug, Default, Clone)]
 pub struct SessionCache {
     pub species_kegg: Option<SpeciesKegg>,
@@ -539,8 +535,7 @@ pub enum AppState {
     /// receivers, progress accumulators, computed outputs, textures, and
     /// screen-local error strings. Every user-tunable parameter lives on
     /// `App::settings`; every loaded input lives on `App::inputs`; every
-    /// per-analysis fetched cache lives on `App::cache`. See the
-    /// `app-shell` capability spec for the normative contract.
+    /// per-analysis fetched cache lives on `App::cache`. Owner: the `app-shell` capability.
     Initializing {
         load_rx: mpsc::Receiver<Result<OrganismsCache, String>>,
         /// Pre-loaded stale cache, surfaced as a fallback on failure.
@@ -555,8 +550,7 @@ pub enum AppState {
     /// **Pre-route**, like `Initializing`: it belongs to neither analysis route,
     /// and the stepper is not rendered on it (there is nothing to navigate yet).
     /// It is not a numbered stage — the heading carries no `Stage 0 —` prefix;
-    /// the variant name is positional only. See the `analysis-route-selection`
-    /// capability spec.
+    /// the variant name is positional only. Owner: the `analysis-route-selection` capability.
     Stage0ChooseAnalysis,
     /// Stage 1 — file pickers + mode toggle + species/group selector.
     /// The variant carries only Stage-1-screen-local UI state for the
@@ -724,8 +718,7 @@ pub enum AppState {
     /// group selection, the two feature filters, and the SAME shared
     /// analysis-target block `Stage3EnrichSetup` renders (mode toggle +
     /// mode-aware selector + inline fetch progress), so it carries the same two
-    /// fetch-in-flight slots for the same reason. See the `coverage-ui`
-    /// capability spec.
+    /// fetch-in-flight slots for the same reason. Owner: the `coverage-ui` capability.
     Stage2CoverageSetup {
         /// The screen's general error label: a failed run, a failed KEGG
         /// species/module fetch, and a refused fetch spawn all land here, as on
@@ -776,8 +769,7 @@ pub enum AppState {
         /// built. This is **provenance, not a display filter** — it MUST NOT be
         /// re-read from `settings.kegg_species`, which a confirmed organism-roster
         /// refresh clears when KEGG retires the species, and which is therefore
-        /// unrelated to what this finished run surveyed. See the `coverage-ui`
-        /// capability spec.
+        /// unrelated to what this finished run surveyed. Owner: the `coverage-ui` capability.
         ///
         /// Unreachable as `None` in Pathway mode from a real run — `Run Coverage`
         /// is gated on a fetched species — but the two export sinks take a
@@ -817,7 +809,7 @@ pub enum AppState {
 /// identical, so the variant needs a discriminant. A coverage run MUST NOT be
 /// represented as `Enrichment(vec![])`: an empty `Vec<DamResult>` is
 /// indistinguishable from a bug, and the enrichment orchestrator already
-/// rejects it. See the `app-shell` capability spec.
+/// rejects it. Owner: the `app-shell` capability.
 pub enum RunningPayload {
     /// DAM route: the results threaded forward into the enrichment run and
     /// restored on back-navigation to the threshold screen.
@@ -863,8 +855,7 @@ fn drain_modules_progress(fetch: &mut ModulesFetchInFlight) -> Option<ModulesFet
 
 /// Single source of truth for "an in-flight async operation owns the
 /// current screen". Pure over `&AppState` so it is callable under a
-/// `&mut self.state` borrow and unit-testable without a runtime (see the
-/// `app-shell` capability spec). The transient volcano render on
+/// `&mut self.state` borrow and unit-testable without a runtime (owner: the `app-shell` capability). The transient volcano render on
 /// `Stage2DamThreshold` is DELIBERATELY excluded — it is a sub-second
 /// in-process render with no orphan hazard and gates no navigation.
 pub(crate) fn is_busy(state: &AppState) -> bool {
@@ -890,7 +881,7 @@ pub(crate) fn is_busy(state: &AppState) -> bool {
         // The coverage result screen has no catalogue / PubChem / KEGG-conv
         // refresh, so `rendering` alone decides — there is no `refresh_state`
         // field to consult. The roster refresh is not gated on `is_busy` at
-        // all (see `data-summary-panel`), so it does not belong here either.
+        // all (owner: `data-summary-panel`), so it does not belong here either.
         AppState::Stage3CoverageResult { rendering, .. } => *rendering,
         AppState::Initializing { .. }
         | AppState::Stage0ChooseAnalysis
@@ -966,7 +957,7 @@ pub(crate) fn abort_in_flight(state: &AppState) {
 /// second setup screen is added it gains the behaviour by adding one arm here
 /// rather than by finding ten scattered `if let AppState::Stage3EnrichSetup`
 /// sites — which is exactly how the shared block would otherwise drift between
-/// the two routes. See the `stage3-ui` capability spec.
+/// the two routes. Owner: the `stage3-ui` capability.
 pub(crate) fn is_target_setup(state: &AppState) -> bool {
     setup_fetch_slots(state).is_some()
 }
@@ -1080,8 +1071,8 @@ pub(crate) fn abort_and_clear_setup_fetches(state: &mut AppState) {
 
 /// True only when a long module-catalogue fetch (~6–12 min) is in flight, so
 /// back-navigation is gated behind a confirm before cancelling it; every
-/// other in-flight operation is cancelled silently (see the `stage-stepper-ui`
-/// and `app-shell` capability specs).
+/// other in-flight operation is cancelled silently (owner: the
+/// `stage-stepper-ui` and `app-shell` capabilities).
 ///
 /// The gate is on the ~6–12-minute FETCH, not on which route requested it, so
 /// it fires on either setup screen that can host one. Routed through
@@ -1407,8 +1398,7 @@ pub struct RunSpawn {
 /// counts the coverage funnel line opens with (`raw_features`, `after_dedup`)
 /// and it carries `foreground_inchikeys` / `foreground_cids`, which the coverage
 /// route is forbidden to render — reusing it would mean two permanently-dead
-/// fields on every coverage run and two missing ones. See the `coverage-ui`
-/// capability spec.
+/// fields on every coverage run and two missing ones. Owner: the `coverage-ui` capability.
 ///
 /// The line's last two terms come from `CoverageResult` (`detected_total` and
 /// `detected_in_entries`), so it is assembled from exactly two carriers.
@@ -1421,7 +1411,7 @@ pub struct CoverageFunnel {
     /// renderer omits the term rather than printing a tautology.
     pub in_selected_groups: Option<usize>,
     /// Survivors of deduplication. The ONLY funnel term the dedup controls can
-    /// move: `D` itself is invariant under them (see `kegg-coverage`).
+    /// move: `D` itself is invariant under them (owner: `kegg-coverage`).
     pub after_dedup: usize,
     /// Distinct InChIKeys resolved.
     pub detected_inchikeys: usize,
@@ -1451,7 +1441,7 @@ pub type DotplotRenderOf<F> = (DotplotRender, F);
 ///
 /// This is NOT a settings mirror. A mirrored setting tracks the user; `filters`
 /// is frozen at render time precisely so it can be caught disagreeing with them.
-/// See the `app-shell` capability's state-machine requirement.
+/// Owner: the `app-shell` capability.
 /// `egui::TextureHandle` is not `Debug`, so neither is this — the same reason
 /// `AppState` itself is not, and why the diagnostics bundle renders the state by
 /// hand rather than deriving.
@@ -1612,11 +1602,10 @@ pub fn default_bundle_filename() -> String {
 /// runtime does when it is dropped at close); and the 90 s stale-lock
 /// threshold + startup `clear_stale_locks` recovering any leftover lock.
 /// Adding a graceful shutdown would only add close latency for zero
-/// correctness gain. See the `app-shell` capability spec.
+/// correctness gain. Owner: the `app-shell` capability.
 pub struct App {
     // ── The four sibling fields introduced by the `refactor-session-settings`
-    // change. See the `app-shell` capability spec preamble for the
-    // normative contract. As of the Phase 2 commit of that refactor, these
+    // change. Owner: the `app-shell` capability. As of the Phase 2 commit of that refactor, these
     // fields are populated alongside the existing per-variant fields on
     // `AppState`; Phase 3 will slim `AppState` and migrate every callsite to
     // read from these.
@@ -1681,7 +1670,7 @@ pub struct App {
     /// Stepper step icons, decoded once and uploaded to GPU textures on the
     /// first stepper render (texture upload needs a live `egui::Context`,
     /// unavailable at `App::new`). UI plumbing analogous to the volcano /
-    /// dot-plot `TextureHandle`s, not a four-sibling contract field (see
+    /// dot-plot `TextureHandle`s, not a four-sibling contract field (per
     /// `add-stepper-step-icons` design D4).
     pub stepper_icons: Option<crate::ui::stepper::StepperIcons>,
     /// `rat_face.png` texture, lazily uploaded on the first render of the
@@ -1780,7 +1769,7 @@ impl App {
 
     /// Discard the current analysis and start a fresh session at Stage 1.
     /// Invoked by the `Start a new analysis` confirmation on the Stage 3
-    /// result screen (see `stage3-ui` / `app-shell` specs).
+    /// result screen (owner: the `stage3-ui` and `app-shell` capabilities).
     ///
     /// This is the only explicit, user-initiated FULL reset — distinct from
     /// navigation transitions, which preserve every setting/input/cache for
@@ -1807,7 +1796,7 @@ impl App {
         // a session reset discards everything, and carrying a half-answered
         // dialog through it would be surprising. The request flag needs no
         // counterpart here; an unconditional per-frame drain cannot leave one
-        // set. See the `app-shell` capability spec.
+        // set. Owner: the `app-shell` capability.
         self.log_ui.organisms_refresh_confirm_open = false;
         // Back to the route chooser, not to Stage 1: `settings` was just reset
         // to default, so `analysis_route` is back to `DamEnrichment` regardless
@@ -2140,7 +2129,7 @@ impl App {
 
     /// User-triggered organism-roster refresh (`Refresh KEGG organism list` in
     /// the Data-tab Cache-data block). The SOLE sanctioned runtime mutation of
-    /// `App::organisms` after startup — see the app-shell capability spec. Stashes
+    /// `App::organisms` after startup — Owner: the `app-shell` capability. Stashes
     /// the current roster for failure recovery, invalidates `organisms.json`, and
     /// spawns a fresh `list_organisms` directly (deliberately bypassing
     /// `ensure_organisms_loading`'s already-loaded guard), flipping to `Loading`;
@@ -2501,8 +2490,8 @@ impl App {
     }
 
     /// Drain the log-pane modal-request flags. Each flag is reset every
-    /// frame regardless of whether the modal opens — see the
-    /// mutual-exclusion invariant in the app-shell spec. If any modal is
+    /// frame regardless of whether the modal opens, per the `app-shell`
+    /// mutual-exclusion invariant. If any modal is
     /// already non-Closed, drop the new request with a `warn!` line (the
     /// user dismisses the current modal first).
     /// True iff any App-level modal in the mutual-exclusion family is open:
@@ -2525,8 +2514,7 @@ impl App {
     ///
     /// The roster confirm sits **beside** `drain_modal_requests`, never inside
     /// it — it is not an App-level `*ModalState` and stays outside the
-    /// four-modal mutual-exclusion family (see the `app-shell` capability
-    /// spec). What it gains here is unconditionality: the `Refresh KEGG
+    /// four-modal mutual-exclusion family (owner: the `app-shell` capability). What it gains here is unconditionality: the `Refresh KEGG
     /// organism list` button renders on five `AppState` variants, so a drain
     /// owned by two `show` functions left the request set on the other three,
     /// to fire without warning on the next screen that did handle it.
@@ -2717,8 +2705,7 @@ impl App {
     /// `cache.group_org_codes` is deliberately untouched on BOTH paths — it was
     /// written synchronously at spawn, and on failure the Group selection is
     /// still valid for a retry. Clearing it would leave the target incomplete
-    /// and the Run button permanently disabled. See the `app-shell` capability
-    /// spec.
+    /// and the Run button permanently disabled. Owner: the `app-shell` capability.
     fn handle_modules_fetch_terminal_event(&mut self, event: ModulesFetchEvent) {
         let group = self.settings.organism_group.clone();
         match event {
@@ -3185,9 +3172,8 @@ pub(crate) mod test_support {
 mod tests {
     //! Unit tests for `SessionSettings` / `SessionCache` defaults, named
     //! reset APIs, and cache clearing behavior. The reset surfaces here
-    //! lock in today's pre-refactor behavior bit-equally — see the
-    //! `refactor-session-settings` change's design notes (D11) for
-    //! the full inventory.
+    //! lock in today's pre-refactor behavior bit-equally, per the
+    //! `refactor-session-settings` change's design D11.
     use super::*;
 
     #[test]

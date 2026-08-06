@@ -10,7 +10,7 @@
 //! preview and the on-disk PNG export. The chart-agnostic scaffold shared
 //! with the volcano renderer (RGBA expansion, PNG + pHYs encoding, the
 //! design-scale baseline, `sp` / `su`, the major-gridline grey) now lives in
-//! `crate::plot::common` — the design.md D17 deferral was lifted by
+//! `crate::plot::common` — the D17 deferral was lifted by
 //! `extract-plot-common-scaffold`.
 
 use anyhow::{Result, anyhow};
@@ -30,7 +30,7 @@ pub struct DotplotOpts {
     pub top_n: usize,
     /// Live display filter on hit count, read from settings at draw time — NOT
     /// from the result. Storing it per-row froze this filter to the run while
-    /// the threshold and `top_n` stayed live; see the `enrichment-dot-plot` spec.
+    /// the threshold and `top_n` stayed live; Owner: the `enrichment-dot-plot` capability.
     pub min_hit_count: usize,
     /// Correction method that produced `result.rows[*].fdr`. Affects only the
     /// chrome: the colorbar title (`-log10(FDR (BH))` / `-log10(FDR (BY))` /

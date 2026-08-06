@@ -67,7 +67,7 @@ pub fn show(
         // renders it under the catalogue fetched-date line in its `Cache data`
         // block and drains a request flag into `handle_species_refresh`. Not
         // an icon next to the picker, and not adjacent to this widget at all —
-        // both moved out of the setup body. See `data-summary-panel`.
+        // both moved out of the setup body. Owner: the `data-summary-panel` capability.
     });
 
     if state.picker_open {

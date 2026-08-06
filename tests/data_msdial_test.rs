@@ -156,7 +156,8 @@ fn parses_ms_dial_v5_fixture_without_dot_product_warn() {
     let path = Path::new("data/ms-dial-5/Area_1_2026_05_27_05_39_10.txt");
     if !path.exists() {
         eprintln!(
-            "skipping: {} not present — run with full data/ms-dial-5/",
+            "skipping: {} not present. This fixture set is maintainer-local and \
+             is not distributed with the repository.",
             path.display()
         );
         return;

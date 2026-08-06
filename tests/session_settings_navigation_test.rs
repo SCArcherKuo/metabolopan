@@ -1,8 +1,7 @@
 //! Integration regression test for the `refactor-session-settings`
 //! change. Walks through the key state transitions using real fixture
 //! inputs + a real `run_dam` invocation, then asserts the
-//! `SessionSettings` preservation/reset surfaces against the
-//! design.md D11 inventory.
+//! `SessionSettings` preservation/reset surfaces against the D11 inventory.
 //!
 //! Q-B (fixture-based): we load the canonical single-mode fixture
 //! (`tests/fixtures/msdial_mini.txt` + a constructed minimal group CSV)

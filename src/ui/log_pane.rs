@@ -33,8 +33,7 @@ pub struct LogPaneState {
     /// tab toolbar (relocated from the Log pane by
     /// `move-settings-buttons-to-data-tab`).
     /// `App::update()` drains the flag every frame regardless of modal
-    /// outcome (mutual-exclusion rule may drop the request); see the
-    /// `app-shell` spec.
+    /// outcome (mutual-exclusion rule may drop the request); Owner: the `app-shell` capability.
     pub settings_save_requested: bool,
     /// Set to `true` when the user clicks `[Load settings…]` in the Data
     /// tab toolbar (relocated from the Log pane by
@@ -63,7 +62,7 @@ pub struct LogPaneState {
     /// Data tab's Cache-data block (the roster is mode- and route-independent,
     /// so the button renders on five `AppState` variants). Drained by
     /// `App::drain_frame_dialogs` every frame, which opens the refresh confirm
-    /// (NOT an App-level modal — see the `app-shell` organism-roster refresh
+    /// (NOT an App-level modal, per the `app-shell` organism-roster refresh
     /// requirement). Frame-owned rather than screen-owned precisely so the set
     /// of screens that can produce it equals the set that consumes it.
     pub organisms_refresh_requested: bool,

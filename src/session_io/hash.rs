@@ -1,7 +1,7 @@
 //! SHA-256 streaming helper for the `session-settings-io` capability.
 //!
-//! See the `session-settings-io` capability spec (Requirement: SHA-256
-//! helper SHALL stream files in chunks).
+//! Streams in chunks rather than reading whole files into memory.
+//! Owner: the `session-settings-io` capability.
 
 use std::fs::File;
 use std::io::{self, Read};

@@ -192,7 +192,7 @@ pub(crate) fn fetch_in_flight_hint(app: &App) -> Option<&'static str> {
 /// coverage setup screen. There MUST NOT be a second implementation: the two
 /// screens differ only in the controls AROUND this block, and a divergence
 /// between copies would surface as two subtly different species selectors
-/// reached by two different routes (see the `stage3-ui` capability spec).
+/// reached by two different routes (owner: the `stage3-ui` capability).
 ///
 /// Variant-agnostic by construction — every slot access inside goes through
 /// `crate::app::{is_target_setup, setup_fetch_slots, setup_fetch_slots_mut}`,
@@ -686,7 +686,7 @@ fn handle_species_selected(app: &mut App, code: String) {
 /// a drain owned by two `show` functions left the request set on the other
 /// three. Modelled on the `RefreshState` cache-refresh confirms: it is NOT an
 /// App-level `*ModalState` and sits OUTSIDE the four-modal mutual-exclusion
-/// family / `drain_modal_requests` (see the `app-shell` organism-roster refresh
+/// family / `drain_modal_requests` (per the `app-shell` organism-roster refresh
 /// requirement). On confirm it calls `App::handle_organisms_refresh`.
 ///
 /// Rendered unconditionally, so an unanswered confirm follows the user across
@@ -772,8 +772,7 @@ pub(crate) fn handle_species_refresh(app: &mut App) {
 
 fn spawn_species_fetch(app: &mut App, code: String) {
     // Same precondition and the same reason as `spawn_modules_fetch`: a screen
-    // must own the slot that will receive the result. See the `kegg-fetching`
-    // capability spec.
+    // must own the slot that will receive the result. Owner: the `kegg-fetching` capability.
     if !crate::app::is_target_setup(&app.state) {
         warn!(code = %code, "species fetch requested from a screen that owns no in-flight slot; refusing");
         if let Some(err) = crate::app::screen_error_mut(&mut app.state) {
@@ -849,7 +848,7 @@ pub(crate) fn spawn_modules_fetch(
     // installed into a slot afterwards, so on a slotless state they would run
     // detached: undrained, their `AbortHandle`s never stored (so the in-flight
     // cancellation path can never reach them), holding `.modules.lock` for the
-    // full 6-12 minute fetch. See the `module-fetching` capability spec.
+    // full 6-12 minute fetch. Owner: the `module-fetching` capability.
     if !crate::app::is_target_setup(&app.state) {
         warn!("module fetch requested from a screen that owns no in-flight slot; refusing");
         if let Some(err) = crate::app::screen_error_mut(&mut app.state) {

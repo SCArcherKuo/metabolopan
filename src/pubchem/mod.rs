@@ -1,7 +1,6 @@
 //! PubChem PUG REST client and resolver for InChIKey → CID mapping.
 //!
-//! See the `pubchem-fetching` capability spec for the
-//! requirement contract.
+//! Owner: the `pubchem-fetching` capability.
 
 pub mod cache;
 pub mod client;

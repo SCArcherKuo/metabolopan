@@ -37,7 +37,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
     drain_cache_actions(app);
 
     // Snapshot read-only fields we need to render. Built by a pure function so
-    // the run-vs-settings sourcing rule below is assertable without egui — see
+    // the run-vs-settings sourcing rule below is assertable without egui, per
     // the `stage3-ui` result-screen requirement.
     let snap = result_snap(&app.state, &app.settings);
     let Some(snap) = snap else {
@@ -53,7 +53,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
 /// `fdr_threshold` is read from settings, because it is a live display filter
 /// the user tunes on this screen. Sourcing the method from settings would let a
 /// label describe an export it does not match — the exporter reads the result.
-/// See the `stage3-ui` capability spec.
+/// Owner: the `stage3-ui` capability.
 fn result_snap(state: &AppState, settings: &crate::app::SessionSettings) -> Option<ResultSnap> {
     match state {
         AppState::Stage3EnrichResult {
@@ -102,7 +102,7 @@ fn result_snap(state: &AppState, settings: &crate::app::SessionSettings) -> Opti
 /// Names the quantity the threshold is compared against, so it follows the
 /// method that produced that quantity. Under `NoCorrection` the value compared
 /// is a raw p-value; calling it an FDR would assert a correction that was not
-/// performed. See the `stage3-ui` capability spec.
+/// performed. Owner: the `stage3-ui` capability.
 fn threshold_label(method: crate::dam::fdr::FdrMethod) -> String {
     format!("Enrichment {} threshold:", method.metric_label())
 }
@@ -200,7 +200,7 @@ fn show_inner(ui: &mut egui::Ui, app: &mut App, snap: ResultSnap) {
             // `Draw dot plot` re-applies it without re-spawning the
             // orchestrator. Both reach one of the two CSV downloads — the
             // filtered one, whose definition is the figure's row set — and
-            // neither reaches the other (see the `enrichment-ora` capability).
+            // neither reaches the other (owner: the `enrichment-ora` capability).
             // The threshold's label names the quantity it is compared against,
             // so it follows the RUN's method (`snap.fdr_method`), never
             // `app.settings.enrichment_fdr_method`.
@@ -918,7 +918,7 @@ pub(crate) fn rerun(app: &mut App) {
     // enrichment output and there is no route back to a discarded run, so
     // transitioning first and discovering afterwards costs the user everything
     // and returns nothing. `start_refresh` below is the local precedent for the
-    // borrow-first shape. See the `data-summary-panel` capability spec.
+    // borrow-first shape. Owner: the `data-summary-panel` capability.
     {
         let AppState::Stage3EnrichResult { dam_results, .. } = &app.state else {
             return;
@@ -1011,7 +1011,7 @@ pub(crate) fn refresh_catalogue_via_setup(app: &mut App) {
     // holds the completed run. The target selection is what the fetch is keyed
     // by, and a retired organism clears it while leaving the fetched catalogue
     // intact — so this is NOT the same predicate `rerun` uses, which
-    // additionally needs that catalogue. See the `data-summary-panel` spec.
+    // additionally needs that catalogue. Owner: the `data-summary-panel` capability.
     let target_ready = match app.settings.analysis_mode {
         AnalysisMode::Module => {
             app.settings.organism_group_level.is_some()

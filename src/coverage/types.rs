@@ -7,7 +7,7 @@
 //! `EnrichmentResult`. That is a structural guarantee, not a convention: the
 //! coverage route performs no statistical test, so no coverage surface — table,
 //! dot plot, CSV, Data tab, log — has a field through which it could present
-//! detectability as significance. See the `kegg-coverage` capability spec.
+//! detectability as significance. Owner: the `kegg-coverage` capability.
 
 use serde::{Deserialize, Serialize};
 
@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 /// `coverage` and `share` answer different questions and are deliberately not
 /// comparable: `coverage` is "what fraction of THIS ENTRY did I detect",
 /// `share` is "what fraction of MY METABOLOME is in this entry". Only
-/// `coverage` is displayed; `share` is exported only (see `kegg-coverage`).
+/// `coverage` is displayed; `share` is exported only (owner: `kegg-coverage`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct CoverageRow {
     /// Pathway ID (`hsa00010`) in Pathway mode, module ID (`M00001`) in Module
@@ -67,7 +67,7 @@ pub struct CoverageResult {
     pub detected_in_entries: usize,
 }
 
-/// Sort key for the coverage results table. See the `kegg-coverage` capability.
+/// Sort key for the coverage results table. Owner: the `kegg-coverage` capability.
 ///
 /// All keys sort descending except [`CoverageSortKey::EntryId`], which sorts
 /// ascending; ties break by descending hits then ascending entry id.

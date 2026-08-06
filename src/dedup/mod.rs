@@ -8,8 +8,7 @@
 //! tolerance apart are kept as separate peaks), and the cascade picks one
 //! survivor per cluster. Retention time
 //! decides which features compete, never which one wins. The cascade is
-//! documented in `cascade.rs`; adduct classification in `adduct.rs`. See the
-//! `msdial-deduplication` capability spec for the formal contract.
+//! documented in `cascade.rs`; adduct classification in `adduct.rs`. Owner: the `msdial-deduplication` capability.
 //!
 //! No I/O, no tracing, no global state. `run_dam` calls this function
 //! pre-loop and consumes the kept set as an iteration-time skip; the
@@ -77,8 +76,7 @@ pub fn run_dedup(features: &[FeatureMeta], rt_tolerance_min: f64) -> (HashSet<us
         // Partition the InChIKey group into retention-time clusters; the cascade
         // runs INDEPENDENTLY per cluster. Complete-linkage bounds each cluster's
         // RT span to `rt_tolerance_min`, so same-InChIKey features more than the
-        // tolerance apart land in different clusters and are each kept. See the
-        // `msdial-deduplication` capability spec.
+        // tolerance apart land in different clusters and are each kept. Owner: the `msdial-deduplication` capability.
         for cluster in rt_clusters(indices, features, rt_tolerance_min) {
             if cluster.len() == 1 {
                 kept.insert(cluster[0]);

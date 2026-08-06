@@ -45,8 +45,7 @@ impl IonModeTable {
     /// Stage-1 → Stage-2 boundary helper. Returns a new owned `IonModeTable`
     /// whose inner `MetabolomicsTable` has been narrowed via
     /// `MetabolomicsTable::without_unassigned_samples`. `mode` and `txt_path`
-    /// are cloned verbatim. See the `dual-mode-input` capability spec for
-    /// the full contract.
+    /// are cloned verbatim. Owner: the `dual-mode-input` capability.
     pub fn without_unassigned_samples(&self, mapping: &GroupMapping) -> Self {
         Self {
             mode: self.mode,

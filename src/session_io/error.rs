@@ -5,9 +5,7 @@
 //! strings suitable for the error-toast modal in `app-shell`; the OS-level
 //! cause stays in the `source` chain for developers.
 //!
-//! See the `session-settings-io` capability spec (Requirement:
-//! `SnapshotError` SHALL distinguish IO, parse, version, and write
-//! failures) for the normative contract.
+//! Owner: the `session-settings-io` capability.
 
 use std::fmt;
 use std::io;

@@ -1,9 +1,6 @@
 //! Validate snapshot settings against the currently-loaded session.
 //!
-//! See the `session-settings-io` capability spec (Requirement:
-//! `validate_against_inputs` SHALL identify input-dependent field
-//! resets, and `apply_snapshot` SHALL overwrite settings with per-field
-//! resets honored).
+//! Owner: the `session-settings-io` capability.
 
 use crate::app::{AnalysisRoute, SessionSettings};
 use crate::data::GroupMapping;

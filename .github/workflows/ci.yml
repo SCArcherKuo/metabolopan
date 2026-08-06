@@ -1,7 +1,7 @@
 name: CI
 
-# DRAFT — see todo/_release_v0.1.0/PLAN.md before landing.
-# Open items flagged inline with `# VERIFY:`.
+# Formats, lints, tests and builds on the three host platforms, and guards the
+# committed manual PDFs against going stale.
 
 on:
   push:
@@ -25,7 +25,7 @@ jobs:
       - name: Checkout (with LFS)
         uses: actions/checkout@v5
         with:
-          # double-mode-2 fixtures are tracked in Git LFS and are read by
+          # The double-mode fixtures are tracked in Git LFS and are read by
           # NON-ignored integration tests (filter_unassigned_test,
           # auto_infer_stage1_test, data_msdial_test polarity tests after
           # retargeting). Without lfs:true those tests see pointer files and fail.
@@ -33,7 +33,6 @@ jobs:
 
       # eframe / winit / rfd need a few system libs to LINK on Linux.
       # (CI only builds + runs headless tests; it never opens the GUI.)
-      # VERIFY this list on the first CI run — trim whatever turns out unneeded.
       - name: Install Linux build deps
         if: runner.os == 'Linux'
         run: |
@@ -66,12 +65,18 @@ jobs:
 
   # Guard: the committed manual PDFs (docs/manual/*.pdf) must not go stale vs
   # their Markdown sources. Fails if a manual .md was committed more recently
-  # than its .pdf — i.e. someone edited the manual but forgot to re-run
-  # release/build-manuals.sh and commit the refreshed PDF. Uses last-commit
-  # timestamps (not a byte rebuild), so it does not depend on PDF reproducibility
-  # or on having pandoc/Typst/CJK fonts in CI.
+  # than its .pdf — i.e. the manual was edited without rebuilding the PDF. Uses
+  # last-commit timestamps (not a byte rebuild), so it does not depend on PDF
+  # reproducibility or on a PDF toolchain being present in CI.
+  #
+  # Push-only. The PDFs are rebuilt by the maintainer, so a pull request that
+  # edits a manual cannot satisfy this check; running it there would fail
+  # contributors for something they cannot fix. On a push the .md and .pdf land
+  # in separate commits when a rebuild is forgotten, so the case this guards
+  # still trips.
   manuals:
     name: manual PDFs in sync
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -86,13 +91,13 @@ jobs:
             md="docs/manual/$base.md"
             pdf="docs/manual/$base.pdf"
             if [ ! -f "$pdf" ]; then
-              echo "::error file=$pdf::$pdf is missing — run release/build-manuals.sh and commit it."
+              echo "::error file=$pdf::$pdf is missing. The manual PDFs are rebuilt and committed by the maintainer."
               fail=1; continue
             fi
             md_t=$(git log -1 --format=%ct -- "$md")
             pdf_t=$(git log -1 --format=%ct -- "$pdf")
             if [ "$md_t" -gt "$pdf_t" ]; then
-              echo "::error file=$md::$md changed after $pdf was last built. Run 'release/build-manuals.sh' and commit the refreshed $pdf."
+              echo "::error file=$md::$md changed after $pdf was last built. The manual PDFs are rebuilt and committed by the maintainer."
               fail=1
             fi
           done

@@ -1,4 +1,6 @@
-//! Shared widget helpers — the `ui-color.md` §2–§5 component layer.
+//! Shared widget helpers — the §2–§5 component layer.
+//!
+//! Owner: the `interactive-component-styles` capability.
 //!
 //! egui has ONE global widget theme; `theme::install` makes the DEFAULT look
 //! the §2/§3 **Secondary** component. **Primary** styling is opt-in here, via a
@@ -59,12 +61,12 @@ pub fn primary_button_sized(
 const SEG_PADDING: egui::Vec2 = egui::vec2(10.0, 4.0);
 
 /// Horizontal gap (px) between a [`segmented_tab_with_icon`] leading icon and
-/// its label. Visual-polish constant (see `add-stepper-step-icons` design D3).
+/// its label. Visual-polish constant (per `add-stepper-step-icons` design D3).
 const ICON_LABEL_GAP: f32 = 4.0;
 
 /// Leading-icon size as a multiple of the label line height. `> 1.0`, so the
 /// icon reads clearly larger than the text; the segment (and therefore the row)
-/// grows taller to contain it — see `add-stepper-step-icons` design D3. At the
+/// grows taller to contain it, per `add-stepper-step-icons` design D3. At the
 /// default Button text (~16 px line height) this yields a ~48 px icon.
 const ICON_SCALE: f32 = 3.0;
 
@@ -269,7 +271,7 @@ pub fn primary_dropdown<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) ->
     .inner
 }
 
-/// Render an `egui::ProgressBar` per `ui-color.md` §5: a `FILL_SECONDARY` track
+/// Render an `egui::ProgressBar` per §5: a `FILL_SECONDARY` track
 /// (via scoped `extreme_bg_color`) with the given indicator `fill`. Running
 /// screens pass `PRIMARY` (in-progress) / `SUCCESS` (done); inline fetch /
 /// refresh strips pass `SURFACE` (Secondary).
@@ -391,8 +393,7 @@ pub(crate) fn fdr_method_radios(ui: &mut egui::Ui, method: &mut FdrMethod, inclu
 }
 
 /// A `- `-prefixed section header → a bold bullet title (`• <text>`) in the
-/// darkest ink (`HEADING`), matching the `ui-design.md` `- **Header**`
-/// convention. NB: egui's default fonts carry no bold *weight* (`.strong()` only
+/// darkest ink (`HEADING`), matching the `- **Header**` convention. NB: egui's default fonts carry no bold *weight* (`.strong()` only
 /// shifts colour, and in this theme `strong_text_color == TEXT`, so it's a
 /// no-op), so "bold" is the `HEADING` ink — the app's established emphasis —
 /// here paired with the `•` bullet marker. Promoted from `data_tab.rs` so other
@@ -403,7 +404,7 @@ pub(crate) fn section_header(ui: &mut egui::Ui, text: impl std::fmt::Display) {
 
 /// A `Key: value` data line with the `Key:` label emphasised in `HEADING` ink
 /// (the app's "bold") and the value in `value_color`, matching the
-/// `ui-design.md` `**Key:**` convention. Rendered as one wrapping `LayoutJob`
+/// `**Key:**` convention. Rendered as one wrapping `LayoutJob`
 /// label so it wraps and spaces naturally. When `text` has no `": "` the whole
 /// string is emphasised (e.g. `Groups:`). Promoted from `data_tab.rs`.
 pub(crate) fn kv_line_colored(ui: &mut egui::Ui, text: &str, value_color: egui::Color32) {

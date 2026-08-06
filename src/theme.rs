@@ -1,12 +1,11 @@
 //! Metabolopan colour palette + global egui Visuals install.
 //!
 //! Single source of truth for every UI colour decision in the binary. Token
-//! contract + install timing are pinned by the `theme` capability spec
-//! and the component system by the `interactive-component-styles`
-//! capability spec — keep the specs and
-//! this file in lockstep.
+//! contract + install timing are owned by the `theme` capability and the
+//! component system by `interactive-component-styles`. A token added here
+//! without its counterpart there is a drift both are meant to prevent.
 //!
-//! The DEFAULT widget appearance installed here is the `ui-color.md` §2/§3
+//! The DEFAULT widget appearance installed here is the §2/§3
 //! **Secondary** component (light fill + `SURFACE` border brightening to
 //! `PRIMARY` on hover). **Primary** styling is NOT global — it is opted into
 //! per call site by the helpers in `src/ui/widgets.rs` via scoped `Visuals`
@@ -22,19 +21,19 @@ use egui::{Color32, Stroke, ThemePreference, Visuals};
 
 // ─── Palette tokens ───────────────────────────────────────────────────────
 //
-// Source — designer-curated water-ink (水墨) palette + the ui-color.md §1–§5
+// Source — designer-curated water-ink (水墨) palette + the §1–§5
 // Primary/Secondary component system + a secondary layout background. 20 public
 // tokens.
 
 /// `#EBE6DA` 宣紙白 — primary app background.
 pub const BACKGROUND: Color32 = Color32::from_rgb(235, 230, 218);
 
-/// `#CED8D9` 雲影灰 (Cloud Shadow) — secondary layout background (ui-color.md
-/// §1.1 "Surface / 次要背景"). Fill of the page chrome panels (top stepper +
+/// `#CED8D9` 雲影灰 (Cloud Shadow) — secondary layout background (§1.1,
+/// "Surface / 次要背景"). Fill of the page chrome panels (top stepper +
 /// bottom Data/Log panel) so they read as a distinct surface stacked over
 /// `BACKGROUND`. Decorative surface, NOT a text token — no AA requirement.
-/// Distinct from `SURFACE` (`#A4C3C9`), which ui-color.md designates the default
-/// Border, not the secondary background.
+/// Distinct from `SURFACE` (`#A4C3C9`), which is the default Border rather than
+/// the secondary background.
 pub const BACKGROUND_SECONDARY: Color32 = Color32::from_rgb(206, 216, 217);
 
 /// `#A4C3C9` 晨霧水藍 — default component border, Secondary-button ACTIVE fill,
@@ -46,7 +45,7 @@ pub const SURFACE: Color32 = Color32::from_rgb(164, 195, 201);
 /// indicator. ~3.22:1 — sub-AA for body text; graphical / CTA use only.
 pub const PRIMARY: Color32 = Color32::from_rgb(72, 135, 159);
 
-/// `#396F85` 晴藍墨 — Primary-button HOVER fill (ui-color.md §2). Shares its
+/// `#396F85` 晴藍墨 — Primary-button HOVER fill (§2). Shares its
 /// exact hex with `LINK` (deliberate dual-role: button-hover vs hyperlink).
 pub const PRIMARY_HOVER: Color32 = Color32::from_rgb(57, 111, 133);
 
@@ -249,7 +248,7 @@ fn build_palette_visuals() -> Visuals {
 mod tests {
     use super::*;
 
-    /// Independently-built `Visuals` baseline mirroring the `theme/spec.md`
+    /// Independently-built `Visuals` baseline mirroring the `theme` capability's
     /// override list field-by-field. INTENTIONALLY duplicates the field writes
     /// from `build_palette_visuals` — that duplication is the drift detector:
     /// dropping a single line from `build_palette_visuals` trips
@@ -326,8 +325,8 @@ mod tests {
         }
     }
 
-    /// All 20 public tokens pin to the EXACT RGB triples documented in the
-    /// `theme/spec.md` token table.
+    /// All 20 public tokens pin to the EXACT RGB triples the `theme` capability
+    /// documents.
     #[test]
     fn all_tokens_have_documented_rgb_triples() {
         assert_eq!(BACKGROUND, Color32::from_rgb(235, 230, 218));
@@ -371,7 +370,7 @@ mod tests {
             ctx.style().visuals,
             expected,
             "post-install Visuals must match the independently-built expected_palette_visuals \
-             field-by-field per theme/spec.md"
+             field-by-field"
         );
     }
 

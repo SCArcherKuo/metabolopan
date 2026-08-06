@@ -235,7 +235,7 @@ where
             feat.neg_log10_p_adjusted.min(y_max)
         };
         // BM with a valid Cliff's δ maps |δ| ∈ [0, 1] to baseline radius units
-        // in [1.5, 3.9] (linear). Other paths keep su(3.0). See design D1/D2/D7.
+        // in [1.5, 3.9] (linear). Other paths keep su(3.0), per design D1/D2/D7.
         let r = match result.method {
             DamMethod::BrunnerMunzel => match feat.effect_size {
                 Some(d) => {

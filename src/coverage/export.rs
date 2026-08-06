@@ -4,7 +4,7 @@
 //! **displayed** row — obtained from the same `displayed_rows` chain the table
 //! and the dot plot call, so the file matches what the user was looking at.
 //!
-//! See the `kegg-coverage` capability spec.
+//! Owner: the `kegg-coverage` capability.
 
 use anyhow::{Context, Result};
 use std::collections::HashMap;

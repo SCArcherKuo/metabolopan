@@ -1,6 +1,5 @@
 //! Global stage stepper / breadcrumb — the `Input › DAM Setup › DAM Result ›
-//! Enrichment Analysis › Enrichment Result` row from every `UI-design.md`
-//! mockup. Rendered once in a `TopBottomPanel::top` above the `CentralPanel`.
+//! Enrichment Analysis › Enrichment Result` row from every design mockup. Rendered once in a `TopBottomPanel::top` above the `CentralPanel`.
 //!
 //! The current stage is **bold**; already-reached stages are clickable buttons
 //! that jump BACK to that stage; not-yet-reached stages are plain

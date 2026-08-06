@@ -7,8 +7,8 @@
 //! why picking a card advances immediately rather than arming a separate
 //! confirm button.
 //!
-//! See the `analysis-route-selection` and `interactive-component-styles`
-//! capability specs.
+//! Owner: the `analysis-route-selection` and `interactive-component-styles`
+//! capabilities.
 
 use egui::RichText;
 

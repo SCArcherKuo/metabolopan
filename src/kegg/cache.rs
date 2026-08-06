@@ -108,8 +108,7 @@ pub fn write_organism_group_index(index: &OrganismGroupIndex) -> Result<()> {
 //
 // The CID-to-cpd cache lives at `<cache_dir>/cid_to_cpd.json` and grows
 // incrementally across Stage 3 sessions. Writes are guarded by an advisory
-// `.cid_to_cpd.lock` file; see the kegg-fetching capability spec for the
-// contract.
+// `.cid_to_cpd.lock` file; Owner: the `kegg-fetching` capability.
 
 fn cid_to_cpd_path() -> PathBuf {
     cache_dir().join("cid_to_cpd.json")

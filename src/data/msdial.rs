@@ -196,8 +196,7 @@ pub fn parse_msdial_txt(path: &Path) -> Result<MetabolomicsTable> {
     // Quality columns are OPTIONAL — legacy MS-DIAL exports may omit them.
     // When any is missing the parser logs a single warn naming the column and
     // every feature's corresponding field is `None`. The deduplication cascade
-    // (`crate::dedup`) then has less to rank with but still works. See the
-    // `msdial-input` capability spec for the warn-not-error rationale.
+    // (`crate::dedup`) then has less to rank with but still works. Owner: the `msdial-input` capability.
     let mut missing_quality_cols: Vec<&str> = Vec::new();
     let idx_adduct_type =
         find_optional_col_index(&header, "Adduct type", &mut missing_quality_cols);

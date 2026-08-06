@@ -13,8 +13,7 @@
 //! |  3   | `Isotope`   | `[M+1]+`, `[M+2]-`, or `isotope_tracking_weight_number > 0` |
 //!
 //! Within `Primary`, `[M+H]+` and `[M-H]-` carry sub-rank 0 (preferred);
-//! the other allowlist entries carry sub-rank 1. See the `msdial-deduplication`
-//! capability spec for the full requirement text.
+//! the other allowlist entries carry sub-rank 1. Owner: the `msdial-deduplication` capability.
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum AdductClass {

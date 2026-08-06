@@ -28,8 +28,7 @@ pub struct GroupMapping {
     /// (not just logged) so Stage 1 can surface them in a banner. Sorted
     /// ascending, deduplicated (CSV `sample` values are unique — duplicate rows
     /// are rejected at parse), and disjoint from the `Unassigned` set (which is
-    /// the opposite direction: `sample_cols` entries with no CSV row). See the
-    /// `group-mapping` capability spec.
+    /// the opposite direction: `sample_cols` entries with no CSV row). Owner: the `group-mapping` capability.
     unmatched_csv_samples: Vec<String>,
 }
 
@@ -75,7 +74,7 @@ impl GroupMapping {
     /// sample absent from `sample_cols` (ignored-with-a-WARN at load). Sorted
     /// ascending, no repeats, and disjoint from the `Unassigned` set. Empty
     /// when every CSV row matched a sample column. Stage 1 lists these in a
-    /// `theme::ERROR` banner (see the `stage1-ui` capability spec).
+    /// `theme::ERROR` banner (owner: the `stage1-ui` capability).
     pub fn unmatched_csv_samples(&self) -> &[String] {
         &self.unmatched_csv_samples
     }
@@ -165,8 +164,7 @@ impl GroupMapping {
     /// `sample_col_to_group`, `group_to_indices` (the `UNASSIGNED` key
     /// disappears), every per-numeric-column `metadata_columns` slot, and
     /// `biosample`. Surviving groups are reindexed against the narrowed
-    /// `sample_names` axis. The original mapping is not mutated. See
-    /// the `group-mapping` capability spec for the full contract.
+    /// `sample_names` axis. The original mapping is not mutated. Owner: the `group-mapping` capability.
     pub fn without_unassigned_samples(&self) -> Self {
         let kept: Vec<usize> = self
             .sample_col_to_group
@@ -239,7 +237,7 @@ pub fn load_group_mapping(csv_path: &Path, sample_cols: &[String]) -> Result<Gro
     // MUST contain columns named `sample` and `group` (exact, case-sensitive).
     // An optional `biosample` column is recognized by name in any position and
     // routed to a dedicated slot (never a metadata extra). Every other column
-    // is an optional metadata extra. See the `group-mapping` capability spec.
+    // is an optional metadata extra. Owner: the `group-mapping` capability.
     let positions = |name: &str| -> Vec<usize> {
         header_vec
             .iter()

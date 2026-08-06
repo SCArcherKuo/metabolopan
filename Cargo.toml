@@ -21,7 +21,7 @@ egui = "0.31"
 egui_extras = { version = "0.31", features = ["http", "image"] }
 # `default-features = false` drops the `ttf` font backend (font-kit / dwrote /
 # pathfinder / fontconfig) so text is rasterized by `ab_glyph` from the font we
-# embed, not by the host font stack. See the `plot-typography` capability spec.
+# embed, not by the host font stack. Owner: the `plot-typography` capability.
 plotters = { version = "0.3", default-features = false, features = [
     "ab_glyph",
     "bitmap_backend",

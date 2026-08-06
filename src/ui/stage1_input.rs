@@ -359,7 +359,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
             // here so a casing/underscore typo isn't silently dropped (turning a
             // 6-vs-6 comparison into 6-vs-5). Distinct from Unassigned (.txt
             // columns with no CSV row, shown yellow in the Data tab). Does NOT
-            // gate Continue — see the `stage1-ui` capability spec.
+            // gate Continue — Owner: the `stage1-ui` capability.
             if let Some(mapping) = app.inputs.mapping.as_ref() {
                 let unmatched = mapping.unmatched_csv_samples();
                 if !unmatched.is_empty() {

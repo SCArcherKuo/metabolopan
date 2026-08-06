@@ -25,17 +25,23 @@ use crate::app::SessionSettings;
 /// `coverage_min_entry_size`, `coverage_sort_key`,
 /// `coverage_selected_groups`, and `coverage_presence_threshold`.)
 ///
+/// **The constraint this file carries: no version literal may enter `src/`.**
 /// The user-facing rejection message is TEMPLATED from
 /// `SnapshotError::UnsupportedSchemaVersion { found, expected }` with
-/// `expected` read from this constant, so a bump needs no message edit and
-/// MUST NOT introduce a hard-coded version literal. What does hard-code the
-/// version is spec prose in `session-settings-io` and `app-shell` — in
-/// requirement BODY text as well as in scenarios, which is why a bump must
-/// find those sites by grepping the outgoing number rather than by working
-/// through a list. `openspec validate` cannot detect a missed one. The
-/// "tracked invariant" requirement in `session-settings-io` carries the
-/// search procedure and the rule for telling a live literal from a
-/// historical one.
+/// `expected` read from this constant, so a bump needs no message edit — and a
+/// hard-coded literal introduced anywhere in `src/` would silently stop
+/// tracking it. That is checkable against the code in front of you.
+///
+/// Outside `src/`, the version IS written out in prose, and a bump has to find
+/// those sites. Two things make a list of them the wrong tool: the literal
+/// appears in requirement BODY text and not only in scenarios, so a
+/// scenario-shaped search misses some; and a historical mention ("v1 snapshots
+/// are rejected") must be left alone while a live one is updated — the test
+/// being which version the sentence is ABOUT, not which number it contains.
+/// So the search is a grep for the OUTGOING number, read one hit at a time.
+/// Owner: the `session-settings-io` capability, whose tracked-invariant
+/// requirement is where that procedure is maintained; no tooling detects a
+/// missed site.
 pub const SCHEMA_VERSION: u32 = 3;
 
 /// Top-level shape of a saved settings JSON file.

@@ -12,7 +12,7 @@
 //!
 //! theme: scope-excluded. YlOrRd = biological convention, not brand palette.
 //!
-//! See the `coverage-dot-plot` capability spec.
+//! Owner: the `coverage-dot-plot` capability.
 
 use anyhow::{Result, anyhow};
 use plotters::prelude::*;
@@ -641,7 +641,7 @@ mod tests {
     /// the rasterizer is reproducible. Glyph rasterization runs through plotters →
     /// font-kit → the platform font stack, which is not guaranteed to return
     /// identical bytes for repeated calls; two consecutive renders were observed to
-    /// differ on Windows. See the `coverage-dot-plot` capability spec.
+    /// differ on Windows. Owner: the `coverage-dot-plot` capability.
     #[test]
     fn buffer_size_matches_requested_dimensions() {
         let result = result_of(vec![row("a", 42, 18), row("b", 10, 3)], 318);
