@@ -1,6 +1,6 @@
 # 使用手冊
 
-軟體版本：metabolopan v1.6.0
+軟體版本：metabolopan v1.6.1
 
 更新日期：2026-08-06
 
@@ -1219,7 +1219,7 @@ Foreground — significant features (active direction)
 ```json
 {
   "schema_version": 3,
-  "app_version": "1.6.0",
+  "app_version": "1.6.1",
   "saved_at": "2026-06-04T09:15:22Z",
   "user_note": "",
   "input_files": [

@@ -1,6 +1,6 @@
 # User Manual
 
-Software version: metabolopan v1.6.0
+Software version: metabolopan v1.6.1
 
 Update date: 2026-08-06
 
@@ -1177,7 +1177,7 @@ The example shows a filled-in session, so most values are the ones a real run wo
 ```json
 {
   "schema_version": 3,
-  "app_version": "1.6.0",
+  "app_version": "1.6.1",
   "saved_at": "2026-06-04T09:15:22Z",
   "user_note": "",
   "input_files": [
