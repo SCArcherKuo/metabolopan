@@ -13,50 +13,86 @@ A cross-platform desktop GUI application that takes raw [MS-DIAL](https://system
 
 ![Workflow](assets/workflow.png)
 
-The app opens on a **Choose your analysis** screen offering two routes: the three-stage **differential analysis + enrichment** pipeline described below, or a **KEGG coverage survey** that maps every detected metabolite onto KEGG pathways or modules and reports how completely each one is covered — no statistical test, only an MS-DIAL `.txt` required, group `.csv` optional. The stages below describe the enrichment route; see [USER_MANUAL.md](docs/manual/USER_MANUAL.md) for the coverage route.
-
 All plots (volcano plots and dot plots) are rendered with `plotters` so that the in-window preview and the 600 DPI PNG export share a single rendering engine.
 
 **For the numerical and operational details** — exact statistical methods, default thresholds, deviations from MetaboAnalyst-style defaults, edge-case handling, references — see [USER_MANUAL.md](docs/manual/USER_MANUAL.md).
 
-### Stage 1 — Input
+### Choose your analysis
 
-Upload an MS-DIAL `.txt` (wide-format intensity table) and a group-mapping `.csv` (`sample,group` or `sample,biosample,group`). See [**Input format**](#input-format) below for the file content details. Click `Continue to DAM` once both files load cleanly. The bottom **Data** tab summarises every per-slot count and the group breakdown.
+The app opens on a route chooser. The route you pick decides which screens exist and how many stages the stepper at the top of the window shows.
 
-![Stage 1 — input](docs/screenshots/stage1_input.png)
+![Choose your analysis](docs/screenshots/starting.png)
 
-### Stage 2 — DAM
+- **Differential analysis + enrichment** (5 stages) — compare two sample groups, then test which KEGG pathways or modules are enriched among the significantly changed metabolites. Needs a group `.csv` with at least 2 groups of at least 2 samples.
+- **KEGG coverage survey** (3 stages) — map every detected metabolite onto KEGG pathways or modules and report how completely each one is covered. No statistical test. Needs only an MS-DIAL `.txt`; a group `.csv` is optional.
 
-Pick numerator and denominator groups; optionally pick a sample normalization method (`None` / `Sum` / `Median` / `Metadata column` / `Quantile` / `PQN`) that's applied column-wise to the intensity matrix before any per-feature work; choose whether the parametric paths apply the `arcsinh` `Log transformation` (checkbox default ON; force-disabled and auto-cleared on Brunner–Munzel because BM is rank-based); run differential-abundance analysis (Student's t-test by default, with Welch's t-test and the non-parametric Brunner–Munzel + Cliff's δ as alternatives); pick the FDR correction (Benjamini–Hochberg by default — matches R `p.adjust` / MetaboAnalyst — with Benjamini–Yekutieli as the more conservative alternative); set fold-change / FDR thresholds, and view / export a volcano plot plus the DAM result table.
+The PubChem and KEGG caches are shared between the two routes, so running a coverage survey first makes a later enrichment run faster. The `Save settings…` / `Load settings…` buttons in the bottom **Data** tab write and restore every analysis parameter as a JSON file, so a run can be reproduced later.
+
+### Route 1 — Differential analysis + enrichment
+
+#### Stage 1 — Input
+
+Upload an MS-DIAL `.txt` (wide-format intensity table) and a group-mapping `.csv` (`sample,group` or `sample,biosample,group`). See [**Input format**](#input-format) below for the file content details. Click `Continue to DAM` once both files load cleanly. The bottom **Data** tab summarises every per-slot count and the group breakdown. `Change analysis type` returns to the route chooser, and is enabled only while nothing has been loaded.
+
+![Stage 1 — input](docs/screenshots/damea_stage1_input.png)
+
+#### Stage 2 — DAM
+
+Pick numerator and denominator groups; optionally pick a sample normalization method (`None` / `Sum` / `Median` / `Metadata column` / `Quantile` / `PQN`, the last referenced against either all samples or one chosen group such as a QC pool) that's applied column-wise to the intensity matrix before any per-feature work; choose whether the parametric paths apply the `arcsinh` `Log transformation` (checkbox default ON; force-disabled and auto-cleared on Brunner–Munzel because BM is rank-based); run differential-abundance analysis (Student's t-test by default, with Welch's t-test and the non-parametric Brunner–Munzel + Cliff's δ as alternatives); pick the FDR correction (Benjamini–Hochberg by default — matches R `p.adjust` / MetaboAnalyst — with Benjamini–Yekutieli as the more conservative alternative); set fold-change / FDR thresholds, and view / export a volcano plot plus the DAM result table.
 
 | DAM setup | DAM result |
 | :-: | :-: |
-| ![DAM setup](docs/screenshots/stage2_dam_setup.png) | ![DAM result](docs/screenshots/stage2_dam_result1.png) |
+| ![DAM setup](docs/screenshots/damea_stage2_dam_setup.png) | ![DAM result](docs/screenshots/damea_stage2_dam_result1.png) |
 
 | Volcano plot |
 | :-: |
-| ![Volcano plot](docs/screenshots/stage2_dam_result2.png) |
+| ![Volcano plot](docs/screenshots/damea_stage2_dam_result2.png) |
 
-### Stage 3 — Enrichment
+#### Stage 3 — Enrichment
 
-Pick the **analysis mode** (Pathway or Module) and the corresponding scope (a KEGG species for pathway mode, or a taxonomy Level + organism Group for module mode). The KEGG fetch runs inline on this screen with a progress strip — no separate fetching window. After the cache is warm, set direction / FDR threshold / FDR method / minimum hit count, and click `Run Enrichment`.
+Pick the **analysis mode** (Pathway or Module) and the corresponding scope (a KEGG species for pathway mode, or a taxonomy Level + organism Group for module mode). The KEGG fetch runs inline on this screen with a progress strip — no separate fetching window. After the cache is warm, set the direction filter and the minimum number of compounds an entry must contain, pick the multiple-testing correction (Benjamini–Hochberg, Benjamini–Yekutieli, or `No correction`, which compares raw p-values and is exploratory only), and click `Run Enrichment`.
 
-The orchestrator converts the DAM compounds' InChIKeys to PubChem CIDs (PubChem PUG REST), maps PubChem CIDs to KEGG compound IDs (KEGG REST), and runs a hypergeometric ORA against either the species' pathways or the taxonomy Group's modules. The Enrichment Result screen shows the dot plot preview (with a mode-aware **Top N** input alongside Re-run + Refresh buttons), a PNG export, and **two** CSV exports — `Download enrichment results (CSV)` writes the rows the figure is drawn from, `Download all results (CSV)` writes every surviving row. Changing any display filter discards the preview, so a figure on screen always matches the controls beside it. The dot plot selects and orders entries on **two different bases**: it keeps the **Top N most significant** entries (lowest FDR), then arranges them top-to-bottom by **fold enrichment descending** (largest on top, matching the clusterProfiler convention of ordering the Y axis by the X-axis metric) — so significance gates which entries appear and effect size only arranges the ones that got in. The plot height auto-fits the number of rows shown and re-fits on every draw, unless you hand-set the **Height (in)** field.
+The orchestrator converts the DAM compounds' InChIKeys to PubChem CIDs (PubChem PUG REST), maps PubChem CIDs to KEGG compound IDs (KEGG REST), and runs a hypergeometric ORA against either the species' pathways or the taxonomy Group's modules. The Enrichment Result screen carries the display filters — the significance threshold (labelled after the quantity the run actually produced, `FDR` or `p-value`), the minimum hit count and a mode-aware **Top N** — plus the PNG export size. The figure is drawn on request: click `Draw dot plot`, and moving any display filter discards it again, so a figure on screen always matches the controls beside it. There are **two** CSV exports — `Download enrichment results (CSV)` writes the rows the figure is drawn from, `Download all results (CSV)` writes every surviving row. Cache refreshes and `Re-run enrichment` live in the **Data** tab's `Cache data` block. The dot plot selects and orders entries on **two different bases**: it keeps the **Top N most significant** entries, then arranges them top-to-bottom by **fold enrichment descending** (largest on top, matching the clusterProfiler convention of ordering the Y axis by the X-axis metric) — so significance gates which entries appear and effect size only arranges the ones that got in. The plot height auto-fits the number of rows shown and re-fits on every draw, unless you hand-set the **Height (in)** field.
 
 | Enrichment setup | Enrichment result |
 | :-: | :-: |
-| ![Enrichment setup](docs/screenshots/stage3_ea_setup.png) | ![Enrichment result](docs/screenshots/stage3_ea_result1.png) |
+| ![Enrichment setup](docs/screenshots/damea_stage3_ea_setup.png) | ![Enrichment result](docs/screenshots/damea_stage3_ea_result1.png) |
 
 | Dot plot |
 | :-: |
-| ![Dot plot](docs/screenshots/stage3_ea_result2.png) |
+| ![Dot plot](docs/screenshots/damea_stage3_ea_result2.png) |
 
+### Route 2 — KEGG coverage survey
 
-#### Pathway mode vs Module mode
+This route answers a different question: not *which pathways changed*, but *how much of each pathway did I actually see*. **It performs no statistical test** — there is no p-value, no q-value, no FDR method and no enrichment ratio anywhere in its results, because with no two-group comparison there is no defensible foreground to test. A high coverage percentage reflects both biology and what your method can detect.
 
-The mode toggle on the Enrichment Analysis setup screen picks which KEGG entry catalogue ORA operates over. Pathway mode is the species-scoped flow — pick one species, get its ~150 pathways, test for enrichment. Module mode replaces the species selector with an organism Group selector (Level 1/2/3 of the [KEGG lineage taxonomy](https://www.kegg.jp/kegg/tables/br08606.html): e.g. `Eukaryotes > Animals > Mammals`) and tests enrichment against the ~573 currently-listed global KEGG modules (IDs sparse in the `M00001`–`M01063` range; KEGG retires some IDs) filtered to those that any organism in the chosen Group fully implements.
+#### Stage 1 — Input
 
-The two modes share identical PubChem → KEGG conv → hypergeometric → user-selected-FDR machinery; only the entry catalogue and the scope picker differ. Both modes' selections AND their fetched caches **coexist** for the lifetime of the session — toggling between modes is instant and never re-fetches data you've already pulled.
+The same input screen with the DAM-only gates relaxed: only the MS-DIAL `.txt` is required, and the group `.csv` is optional. Click `Continue to Setup`.
+
+![Coverage — input](docs/screenshots/coverage_input.png)
+
+#### Stage 2 — Setup
+
+The controls are laid out in the order they are applied. One checkbox per sample group (shown only when a `.csv` was loaded) lets you drop a QC pool or a solvent blank so its compounds never enter the results. `Detected in at least N %` (default `50 %`) is a presence test applied per group against the raw as-loaded intensities — no sample normalization is offered on this route. Then the same InChIKey deduplication checkbox and `RT tolerance` as the DAM route, followed by the Pathway / Module toggle and its target selector. Deduplication cannot change which compounds are found or any coverage number here; it changes only which metabolite name represents each compound in the exported CSV.
+
+![Coverage — setup](docs/screenshots/coverage_setup.png)
+
+#### Stage 3 — Coverage
+
+The screen opens with the provenance funnel — one term per filter stage, in the order the stages ran — then four live filters that re-apply on the next frame with no re-run and no network request: **Minimum entry size** (default `3`; roughly a fifth of a species pathway catalogue carries no KEGG compounds at all, including every global overview map, and the count of those is reported beneath the control), **Minimum hit count**, **Sort by** (`Coverage` or `Hits`, in sync with the sortable column headers), and **Top N entries**. The `Hits` column always shows `<detected> / <entry size>`: a coverage percentage divorced from its denominator is not comparable between entries.
+
+The coverage dot plot inverts the enrichment plot's encoding — the X axis is whatever you sorted by, marker colour is the quantity you did *not* sort by, marker size is always the entry size, and there is no reference line, because there is no null expectation to mark. `Download dot plot PNG` and `Download coverage CSV` export exactly the rows the table shows.
+
+| Coverage result | Coverage dot plot |
+| :-: | :-: |
+| ![Coverage result](docs/screenshots/coverage_result1.png) | ![Coverage dot plot](docs/screenshots/coverage_result2.png) |
+
+### Pathway mode vs Module mode
+
+The mode toggle picks which KEGG entry catalogue the run operates over — it sits on the Enrichment Analysis setup screen on route 1 and on the Setup screen on route 2. Pathway mode is the species-scoped flow — pick one species, get its ~150 pathways. Module mode replaces the species selector with an organism Group selector (Level 1/2/3 of the [KEGG lineage taxonomy](https://www.kegg.jp/kegg/tables/br08606.html): e.g. `Eukaryotes > Animals > Mammals`) and works against the ~573 currently-listed global KEGG modules (IDs sparse in the `M00001`–`M01063` range; KEGG retires some IDs) filtered to those that any organism in the chosen Group fully implements.
+
+Within a route the two modes share identical machinery — InChIKey → PubChem CID → KEGG compound resolution, then the route's own analysis — and only the entry catalogue and the scope picker differ. Both modes' selections AND their fetched caches **coexist** for the lifetime of the session — toggling between modes is instant and never re-fetches data you've already pulled.
 
 ## Requirements
 
